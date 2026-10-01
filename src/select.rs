@@ -16,39 +16,62 @@ pub struct Row {
     pub cont: bool,
 }
 
-/// Lo último que se dibujó del chat: dónde está y qué filas se ven.
+/// Lo último que se dibujó del chat: dónde está, todas sus filas y cuál es la primera visible.
 #[derive(Default)]
 pub struct View {
     pub area: Rect,
     pub rows: Vec<Row>,
+    pub first: usize,
 }
 
-/// En coordenadas de pantalla: dónde empezó el arrastre y dónde va.
+impl View {
+    /// Hasta dónde se puede subir: más allá ya no hay texto.
+    pub fn max_scroll(&self) -> usize {
+        self.rows.len().saturating_sub(self.area.height as usize)
+    }
+
+    /// De pantalla a (fila de la conversación, columna), recortado al área del chat.
+    pub fn locate(&self, (x, y): (u16, u16)) -> (usize, usize) {
+        let a = self.area;
+        let y = y.clamp(a.y, a.bottom().saturating_sub(1));
+        let x = x.clamp(a.x, a.right().saturating_sub(1));
+        (self.first + (y - a.y) as usize, (x - a.x) as usize)
+    }
+}
+
+/// En coordenadas de la conversación, no de pantalla: al desplazar el chat la selección se
+/// queda pegada al texto.
 pub struct Selection {
-    pub anchor: (u16, u16),
-    pub head: (u16, u16),
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+    /// Dónde está el puntero mientras se arrastra; al desplazar, la punta se recalcula con él.
+    pub pointer: Option<(u16, u16)>,
 }
 
 impl Selection {
     /// (inicio, fin) en orden de lectura.
-    fn ordered(&self) -> ((u16, u16), (u16, u16)) {
-        let key = |p: (u16, u16)| (p.1, p.0);
-        if key(self.anchor) <= key(self.head) { (self.anchor, self.head) } else { (self.head, self.anchor) }
+    fn ordered(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
     }
 
     pub fn is_empty(&self) -> bool {
         self.anchor == self.head
     }
 
-    /// Las celdas a resaltar, recortadas al área del chat.
-    pub fn cells(&self, area: Rect) -> Vec<(u16, u16)> {
-        let ((x0, y0), (x1, y1)) = self.ordered();
+    /// Las celdas de pantalla a resaltar, solo de las filas que se ven.
+    pub fn cells(&self, view: &View) -> Vec<(u16, u16)> {
+        let ((r0, c0), (r1, c1)) = self.ordered();
+        let a = view.area;
         let mut out = vec![];
-        for y in y0.max(area.y)..=y1.min(area.bottom().saturating_sub(1)) {
-            let from = if y == y0 { x0 } else { area.x };
-            let to = if y == y1 { x1 } else { area.right().saturating_sub(1) };
-            for x in from.max(area.x)..=to.min(area.right().saturating_sub(1)) {
-                out.push((x, y));
+        for (i, y) in (a.y..a.bottom()).enumerate() {
+            let r = view.first + i;
+            if r < r0 || r > r1 {
+                continue;
+            }
+            let from = if r == r0 { c0 } else { 0 };
+            let to = if r == r1 { c1 } else { a.width as usize - 1 };
+            for c in from..=to.min(a.width as usize - 1) {
+                out.push((a.x + c as u16, y));
             }
         }
         out
@@ -56,19 +79,17 @@ impl Selection {
 
     /// El texto seleccionado, sin decoración y con los párrafos partidos vueltos a unir.
     pub fn text(&self, view: &View) -> String {
-        let ((x0, y0), (x1, y1)) = self.ordered();
-        let a = view.area;
+        let ((r0, c0), (r1, c1)) = self.ordered();
         let mut out = String::new();
-        for y in y0.max(a.y)..=y1.min(a.bottom().saturating_sub(1)) {
-            let Some(row) = view.rows.get((y - a.y) as usize) else { break };
-            let from = if y == y0 { x0.saturating_sub(a.x) as usize } else { 0 };
-            let to = if y == y1 { x1.saturating_sub(a.x) as usize + 1 } else { usize::MAX };
+        for r in r0..=r1 {
+            let Some(row) = view.rows.get(r) else { break };
+            let from = if r == r0 { c0 } else { 0 };
+            let to = if r == r1 { c1 + 1 } else { usize::MAX };
             let piece = columns(&row.text, from.max(row.skip), to);
-            let piece = piece.trim_end();
-            if !out.is_empty() {
+            if r > r0 {
                 out.push(if row.cont { ' ' } else { '\n' });
             }
-            out.push_str(piece);
+            out.push_str(piece.trim_end());
         }
         out.trim_matches('\n').to_string()
     }
@@ -124,30 +145,43 @@ fn base64(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn view() -> View {
+    fn view(first: usize) -> View {
         let row = |t: &str, skip, cont| Row { text: t.into(), skip, cont };
         View {
-            area: Rect { x: 1, y: 1, width: 40, height: 5 },
+            area: Rect { x: 1, y: 1, width: 40, height: 2 },
             rows: vec![
                 row("  JARVIS", 2, false),
                 row("  Un párrafo largo que no", 2, false),
                 row("  cupo en una línea.", 2, true),
                 row("  │ cargo build", 4, false),
             ],
+            first,
         }
+    }
+
+    fn sel(anchor: (usize, usize), head: (usize, usize)) -> Selection {
+        Selection { anchor, head, pointer: None }
     }
 
     #[test]
     fn quita_decoracion_y_une_parrafos() {
-        let s = Selection { anchor: (1, 2), head: (40, 4) };
-        assert_eq!(s.text(&view()), "Un párrafo largo que no cupo en una línea.\ncargo build");
+        assert_eq!(sel((1, 0), (3, 39)).text(&view(0)), "Un párrafo largo que no cupo en una línea.\ncargo build");
     }
 
     #[test]
     fn respeta_columnas_en_la_primera_y_ultima_fila() {
-        // «párrafo» empieza en la columna 5 de la fila (x = 1 + 5); «largo» termina en la 18.
-        let s = Selection { anchor: (19, 2), head: (6, 2) };
-        assert_eq!(s.text(&view()), "párrafo largo");
+        // «párrafo» empieza en la columna 5; «largo» termina en la 17.
+        assert_eq!(sel((1, 18), (1, 5)).text(&view(0)), "párrafo largo");
+    }
+
+    #[test]
+    fn copia_lo_que_quedo_fuera_de_pantalla() {
+        // Solo se ven las filas 2 y 3, pero la selección empezó en la 1.
+        let v = view(2);
+        assert_eq!(v.locate((5, 1)), (2, 4));
+        let s = sel((1, 0), v.locate((40, 2)));
+        assert_eq!(s.text(&v), "Un párrafo largo que no cupo en una línea.\ncargo build");
+        assert!(s.cells(&v).iter().all(|&(_, y)| y >= 1 && y <= 2));
     }
 
     #[test]

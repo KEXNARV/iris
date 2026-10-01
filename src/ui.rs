@@ -316,27 +316,24 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
     let max_scroll = rows.len().saturating_sub(h);
     let scroll = app.scroll.min(max_scroll);
     let start = rows.len().saturating_sub(h + scroll);
-    let visible: Vec<_> = rows.into_iter().skip(start).take(h).collect();
-
-    *app.view.borrow_mut() = crate::select::View {
-        area: inner,
-        rows: visible
-            .iter()
-            .map(|(l, skip, cont)| crate::select::Row {
-                text: l.spans.iter().map(|s| s.content.as_ref()).collect(),
-                skip: *skip,
-                cont: *cont,
-            })
-            .collect(),
-    };
-    f.render_widget(Paragraph::new(visible.into_iter().map(|r| r.0).collect::<Vec<_>>()), inner);
+    let mut view = crate::select::View { area: inner, rows: Vec::with_capacity(rows.len()), first: start };
+    let mut visible = Vec::with_capacity(h);
+    for (i, (line, skip, cont)) in rows.into_iter().enumerate() {
+        let text = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        view.rows.push(crate::select::Row { text, skip, cont });
+        if i >= start && visible.len() < h {
+            visible.push(line);
+        }
+    }
+    f.render_widget(Paragraph::new(visible), inner);
 
     if let Some(sel) = &app.sel {
         let buf = f.buffer_mut();
-        for (x, y) in sel.cells(inner) {
+        for (x, y) in sel.cells(&view) {
             buf[(x, y)].set_bg(Color::Rgb(20, 70, 100)).set_fg(Color::White);
         }
     }
+    *app.view.borrow_mut() = view;
 
     if scroll > 0 {
         let tag = Span::styled(format!(" ↑ {scroll} líneas · End para volver "), Style::new().fg(Color::Black).bg(DIM));

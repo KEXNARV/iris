@@ -306,6 +306,7 @@ fn run(
         app.levels.push(lvl);
 
         term.draw(|f| ui::draw(f, app))?;
+        follow_drag(app);
 
         if event::poll(tick)? {
             let ev = event::read()?;
@@ -522,28 +523,53 @@ fn on_mouse(app: &mut App, m: crossterm::event::MouseEvent) {
     let at = (m.column, m.row);
     let area = app.view.borrow().area;
     let inside = area.contains(ratatui::layout::Position::new(m.column, m.row));
+    let dragging = app.sel.as_ref().is_some_and(|s| s.pointer.is_some());
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            app.sel = inside.then_some(select::Selection { anchor: at, head: at });
+            app.sel = inside.then(|| {
+                let p = app.view.borrow().locate(at);
+                select::Selection { anchor: p, head: p, pointer: Some(at) }
+            });
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if let Some(s) = &mut app.sel {
-                s.head = at;
+                s.pointer = Some(at);
+                s.head = app.view.borrow().locate(at);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let Some(s) = app.sel.take() else { return };
+            let Some(s) = &mut app.sel else { return };
+            s.pointer = None;
             if s.is_empty() {
+                app.sel = None;
                 return;
             }
+            // Queda resaltado hasta el próximo clic o tecla, para ver qué se copió.
             let text = s.text(&app.view.borrow());
-            // Queda resaltado hasta el próximo clic, para ver qué se copió.
-            app.sel = Some(s);
             copied(app, &text);
         }
-        MouseEventKind::ScrollUp if inside => app.scroll += 3,
-        MouseEventKind::ScrollDown if inside => app.scroll = app.scroll.saturating_sub(3),
+        // Con la rueda se puede seguir estirando la selección más allá de lo que se ve.
+        MouseEventKind::ScrollUp if inside || dragging => {
+            app.scroll = (app.scroll + 3).min(app.view.borrow().max_scroll());
+        }
+        MouseEventKind::ScrollDown if inside || dragging => app.scroll = app.scroll.saturating_sub(3),
         _ => {}
+    }
+}
+
+/// Cada cuadro, mientras se arrastra: la punta sigue al puntero sobre el texto que ahora
+/// está debajo, y arrastrar por encima o por debajo del chat lo desplaza solo.
+fn follow_drag(app: &mut App) {
+    let Some(p) = app.sel.as_ref().and_then(|s| s.pointer) else { return };
+    let area = app.view.borrow().area;
+    if p.1 < area.y {
+        app.scroll = (app.scroll + 1).min(app.view.borrow().max_scroll());
+    } else if p.1 >= area.bottom() {
+        app.scroll = app.scroll.saturating_sub(1);
+    }
+    let head = app.view.borrow().locate(p);
+    if let Some(s) = &mut app.sel {
+        s.head = head;
     }
 }
 
