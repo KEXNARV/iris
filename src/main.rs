@@ -63,6 +63,7 @@ pub enum VoiceState {
 pub enum Modal {
     Sessions { list: Vec<sessions::Session>, sel: usize },
     Ask(Ask),
+    Model { sel: usize },
 }
 
 pub struct App {
@@ -175,6 +176,10 @@ impl App {
             }
             ClaudeEvent::Ask { request_id, tool, input } => {
                 self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input)));
+            }
+            ClaudeEvent::Compacted { pre, post } => {
+                let k = |n: u64| format!("{:.1}k", n as f64 / 1000.0);
+                self.push(Role::System, format!("contexto compactado: {} → {} tokens", k(pre), k(post)));
             }
             ClaudeEvent::Stderr(line) => self.push(Role::Error, line),
             ClaudeEvent::Exited => {
@@ -375,6 +380,10 @@ fn handle_key(
             match cmd {
                 "/resume" => return resume(app, arg.trim()),
                 "/clear" => return clear(app),
+                "/model" => {
+                    model(app, claude, arg.trim());
+                    return Flow::Go;
+                }
                 "/restart" => return Flow::Restart,
                 "/quit" => return Flow::Quit,
                 _ => submit(app, claude, text),
@@ -422,6 +431,21 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
             }
             Some(Flow::Go)
         }
+        Modal::Model { sel } => {
+            let n = commands::MODELS.len();
+            match k.code {
+                KeyCode::Up => *sel = (*sel + n - 1) % n,
+                KeyCode::Down => *sel = (*sel + 1) % n,
+                KeyCode::Enter => {
+                    let id = commands::MODELS[*sel].0;
+                    app.modal = None;
+                    model(app, claude, id);
+                }
+                KeyCode::Esc => app.modal = None,
+                _ => {}
+            }
+            Some(Flow::Go)
+        }
         Modal::Ask(a) => {
             match k.code {
                 KeyCode::Up => a.move_sel(false),
@@ -442,6 +466,32 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
             }
             Some(Flow::Go)
         }
+    }
+}
+
+/// Sin argumento abre la lista; con uno (id, alias como `sonnet` o nombre de la lista) lo pide.
+fn model(app: &mut App, claude: &mut Option<Claude>, arg: &str) {
+    if arg.is_empty() {
+        let sel = commands::MODELS.iter().position(|m| m.0 == app.model).unwrap_or(0);
+        app.modal = Some(Modal::Model { sel });
+        return;
+    }
+    let q = arg.to_lowercase();
+    let id = commands::MODELS
+        .iter()
+        .find(|m| m.0 == q || m.1.to_lowercase().starts_with(&q))
+        .map_or(arg, |m| m.0);
+    let Some(c) = claude.as_mut().filter(|_| app.alive) else {
+        app.push(Role::Error, "claude no está corriendo (Ctrl+R)");
+        return;
+    };
+    match c.set_model(id) {
+        Ok(()) => {
+            app.model = id.to_string();
+            let when = if app.busy { "desde el próximo turno" } else { "listo" };
+            app.push(Role::System, format!("modelo → {id} ({when})"));
+        }
+        Err(e) => app.push(Role::Error, format!("no pude cambiar de modelo: {e}")),
     }
 }
 

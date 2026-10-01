@@ -20,6 +20,8 @@ pub enum ClaudeEvent {
     Done { cost: f64, secs: f64, is_error: bool },
     /// El motor espera respuesta del usuario: una `AskUserQuestion` o un permiso.
     Ask { request_id: String, tool: String, input: Value },
+    /// `/compact` terminó: tokens de contexto antes y después.
+    Compacted { pre: u64, post: u64 },
     Stderr(String),
     Exited,
 }
@@ -111,6 +113,16 @@ impl Claude {
         self.respond(request_id, json!({ "behavior": "deny", "message": why }))
     }
 
+    /// Vale desde el turno siguiente; el `init` de ese turno trae el modelo nuevo.
+    pub fn set_model(&mut self, model: &str) -> Result<()> {
+        self.next_req += 1;
+        self.write(json!({
+            "type": "control_request",
+            "request_id": format!("jarvis-{}", self.next_req),
+            "request": { "subtype": "set_model", "model": model },
+        }))
+    }
+
     fn respond(&mut self, request_id: &str, response: Value) -> Result<()> {
         self.write(json!({
             "type": "control_response",
@@ -142,6 +154,13 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
                 .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
                 .unwrap_or_default(),
         }],
+        Some("system") if v["subtype"] == "compact_boundary" => {
+            let m = &v["compact_metadata"];
+            vec![ClaudeEvent::Compacted {
+                pre: m["pre_tokens"].as_u64().unwrap_or(0),
+                post: m["post_tokens"].as_u64().unwrap_or(0),
+            }]
+        }
         Some("system") if v["subtype"] == "thinking_tokens" => vec![ClaudeEvent::Thinking],
         Some("stream_event") => {
             let delta = &v["event"]["delta"];

@@ -90,6 +90,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         match &app.modal {
             Some(Modal::Sessions { list, sel }) => draw_sessions(f, anchor, list, *sel),
             Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
+            Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
             None => draw_menu(f, anchor, app),
         }
     }
@@ -527,6 +528,21 @@ fn draw_sessions(f: &mut Frame, anchor: Rect, list: &[crate::sessions::Session],
         .collect();
     let hints = [("↑↓", "elegir"), ("enter", "retomar"), ("esc", "cerrar")];
     overlay(f, anchor, "SESIONES", ACCENT, vec![], items, sel, 12, &hints);
+}
+
+fn draw_models(f: &mut Frame, anchor: Rect, app: &App, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let items = crate::commands::MODELS
+        .iter()
+        .enumerate()
+        .map(|(i, (id, name, what))| {
+            let now = if *id == app.model { "en uso" } else { "" };
+            let desc = [*id, now, what].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            item(i == sel, "", name, 10, &desc, w)
+        })
+        .collect();
+    let hints = [("↑↓", "elegir"), ("enter", "cambiar"), ("esc", "cerrar")];
+    overlay(f, anchor, "MODELO", ACCENT, vec![], items, sel, 8, &hints);
 }
 
 fn draw_ask(f: &mut Frame, anchor: Rect, a: &crate::ask::Ask) {

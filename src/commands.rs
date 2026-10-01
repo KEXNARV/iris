@@ -12,6 +12,7 @@ pub struct Command {
 /// Los que `claude -p` no entiende y Jarvis resuelve él mismo.
 const LOCAL: &[(&str, &str)] = &[
     ("resume", "retomar una sesión anterior · /resume N"),
+    ("model", "cambiar de modelo · /model sonnet"),
     ("clear", "limpiar la conversación en pantalla (^L)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
     ("quit", "salir de Jarvis (^C)"),
@@ -24,6 +25,12 @@ pub fn load() -> Vec<Command> {
         .iter()
         .map(|(n, d)| Command { name: n.to_string(), desc: d.to_string(), local: true })
         .collect();
+    // Este sí lo entiende `claude -p`; va aquí para que salga en el menú desde el arranque.
+    out.push(Command {
+        name: "compact".into(),
+        desc: "resumir la conversación para liberar contexto".into(),
+        local: false,
+    });
     let home = std::env::var("HOME").unwrap_or_default();
     for dir in [format!("{home}/.claude/skills"), ".claude/skills".into()] {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
@@ -37,6 +44,14 @@ pub fn load() -> Vec<Command> {
     }
     out
 }
+
+/// (id, nombre, para qué)
+pub const MODELS: &[(&str, &str, &str)] = &[
+    ("claude-opus-5-5", "Opus 5.5", ""),
+    ("claude-fable-5-1", "Fable 5.1", ""),
+    ("claude-sonnet-5", "Sonnet 5", "equilibrado"),
+    ("claude-haiku-4-5-20251001", "Haiku 4.5", "el más rápido y barato"),
+];
 
 pub fn add_skills(cmds: &mut Vec<Command>, names: &[String]) {
     for n in names {
