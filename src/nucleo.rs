@@ -1,0 +1,1324 @@
+//! NÚCLEO: el blob del panel de arriba a la derecha. Muestra qué está haciendo Jarvis con
+//! la forma, el movimiento y una pupila que mira hacia donde pasan las cosas.
+//!
+//! El diseño se hizo en `docs/blob-hibrido.html`; esto es su versión para la terminal. Se
+//! dibuja sobre una rejilla braille propia (2×4 puntos por celda) y no con el `Canvas` de
+//! ratatui porque ahí cada celda toma el color del último punto dibujado: acá se queda con el
+//! del punto más brillante, que es lo que hace legibles las capas.
+
+use std::f64::consts::{PI, TAU};
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::Color;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum State {
+    Booting,
+    Sleeping,
+    Idle,
+    Typing,
+    Listening,
+    NoVoice,
+    Transcribing,
+    Thinking,
+    Planning,
+    Searching,
+    Reading,
+    Editing,
+    Running,
+    Testing,
+    Git,
+    Web,
+    Delegating,
+    Speaking,
+    Asking,
+    Compacting,
+    Offline,
+}
+
+/// Cosas que pasan una vez, encima de cualquier estado.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Event {
+    /// Una tecla en la entrada: respingo y onda corta.
+    Key,
+    /// Una herramienta terminó en error: destello rojo, sacudida y púas.
+    Error,
+    /// Fin de turno: rebote y anillo verde.
+    Done,
+    /// Esc a mitad de turno: se desinfla de golpe.
+    Cancel,
+    /// Whisper devolvió una alucinación y se descartó: niega con la mirada.
+    Nope,
+    /// Volvió un subagente: una gota llega desde la escala y se funde.
+    Merge,
+    /// Algo se copió al portapapeles: destello y guiño.
+    Copy,
+    /// Las pruebas pasaron: la escala se pinta de verde.
+    Pass,
+}
+
+/// Lo que el núcleo necesita saber de la app en cada cuadro.
+#[derive(Clone, Default)]
+pub struct Signals {
+    /// RMS del micrófono.
+    pub level: f32,
+    /// Contexto usado, 0..1.
+    pub ctx: f64,
+    /// Mensajes escritos a mitad de turno que esperan su lectura.
+    pub queue: usize,
+    /// Tareas de TodoWrite: (total, completadas).
+    pub todos: (usize, usize),
+    /// Segundos sin actividad.
+    pub idle: f64,
+    /// Menos movimiento (`/calma`).
+    pub calm: bool,
+}
+
+const DIM: [f64; 3] = [40.0, 90.0, 120.0];
+const GREEN: [f64; 3] = [90.0, 230.0, 150.0];
+const RED: [f64; 3] = [255.0, 90.0, 90.0];
+const WARM: [f64; 3] = [255.0, 170.0, 40.0];
+
+impl State {
+    pub fn label(self) -> &'static str {
+        use State::*;
+        match self {
+            Booting => "ARRANCANDO",
+            Sleeping => "EN REPOSO",
+            Idle => "EN ESPERA",
+            Typing => "TE LEO",
+            Listening => "ESCUCHANDO",
+            NoVoice => "NO TE OIGO",
+            Transcribing => "TRANSCRIBIENDO",
+            Thinking => "PENSANDO",
+            Planning => "PLANIFICANDO",
+            Searching => "BUSCANDO",
+            Reading => "LEYENDO",
+            Editing => "EDITANDO",
+            Running => "EJECUTANDO",
+            Testing => "PROBANDO",
+            Git => "GIT",
+            Web => "EN LA RED",
+            Delegating => "DELEGANDO",
+            Speaking => "RESPONDIENDO",
+            Asking => "ESPERANDO RESPUESTA",
+            Compacting => "COMPACTANDO",
+            Offline => "DESCONECTADO",
+        }
+    }
+
+    /// Por familias: presencia en celestes, «tu turno» en ámbar, la mente en azules y
+    /// violetas, las herramientas del verde al rosa. Dentro de cada familia el movimiento
+    /// es lo que distingue.
+    fn rgb(self) -> [f64; 3] {
+        use State::*;
+        match self {
+            Booting | Idle => [0.0, 200.0, 255.0],
+            Sleeping => [0.0, 115.0, 155.0],
+            Typing => [110.0, 215.0, 255.0],
+            Speaking => [190.0, 240.0, 255.0],
+            Listening => [255.0, 170.0, 40.0],
+            NoVoice => [205.0, 135.0, 70.0],
+            Asking => [255.0, 205.0, 60.0],
+            Transcribing => [210.0, 110.0, 255.0],
+            Thinking => [90.0, 150.0, 255.0],
+            Planning => [125.0, 125.0, 255.0],
+            Delegating => [175.0, 140.0, 255.0],
+            Compacting => [160.0, 165.0, 205.0],
+            Searching => [60.0, 215.0, 165.0],
+            Reading => [70.0, 220.0, 215.0],
+            Editing => [175.0, 235.0, 80.0],
+            Testing => [120.0, 235.0, 120.0],
+            Running => [235.0, 225.0, 90.0],
+            Git => [255.0, 130.0, 70.0],
+            Web => [255.0, 110.0, 170.0],
+            Offline => [90.0, 110.0, 125.0],
+        }
+    }
+
+    pub fn color(self) -> Color {
+        rgb(self.rgb())
+    }
+
+    /// Estos se muestran al instante; el resto espera a que el anterior haya durado su mínimo.
+    fn urgent(self) -> bool {
+        use State::*;
+        matches!(self, Listening | NoVoice | Transcribing | Asking | Offline)
+    }
+
+    /// Lo mínimo que se muestra un estado, para que un Read de 50 ms no sea un parpadeo.
+    fn dwell(self) -> f64 {
+        use State::*;
+        match self {
+            Planning => 1.4,
+            Searching | Reading | Editing | Running | Testing | Git | Web | Delegating => 0.6,
+            Thinking => 0.35,
+            _ => 0.25,
+        }
+    }
+
+    fn is_tool(self) -> bool {
+        use State::*;
+        matches!(self, Planning | Searching | Reading | Editing | Running | Testing | Git | Web | Delegating)
+    }
+
+    fn params(self) -> Params {
+        use State::*;
+        let b = BASE;
+        match self {
+            Booting => Params { boot: 1.0, arc_speed: 0.5, ..b },
+            Sleeping => Params { blob_r: 0.34, amp: 0.02, wob: 0.12, arcs: 0.0, pupil: 0.0, zzz: 1.0, motes: 0.3, ..b },
+            Idle => b,
+            Typing => Params { amp: 0.04, wob: 0.5, arc_speed: 0.4, ..b },
+            Listening => Params { amp: 0.05, wob: 0.8, chaos: 0.5, arc_speed: 0.6, arc_len: 0.8, vu: 1.0, ..b },
+            NoVoice => Params { amp: 0.025, wob: 0.3, arc_speed: 0.15, arc_len: 0.6, droop: 1.0, ..b },
+            Transcribing => Params {
+                blob_r: 0.32, amp: 0.05, wob: 3.0, chaos: 0.9, arc_speed: 2.2, arc_len: 0.6, fill: 1.0, ..b
+            },
+            Thinking => Params { amp: 0.10, wob: 0.7, chaos: 0.3, arc_speed: 1.1, orbit: 1.0, ..b },
+            Planning => Params { amp: 0.04, wob: 0.5, arc_speed: 0.5, plan: 1.0, ..b },
+            Searching => Params { amp: 0.03, wob: 0.5, arc_speed: 0.8, lens: 1.0, ..b },
+            Reading => Params { amp: 0.03, wob: 0.4, arc_speed: 0.7, scan: 1.0, ..b },
+            Editing => Params { amp: 0.05, wob: 0.9, arc_speed: 1.2, arc_len: 0.7, stitch: 1.0, ..b },
+            Running => Params { blob_r: 0.38, amp: 0.08, wob: 2.0, chaos: 0.4, arc_speed: 2.4, arc_len: 0.7, sweep: 1.0, ..b },
+            Testing => Params { amp: 0.04, wob: 1.0, arc_speed: 1.4, arc_len: 0.6, tests: 1.0, ..b },
+            Git => Params { blob_r: 0.34, amp: 0.04, wob: 0.6, arc_speed: 0.6, git: 1.0, ..b },
+            Web => Params { blob_r: 0.36, amp: 0.05, wob: 1.0, arc_speed: 0.8, packets: 1.0, ..b },
+            Delegating => Params { blob_r: 0.36, amp: 0.06, wob: 0.8, arc_speed: 0.9, bud: 1.0, ..b },
+            Speaking => Params { amp: 0.05, wob: 1.0, chaos: 0.2, arc_speed: 0.9, ripple: 1.0, ..b },
+            Asking => Params { blob_r: 0.38, amp: 0.03, wob: 0.3, arc_speed: 0.12, cardinal: 1.0, bob: 1.0, ..b },
+            Compacting => Params { blob_r: 0.36, amp: 0.03, wob: 0.6, arc_speed: 1.6, arc_len: 0.5, press: 1.0, ..b },
+            Offline => Params {
+                blob_r: 0.30, amp: 0.015, wob: 0.0, chaos: 0.0, arc_speed: 0.0, arcs: 0.0, dashed: 1.0, pupil: 0.0,
+                motes: 0.0, ..b
+            },
+        }
+    }
+}
+
+/// Qué estado corresponde a una herramienta. `detail` es la primera línea de su entrada
+/// (el comando, en el caso de Bash).
+pub fn tool_state(name: &str, detail: &str) -> State {
+    match name {
+        "Read" | "NotebookRead" => State::Reading,
+        "Grep" | "Glob" | "LS" => State::Searching,
+        "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => State::Editing,
+        "WebFetch" | "WebSearch" => State::Web,
+        "Agent" | "Task" => State::Delegating,
+        "TodoWrite" => State::Planning,
+        "Bash" => bash_state(detail),
+        _ => State::Running,
+    }
+}
+
+fn bash_state(cmd: &str) -> State {
+    const TESTS: &[&str] = &[
+        "cargo test", "cargo nextest", "pytest", "npm test", "npm run test", "pnpm test", "pnpm run test",
+        "yarn test", "bun test", "vitest", "jest", "go test", "make test", "deno test",
+    ];
+    // Cada tramo de `a && b; c | d`, sin variables de entorno delante.
+    let parts = cmd.split(['&', ';', '|']).map(|p| {
+        p.split_whitespace().skip_while(|w| w.contains('=') && !w.starts_with('-')).collect::<Vec<_>>().join(" ")
+    });
+    let mut state = State::Running;
+    for p in parts {
+        if TESTS.iter().any(|t| p == *t || p.starts_with(&format!("{t} ")) || p.contains(&format!(" {t}"))) {
+            return State::Testing;
+        }
+        if p == "git" || p.starts_with("git ") {
+            state = State::Git;
+        }
+    }
+    state
+}
+
+#[derive(Clone, Copy)]
+struct Params {
+    blob_r: f64,
+    amp: f64,
+    wob: f64,
+    chaos: f64,
+    arc_speed: f64,
+    arcs: f64,
+    arc_len: f64,
+    ripple: f64,
+    orbit: f64,
+    sweep: f64,
+    fill: f64,
+    vu: f64,
+    cardinal: f64,
+    dashed: f64,
+    scan: f64,
+    stitch: f64,
+    packets: f64,
+    bud: f64,
+    zzz: f64,
+    pupil: f64,
+    bob: f64,
+    motes: f64,
+    boot: f64,
+    lens: f64,
+    plan: f64,
+    tests: f64,
+    git: f64,
+    press: f64,
+    droop: f64,
+}
+
+const BASE: Params = Params {
+    blob_r: 0.40,
+    amp: 0.035,
+    wob: 0.35,
+    chaos: 0.1,
+    arc_speed: 0.25,
+    arcs: 1.0,
+    arc_len: 1.0,
+    ripple: 0.0,
+    orbit: 0.0,
+    sweep: 0.0,
+    fill: 0.0,
+    vu: 0.0,
+    cardinal: 0.0,
+    dashed: 0.0,
+    scan: 0.0,
+    stitch: 0.0,
+    packets: 0.0,
+    bud: 0.0,
+    zzz: 0.0,
+    pupil: 1.0,
+    bob: 0.0,
+    motes: 1.0,
+    boot: 0.0,
+    lens: 0.0,
+    plan: 0.0,
+    tests: 0.0,
+    git: 0.0,
+    press: 0.0,
+    droop: 0.0,
+};
+
+impl Params {
+    fn approach(&mut self, to: &Params, k: f64) {
+        macro_rules! go {
+            ($($f:ident),*) => { $( self.$f += (to.$f - self.$f) * k; )* };
+        }
+        go!(blob_r, amp, wob, chaos, arc_speed, arcs, arc_len, ripple, orbit, sweep, fill, vu, cardinal, dashed,
+            scan, stitch, packets, bud, zzz, pupil, bob, motes, boot, lens, plan, tests, git, press, droop);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Gesture {
+    Stretch,
+    LookClock,
+    LookChat,
+    Yawn,
+}
+
+struct Mote {
+    a: f64,
+    r: f64,
+    s: f64,
+}
+
+pub struct Core {
+    t: f64,
+    shown: State,
+    since: f64,
+    p: Params,
+    col: [f64; 3],
+    phase: f64,
+    arc_phase: f64,
+    /// Aplastamiento elástico (resorte) y su velocidad.
+    sq: f64,
+    sq_v: f64,
+    shake: f64,
+    red: f64,
+    deflate: f64,
+    nope: f64,
+    copy: f64,
+    pass: f64,
+    /// Al pasar de escuchar a transcribir, las motas se tragan hacia el centro.
+    swallow: f64,
+    blooms: Vec<f64>,
+    keys: Vec<f64>,
+    merges: Vec<(f64, f64, bool)>,
+    gaze: [f64; 2],
+    gaze_t: [f64; 2],
+    next_saccade: f64,
+    gesture: Option<(Gesture, f64)>,
+    next_gesture: f64,
+    motes: Vec<Mote>,
+    level: f64,
+    sig: Signals,
+    rng: u64,
+}
+
+impl Core {
+    pub fn new() -> Self {
+        let mut c = Core {
+            t: 0.0,
+            shown: State::Booting,
+            since: 0.0,
+            p: State::Booting.params(),
+            col: State::Booting.rgb(),
+            phase: 0.0,
+            arc_phase: 0.0,
+            sq: 0.0,
+            sq_v: 0.0,
+            shake: 0.0,
+            red: 0.0,
+            deflate: 0.0,
+            nope: 0.0,
+            copy: 0.0,
+            pass: 0.0,
+            swallow: 0.0,
+            blooms: vec![],
+            keys: vec![],
+            merges: vec![],
+            gaze: [0.0; 2],
+            gaze_t: [0.0; 2],
+            next_saccade: 0.0,
+            gesture: None,
+            next_gesture: 20.0,
+            motes: vec![],
+            level: 0.0,
+            sig: Signals::default(),
+            rng: 0x9E37_79B9_7F4A_7C15,
+        };
+        c.motes = (0..16).map(|k| Mote { a: k as f64 * TAU / 16.0 + c.rand(), r: 0.5 + c.rand() * 0.35, s: c.rand() - 0.5 }).collect();
+        c
+    }
+
+    /// El estado que se ve, que puede ir un poco detrás del pedido (ver `State::dwell`).
+    pub fn state(&self) -> State {
+        self.shown
+    }
+
+    /// El color actual, con las transiciones y el rojo de los errores.
+    pub fn color(&self) -> Color {
+        rgb(self.col)
+    }
+
+    /// Reinicia la animación de arranque (al relanzar el motor).
+    pub fn reboot(&mut self) {
+        self.switch(State::Booting);
+    }
+
+    fn rand(&mut self) -> f64 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn calm(&self) -> f64 {
+        if self.sig.calm { 0.4 } else { 1.0 }
+    }
+
+    fn kick(&mut self, v: f64) {
+        self.sq_v += v * self.calm();
+    }
+
+    pub fn fire(&mut self, ev: Event) {
+        let t = self.t;
+        match ev {
+            Event::Key => {
+                self.keys.push(t);
+                self.kick(1.2);
+            }
+            Event::Error => {
+                self.red = 1.0;
+                self.shake = if self.sig.calm { 0.0 } else { 1.0 };
+                self.kick(-2.5);
+            }
+            Event::Done => {
+                self.blooms.push(t);
+                self.kick(3.2);
+            }
+            Event::Cancel => {
+                self.deflate = 1.0;
+                self.kick(-3.0);
+            }
+            Event::Nope => self.nope = 1.0,
+            Event::Merge => {
+                let a = self.rand() * TAU;
+                self.merges.push((t, a, false));
+            }
+            Event::Copy => {
+                self.copy = 1.0;
+                self.kick(0.8);
+            }
+            Event::Pass => {
+                self.pass = 1.0;
+                self.kick(1.5);
+            }
+        }
+    }
+
+    fn switch(&mut self, to: State) {
+        use State::*;
+        let from = self.shown;
+        self.shown = to;
+        self.since = self.t;
+        // Transiciones con intención: cada cambio tiene su gesto.
+        match (from, to) {
+            (_, Offline) => self.kick(-1.5),
+            (Sleeping, _) => {
+                self.kick(3.0);
+                self.copy = 0.5; // parpadea al despertar
+            }
+            (Listening | NoVoice, Transcribing) => self.swallow = 1.0,
+            (f, Thinking) if f.is_tool() => self.kick(-0.8),
+            (_, t) if t.is_tool() => self.kick(1.2),
+            _ => self.kick(1.0),
+        }
+        self.gesture = None;
+    }
+
+    /// Avanza la animación `dt` segundos hacia el estado `want`.
+    pub fn step(&mut self, dt: f64, want: State, sig: &Signals) {
+        let dt = dt.clamp(0.0, 0.1);
+        self.t += dt;
+        self.sig = sig.clone();
+        let t = self.t;
+        let shown_for = t - self.since;
+        if want != self.shown && (want.urgent() || self.shown.urgent() || shown_for >= self.shown.dwell()) {
+            self.switch(want);
+        }
+        let st = t - self.since;
+        let calm = self.calm();
+
+        let k = 1.0 - (-dt / 0.35).exp();
+        let target = self.shown.params();
+        self.p.approach(&target, k);
+        let base = self.shown.rgb();
+        let want_col = if self.red > 0.05 { mix(base, RED, (self.red * 1.4).min(1.0)) } else { base };
+        let kc = if self.red > 0.05 { 0.5 } else { k };
+        for i in 0..3 {
+            self.col[i] += (want_col[i] - self.col[i]) * kc;
+        }
+
+        // Resorte del aplastamiento: rebota y se asienta.
+        self.sq_v += (-140.0 * self.sq - 9.0 * self.sq_v) * dt;
+        self.sq = (self.sq + self.sq_v * dt * 0.06).clamp(-0.18, 0.18);
+
+        for v in [&mut self.red, &mut self.nope] {
+            *v = (*v - dt * 1.1).max(0.0);
+        }
+        self.shake = (self.shake - dt * 1.6).max(0.0);
+        self.deflate = (self.deflate - dt * 1.4).max(0.0);
+        self.copy = (self.copy - dt * 3.0).max(0.0);
+        self.pass = (self.pass - dt * 1.2).max(0.0);
+        self.swallow = (self.swallow - dt * 1.5).max(0.0);
+        self.blooms.retain(|b| t - b < 1.2);
+        self.keys.retain(|k0| t - k0 < 0.5);
+        let mut pops = 0;
+        for m in &mut self.merges {
+            if t - m.0 > 0.7 && !m.2 {
+                m.2 = true;
+                pops += 1;
+            }
+        }
+        for _ in 0..pops {
+            self.kick(2.4);
+            self.blooms.push(t);
+        }
+        self.merges.retain(|m| t - m.0 < 1.0);
+
+        self.phase += dt * self.p.wob * calm;
+        self.arc_phase += dt * self.p.arc_speed * calm;
+
+        let lvl = if self.shown == State::Listening { (sig.level as f64 * 6.0).min(1.0) } else { 0.0 };
+        self.level += (lvl - self.level) * if lvl > self.level { 0.5 } else { 0.12 };
+
+        // Gestos ocasionales cuando lleva rato quieto, para que no repita siempre lo mismo.
+        if self.shown == State::Idle && sig.idle > 15.0 && t > self.next_gesture && self.gesture.is_none() {
+            let g = if sig.idle > 95.0 {
+                Gesture::Yawn
+            } else {
+                [Gesture::Stretch, Gesture::LookClock, Gesture::LookChat][(self.rand() * 3.0) as usize % 3]
+            };
+            if g == Gesture::Stretch {
+                self.kick(3.5);
+            }
+            self.gesture = Some((g, t));
+            self.next_gesture = t + 8.0 + self.rand() * 8.0;
+        }
+        if let Some((g, t0)) = self.gesture {
+            let len = match g {
+                Gesture::Stretch => 0.8,
+                Gesture::LookClock => 1.6,
+                Gesture::LookChat => 1.2,
+                Gesture::Yawn => 2.2,
+            };
+            if t - t0 > len || self.shown != State::Idle {
+                self.gesture = None;
+            }
+        }
+
+        // Mirada: salto rápido hacia el objetivo, como una sacada.
+        let gt = self.gaze_target(st);
+        let gt = if self.nope > 0.01 {
+            [self.p.blob_r * 0.4 * (t * 22.0).sin() * (self.nope * 2.0).min(1.0), gt[1]]
+        } else {
+            gt
+        };
+        let kg = (dt * 14.0).min(1.0);
+        for i in 0..2 {
+            self.gaze[i] += (gt[i] - self.gaze[i]) * kg;
+        }
+
+        // Motas: caen al centro escuchando, salen respondiendo, flotan el resto.
+        let r0 = self.p.blob_r;
+        let (shown, level, swallow) = (self.shown, self.level, self.swallow);
+        for m in &mut self.motes {
+            if swallow > 0.01 {
+                m.r += (r0 - m.r) * (dt * 6.0).min(1.0);
+                if m.r < r0 + 0.03 {
+                    m.r = 0.86;
+                }
+            } else if shown == State::Listening {
+                m.r -= dt * (0.18 + level * 0.5);
+                if m.r < r0 + 0.08 {
+                    m.r = 0.86;
+                }
+            } else if shown == State::Speaking {
+                m.r += dt * 0.22;
+                if m.r > 0.86 {
+                    m.r = r0 + 0.1;
+                }
+            } else {
+                m.a += dt * 0.08 * (1.0 + m.s) * calm;
+                m.r += (t * 0.7 + m.a * 3.0).sin() * dt * 0.02;
+                m.r = m.r.clamp(r0 + 0.12, 0.84);
+            }
+        }
+    }
+
+    fn gaze_target(&mut self, st: f64) -> [f64; 2] {
+        use State::*;
+        let t = self.t;
+        let lim = self.p.blob_r * 0.42;
+        if let Some((g, _)) = self.gesture {
+            match g {
+                // El reloj está arriba a la derecha de la pantalla; el chat, a la izquierda.
+                Gesture::LookClock => return [lim * 0.8, lim * 0.85],
+                Gesture::LookChat => return [-lim * 0.9, 0.0],
+                _ => {}
+            }
+        }
+        match self.shown {
+            Idle => {
+                if t > self.next_saccade {
+                    let a = self.rand() * TAU;
+                    let r = self.rand() * lim;
+                    self.gaze_t = [r * a.cos(), r * a.sin() * 0.8];
+                    self.next_saccade = t + 1.2 + self.rand() * 2.5;
+                }
+                self.gaze_t
+            }
+            Typing => [-lim * 0.6, -lim * 0.8],
+            Listening => [0.0, -lim * 0.7],
+            NoVoice => [lim * 0.9 * (t * 1.4).sin().signum(), -lim * 0.2],
+            Transcribing => [0.02 * (t * 30.0).sin(), 0.02 * (t * 27.0).cos()],
+            Thinking => [lim * 0.5 * (t * 0.7).sin(), lim * 0.75],
+            Reading => {
+                let line = st * 0.9;
+                [-lim * 0.8 + line.fract() * lim * 1.6, lim * 0.6 - (line.floor() % 4.0) * lim * 0.4]
+            }
+            Searching => [self.p.blob_r * 0.55 * (st * 1.3).sin(), self.p.blob_r * 0.45 * (st * 2.1 + 1.0).sin()],
+            Planning => {
+                let (n, d) = self.sig.todos;
+                let a = if n > 0 { PI / 2.0 - d.min(n - 1) as f64 * TAU / n as f64 } else { PI / 2.0 };
+                [lim * 0.9 * a.cos(), lim * 0.9 * a.sin()]
+            }
+            Editing => [lim * 0.6 * (t * 2.6).cos(), lim * 0.6 * (t * 2.6).sin()],
+            Running => [0.0, -lim * 0.75],
+            Testing => {
+                let a = PI / 2.0 - (st * 9.0 % 24.0) * TAU / 24.0;
+                [lim * 0.8 * a.cos(), lim * 0.8 * a.sin()]
+            }
+            Git => [lim * 0.3, lim * 0.9],
+            Web => [lim * 0.7 * (t * 0.8).cos(), lim * 0.7 * (t * 0.8).sin()],
+            Delegating => {
+                let a = self.phase * 0.9;
+                [lim * 0.8 * a.cos(), lim * 0.8 * a.sin()]
+            }
+            Speaking => [-lim * 0.8, 0.0],
+            Asking => [-lim * 0.4, -lim * 0.8],
+            _ => [0.0, 0.0],
+        }
+    }
+
+    pub fn draw(&self, area: Rect, buf: &mut Buffer) {
+        if area.width < 6 || area.height < 3 {
+            return;
+        }
+        let mut g = Grid::new(area.width as usize, area.height as usize);
+        self.paint(&mut g);
+        let pal = [self.col, GREEN, RED, WARM].map(|c| [rgb(DIM), rgb(DIM), rgb(mix(c, DIM, 0.38)), rgb(c)]);
+        for cy in 0..g.ch {
+            for cx in 0..g.cw {
+                let c = &g.cells[cy * g.cw + cx];
+                if c.bits == 0 {
+                    continue;
+                }
+                let ch = char::from_u32(0x2800 + c.bits as u32).unwrap_or(' ');
+                let pos = (area.x + cx as u16, area.y + cy as u16);
+                buf[pos].set_char(ch).set_fg(pal[c.ink as usize][c.tone as usize]);
+            }
+        }
+    }
+
+    fn paint(&self, g: &mut Grid) {
+        use State::*;
+        let p = &self.p;
+        let t = self.t;
+        let st = t - self.since;
+        let lv = self.level;
+        let low = g.dh < 40; // panel chico: se apagan los detalles finos
+        let err = if self.red > 0.35 { INK_RED } else { INK_MAIN };
+
+        // Centro del cuerpo: deriva suave + flotar (preguntando) + sacudida (error) − encorvado.
+        let cx = 0.025 * (t * 0.37).sin() + 0.015 * (t * 0.91 + 1.0).sin() + self.shake * 0.05 * (t * 48.0).sin();
+        let cy = 0.02 * (t * 0.29 + 2.0).sin() + p.bob * 0.05 * (t * 2.2).sin() - p.droop * 0.08;
+        let boot = if p.boot > 0.01 { (st / 2.4).min(1.0) } else { 1.0 };
+        let grow = if p.boot > 0.01 { ease_out_back((st / 2.0).min(1.0)) } else { 1.0 };
+        let body = |r: f64, a: f64| (cx + r * a.cos(), cy + r * a.sin());
+
+        // Escala: 24 marcas, ancladas al marco.
+        for k in 0..24 {
+            if k as f64 / 24.0 > boot * 1.05 {
+                continue;
+            }
+            let a = PI / 2.0 - k as f64 * TAU / 24.0;
+            let (mut tone, mut ink) = (1, err);
+            if p.vu > 0.01 && (k as f64 / 24.0) < lv * 1.15 * p.vu {
+                tone = 3;
+            }
+            if p.fill > 0.01 && k as f64 / 24.0 <= (st * 0.35).fract() * p.fill {
+                tone = 3;
+            }
+            if p.sweep > 0.01 {
+                let d = (a + self.arc_phase * 1.3).rem_euclid(TAU);
+                if d < 0.7 * p.sweep {
+                    tone = if d < 0.25 { 3 } else { 2 };
+                }
+            }
+            if p.cardinal > 0.01 && k % 6 == 0 && (t * 4.0).sin() > 0.0 {
+                tone = 3;
+            }
+            if p.tests > 0.5 && (k as f64) < (st * 9.0) % 25.0 {
+                tone = 3; // avance de la corrida; el resultado lo dicen Pass o Error
+            }
+            for b in &self.blooms {
+                let u = (t - b) / 1.1;
+                if u > 0.45 && u < 1.0 && ((k as f64 / 24.0 - (u - 0.45) * 1.8).rem_euclid(1.0)) < 0.08 {
+                    tone = 3;
+                    ink = INK_GREEN;
+                }
+            }
+            if self.pass > 0.3 {
+                tone = 3;
+                ink = INK_GREEN;
+            }
+            if self.copy > 0.5 {
+                tone = 3;
+            }
+            if self.red > 0.35 {
+                tone = tone.max(2);
+            }
+            g.polar(0.94, a, tone, ink);
+            g.polar(0.90, a, tone, ink);
+            if k % 6 == 0 && !low {
+                g.polar(0.86, a, tone, ink);
+            }
+        }
+
+        // Tareas (planificando): una marca grande por tarea; la actual parpadea.
+        let (n_todo, done) = self.sig.todos;
+        if p.plan > 0.5 && n_todo > 0 {
+            for i in 0..n_todo.min(24) {
+                let a = PI / 2.0 - i as f64 * TAU / n_todo.min(24) as f64;
+                let tone = if i < done {
+                    3
+                } else if i == done && (t * 8.0).sin() > 0.0 {
+                    3
+                } else {
+                    1
+                };
+                g.polar(0.82, a, tone, INK_MAIN);
+                g.polar(0.78, a, tone, INK_MAIN);
+            }
+        }
+
+        // Arcos: tres por fuera, seis por dentro, en sentidos opuestos.
+        if p.arcs * boot > 0.05 {
+            let n1 = (60.0 * p.arc_len * p.arcs * (boot * 1.4 - 0.4).max(0.0)).round() as usize;
+            for k in 0..3 {
+                for q in 0..n1 {
+                    let a = self.arc_phase + k as f64 * TAU / 3.0 + (TAU / 5.0) * p.arc_len * q as f64 / n1.max(1) as f64;
+                    g.polar(0.80, a, 2, err);
+                }
+            }
+            let n2 = (14.0 * p.arcs).round() as usize;
+            for k in 0..6 {
+                for q in 0..n2 {
+                    let a = -self.arc_phase * 1.6 + k as f64 * TAU / 6.0 + (TAU / 16.0) * q as f64 / 14.0;
+                    g.polar(0.70, a, 1, err);
+                }
+            }
+        }
+
+        // Motas de la corona.
+        if p.motes > 0.05 && !low {
+            let n = (16.0 * p.motes * boot).round() as usize;
+            for m in self.motes.iter().take(n) {
+                g.polar(m.r * (1.0 - p.press * 0.25 * (1.0 + (t * 5.0).sin())), m.a, 1, INK_MAIN);
+            }
+        }
+
+        // Mensajes en cola: satélites sólidos que esperan su turno.
+        for k in 0..self.sig.queue.min(6) {
+            let a = PI / 2.0 + t * 0.4 + k as f64 * 0.5;
+            for (dr, da) in [(0.0, 0.0), (0.03, 0.0), (0.0, 0.06), (0.03, 0.06)] {
+                let (x, y) = body(0.6 + dr, a + da);
+                g.plot(x, y, 3, INK_MAIN);
+            }
+        }
+
+        // Prensas (compactando).
+        if p.press > 0.01 {
+            let gap = p.blob_r + 0.08 + 0.1 * (0.5 + 0.5 * (t * 5.0).cos());
+            let mut x = -0.35;
+            while x <= 0.35 {
+                g.plot(cx + x, cy + gap * p.press + (1.0 - p.press) * 0.8, 3, INK_MAIN);
+                g.plot(cx + x, cy - gap * p.press - (1.0 - p.press) * 0.8, 3, INK_MAIN);
+                x += 0.03;
+            }
+        }
+
+        // Ondas de voz (respondiendo).
+        if p.ripple > 0.01 {
+            for w in 0..2 {
+                let u = (t * 0.55 + w as f64 / 2.0).fract();
+                if u > 0.9 {
+                    continue;
+                }
+                let r = p.blob_r + 0.1 + u * (0.62 - p.blob_r);
+                let n = (40.0 + u * 30.0) as usize;
+                for q in 0..n {
+                    let (x, y) = body(r, q as f64 * TAU / n as f64 + w as f64 * 0.2);
+                    g.plot(x, y, if u < 0.4 { 2 } else { 1 }, INK_MAIN);
+                }
+            }
+        }
+        // Ondas de tecla.
+        for k0 in &self.keys {
+            let u = (t - k0) / 0.45;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let r = p.blob_r + 0.05 + u * 0.16;
+            for q in 0..36 {
+                let (x, y) = body(r, q as f64 * TAU / 36.0);
+                g.plot(x, y, if u < 0.5 { 2 } else { 1 }, INK_MAIN);
+            }
+        }
+        // Listo: anillo verde que se expande hasta la escala.
+        for b in &self.blooms {
+            let u = (t - b) / 1.1;
+            if !(0.0..=0.75).contains(&u) {
+                continue;
+            }
+            let r = p.blob_r + 0.04 + u * 0.62;
+            let n = 50 + (u * 40.0) as usize;
+            for q in 0..n {
+                let (x, y) = body(r, q as f64 * TAU / n as f64);
+                g.plot(x, y, if u < 0.45 { 3 } else { 2 }, INK_GREEN);
+            }
+        }
+
+        // Radar (ejecutando).
+        if p.sweep > 0.01 {
+            let a0 = -self.arc_phase * 1.3;
+            for s in 0..10 {
+                let a = a0 + s as f64 * 0.06;
+                let mut r = p.blob_r + 0.14;
+                while r < 0.78 {
+                    g.polar(r, a, if s < 2 { 3 } else if s < 5 { 2 } else { 1 }, INK_MAIN);
+                    r += 0.035;
+                }
+            }
+        }
+
+        // Ideas en órbita (pensando). Al irse a otro estado se hunden en el cuerpo.
+        if p.orbit > 0.01 {
+            for k in 0..3 {
+                let base = self.phase * (1.1 + k as f64 * 0.25) + k as f64 * TAU / 3.0;
+                let rr = p.blob_r + p.amp + 0.12 + k as f64 * 0.06 + 0.03 * (t * 1.7 + k as f64 * 2.0).sin();
+                let r = p.blob_r + (rr - p.blob_r) * p.orbit;
+                for s in 0..7 {
+                    let a = base - s as f64 * 0.11;
+                    let (x, y) = body(r, a);
+                    g.plot(x, y, if s < 2 { 3 } else { 2 }, INK_MAIN);
+                    if s < 2 && !low {
+                        for dr in [0.035, -0.035] {
+                            let (x, y) = body(r + dr, a);
+                            g.plot(x, y, 3, INK_MAIN);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Paquetes (en la red): salen al anillo y vuelven; donde rebotan se enciende la escala.
+        if p.packets > 0.01 {
+            for k in 0..4 {
+                let trip = t * 0.8 + k as f64 / 4.0;
+                let (n, u) = (trip.floor(), trip.fract());
+                let h = ((n * 4.0 + k as f64) * 12.9898).sin() * 43758.5453;
+                let a = h.fract().abs() * TAU;
+                let out = if u < 0.5 { u * 2.0 } else { 2.0 - u * 2.0 };
+                let r = p.blob_r + 0.06 + out * (0.84 - p.blob_r) * p.packets;
+                for s in 0..if low { 2 } else { 4 } {
+                    let rs = r - if u < 0.5 { 1.0 } else { -1.0 } * s as f64 * 0.04;
+                    if rs > p.blob_r {
+                        let (x, y) = body(rs, a);
+                        g.plot(x, y, if s == 0 { 3 } else if s < 2 { 2 } else { 1 }, INK_MAIN);
+                    }
+                }
+                if (u - 0.5).abs() < 0.08 {
+                    g.polar(0.94, a, 3, INK_MAIN);
+                    g.polar(0.90, a, 3, INK_MAIN);
+                }
+            }
+        }
+
+        // Piezas (editando): entran desde la escala hacia el contorno.
+        if p.stitch > 0.01 {
+            for k in 0..3 {
+                let v = t * 0.9 + k as f64 / 3.0;
+                let a = k as f64 * 2.4 + v.floor() * 1.7;
+                let r = 0.84 - v.fract() * (0.84 - p.blob_r - 0.06);
+                let (x, y) = body(r, a);
+                g.plot(x, y, 3, INK_MAIN);
+                let (x, y) = body(r + 0.04, a);
+                g.plot(x, y, 2, INK_MAIN);
+            }
+        }
+
+        // Grafo de git: tronco que sube, una rama y nodos que aparecen con un pop.
+        if p.git > 0.01 {
+            let gx = cx + 0.1;
+            let base = cy + p.blob_r + 0.02;
+            let grow2 = (st / 2.2).min(1.0);
+            let mut y = 0.0;
+            while y < 0.42 * grow2 {
+                g.plot(gx, base + y, 2, INK_MAIN);
+                y += 0.03;
+            }
+            let mut u = 0.0;
+            while u < (grow2 - 0.35).max(0.0) / 0.65 {
+                g.plot(gx - u * 0.22, base + 0.12 + u * 0.22, 2, INK_MAIN);
+                u += 0.04;
+            }
+            for (nx, ny, at) in [(gx, base + 0.10, 0.2), (gx, base + 0.26, 0.5), (gx - 0.22, base + 0.34, 0.8), (gx, base + 0.40, 0.95)] {
+                if grow2 > at {
+                    let pop = ((grow2 - at) * 8.0).min(1.0);
+                    let rr = 0.035 + 0.06 * (1.0 - pop).max(0.0);
+                    for q in 0..10 {
+                        let a = q as f64 * TAU / 10.0;
+                        g.plot(nx + rr * a.cos(), ny + rr * a.sin(), 3, INK_MAIN);
+                    }
+                }
+            }
+        }
+
+        // «?» (no te oigo).
+        if p.droop > 0.5 {
+            let (qx, qy) = (cx + 0.32, cy + p.blob_r + 0.12 + 0.02 * (t * 3.0).sin());
+            for (a, b) in [(0, 4), (1, 5), (2, 5), (3, 4), (3, 3), (2, 2), (1, 1), (1, 0), (1, -2)] {
+                g.plot(qx + a as f64 * 0.025 - 0.04, qy + b as f64 * 0.03, 3, INK_MAIN);
+            }
+        }
+
+        // Zetas (en reposo).
+        if p.zzz > 0.01 && !low {
+            for k in 0..3 {
+                let u = (t * 0.22 + k as f64 / 3.0).fract();
+                let s = 0.03 + u * 0.04;
+                let (zx, zy) = (cx + p.blob_r * 0.6 + u * 0.32, cy + p.blob_r * 0.5 + u * 0.38);
+                let tone = if u < 0.5 { 2 } else { 1 };
+                for q in -1..=1 {
+                    g.plot(zx + q as f64 * s, zy + s, tone, INK_MAIN);
+                    g.plot(zx + q as f64 * s, zy - s, tone, INK_MAIN);
+                }
+                g.plot(zx, zy, tone, INK_MAIN);
+            }
+        }
+
+        // Vuelve el subagente: una gota viaja desde la escala y se funde.
+        for &(t0, a, _) in &self.merges {
+            let u = (t - t0) / 0.7;
+            if !(0.0..=1.0).contains(&u) {
+                continue;
+            }
+            let r = 0.86 - u * (0.86 - p.blob_r);
+            let rr = 0.07 * (1.0 - u * 0.5);
+            let (bx, by) = body(r, a);
+            for q in 0..14 {
+                let b = q as f64 * TAU / 14.0;
+                g.plot(bx + rr * b.cos(), by + rr * b.sin(), 3, INK_MAIN);
+            }
+        }
+
+        // Brote (delegando): se separa, se aleja y vuelve.
+        let bud = (p.bud > 0.01).then(|| {
+            let a = self.phase * 0.9;
+            let out = 0.5 + 0.5 * (t * 1.1 - PI / 2.0).sin();
+            let d = p.blob_r + (0.05 + out * 0.26) * p.bud;
+            if out > 0.35 {
+                for q in (0..6).step_by(2) {
+                    let (x, y) = body(p.blob_r + q as f64 / 6.0 * (d - p.blob_r), a);
+                    g.plot(x, y, 1, INK_MAIN);
+                }
+            }
+            (cx + d * a.cos(), cy + d * a.sin(), 0.10 + 0.02 * (t * 3.0).sin())
+        });
+
+        // Cuerpo.
+        let yawn = match self.gesture {
+            Some((Gesture::Yawn, t0)) => (PI * ((t - t0) / 2.2).min(1.0)).sin(),
+            _ => 0.0,
+        };
+        let breath = p.zzz * 0.03 * (t * 1.25).sin() + (1.0 - p.zzz) * 0.012 * (t * 1.2).sin() + yawn * 0.05;
+        let beat = p.ripple * 0.045 * (t * 5.0).sin().abs();
+        let voice = p.vu * lv * 0.22;
+        let radius = p.blob_r * grow * (1.0 - 0.35 * self.deflate);
+        let chaos = p.chaos + self.red * 2.0;
+        let red = self.red;
+        let phase = self.phase;
+        let r_at = |th: f64| {
+            radius + breath + beat + voice * (0.6 + 0.4 * (5.0 * th + t * 7.0).sin())
+                + p.amp
+                    * (0.60 * (3.0 * th + phase).sin()
+                        + 0.40 * (5.0 * th - phase * 1.6 + 1.0).sin()
+                        + 0.30 * chaos * (7.0 * th + phase * 2.7 + 2.0).sin())
+                + red * 0.09 * (11.0 * th + t * 20.0).sin().max(0.0)
+        };
+        let (sx, sy) = (1.0 + self.sq, 1.0 - self.sq);
+        let cursor = t * 2.6;
+        let scan_y = cy + p.blob_r * 0.8 * (st * 1.6).cos();
+        let pr = 0.085 * p.pupil * (1.0 - yawn * 0.8);
+        let blink = (matches!(self.shown, Idle | Typing) && (t % 4.3) < 0.12) || self.copy > 0.3;
+        let (px, py) = (cx + self.gaze[0], cy + self.gaze[1]);
+        let (lx, ly, lr) = (cx + p.blob_r * 0.55 * (st * 1.3).sin(), cy + p.blob_r * 0.45 * (st * 2.1 + 1.0).sin(), 0.15);
+        if p.lens > 0.01 {
+            for q in 0..40 {
+                let a = q as f64 * TAU / 40.0;
+                g.plot(lx + lr * a.cos(), ly + lr * a.sin(), 3, INK_MAIN);
+            }
+            if !low {
+                for q in 0..5 {
+                    let d = (lr + q as f64 * 0.025) * 0.7;
+                    g.plot(lx + d, ly - d, 3, INK_MAIN);
+                }
+            }
+        }
+        let ctx = self.sig.ctx.clamp(0.0, 1.0);
+        let liquid_ink = if ctx > 0.8 { INK_WARM } else { err };
+        // Contorno: al menos ~2 puntos de grosor, aunque el panel sea chico.
+        let band = 0.065_f64.max(1.9 * g.du);
+
+        for j in 0..g.dh {
+            for i in 0..g.dw {
+                let (x, y) = g.center(i, j);
+                let (dx, dy) = ((x - cx) / sx, (y - cy) / sy);
+                let r = dx.hypot(dy);
+                let mut in_bud = false;
+                if let Some((bx, by, br)) = bud {
+                    let e = br - (x - bx).hypot(y - by);
+                    if (0.0..0.05).contains(&e) {
+                        g.dot(i, j, 3, err);
+                        continue;
+                    }
+                    in_bud = e >= 0.05;
+                }
+                if r > 0.8 && !in_bud {
+                    continue;
+                }
+                let th = dy.atan2(dx);
+                let d = r_at(th) - r;
+                if (0.0..band).contains(&d) {
+                    if p.dashed > 0.5 && (th * 18.0).sin() <= 0.0 {
+                        continue;
+                    }
+                    let mut tone = 3;
+                    if p.stitch > 0.5 {
+                        let da = ((th - cursor).rem_euclid(TAU) - PI).abs();
+                        tone = if da > PI - 0.5 { 3 } else { 2 };
+                    }
+                    g.dot(i, j, tone, err);
+                } else if (d > band + 0.035 || in_bud) && p.dashed < 0.5 {
+                    // Capas de adentro hacia afuera: pupila > lupa > línea de lectura > líquido > trama.
+                    let pupil_r = pr * if p.lens > 0.5 { 1.5 } else { 1.0 };
+                    if pupil_r > 0.01 && (x - px).hypot(y - py) < pupil_r {
+                        if !blink || (y - py).abs() < 0.02 {
+                            g.dot(i, j, 3, err);
+                        }
+                        continue;
+                    }
+                    if p.lens > 0.5 && (x - lx).hypot(y - ly) < lr {
+                        if (i + j) % 2 == 0 {
+                            g.dot(i, j, 3, INK_MAIN);
+                        }
+                        continue;
+                    }
+                    if p.scan > 0.01 && (y - scan_y).abs() < 0.025 {
+                        g.dot(i, j, 3, INK_MAIN);
+                        continue;
+                    }
+                    if ctx > 0.01 && y < cy - radius + 2.0 * radius * ctx + 0.02 * (x * 14.0 + t * 3.0).sin() {
+                        if (i + j) % 2 == 0 {
+                            g.dot(i, j, 2, liquid_ink);
+                        }
+                        continue;
+                    }
+                    if (i + j * 2) % 3 == 0 && j % 2 == 0 {
+                        g.dot(i, j, 2, err);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Default for Core {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+const INK_MAIN: u8 = 0;
+const INK_GREEN: u8 = 1;
+const INK_RED: u8 = 2;
+const INK_WARM: u8 = 3;
+
+#[derive(Clone, Copy, Default)]
+struct Cell {
+    bits: u8,
+    tone: u8,
+    ink: u8,
+}
+
+/// Rejilla braille. Coordenadas del mundo: y ∈ [-1, 1] (x proporcional); si el panel es más
+/// alto que ancho, se encoge todo para que el anillo entre.
+struct Grid {
+    cw: usize,
+    ch: usize,
+    dw: usize,
+    dh: usize,
+    asp: f64,
+    s: f64,
+    /// Tamaño de un punto en unidades del mundo.
+    du: f64,
+    cells: Vec<Cell>,
+}
+
+impl Grid {
+    fn new(cw: usize, ch: usize) -> Self {
+        let (dw, dh) = (cw * 2, ch * 4);
+        let asp = dw as f64 / dh as f64;
+        let s = asp.min(1.0);
+        Grid { cw, ch, dw, dh, asp, s, du: 2.0 / (s * dh as f64), cells: vec![Cell::default(); cw * ch] }
+    }
+
+    fn plot(&mut self, x: f64, y: f64, tone: u8, ink: u8) {
+        let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
+        let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
+        if i < 0.0 || j < 0.0 || i >= self.dw as f64 || j >= self.dh as f64 {
+            return;
+        }
+        self.dot(i as usize, j as usize, tone, ink);
+    }
+
+    fn polar(&mut self, r: f64, a: f64, tone: u8, ink: u8) {
+        self.plot(r * a.cos(), r * a.sin(), tone, ink);
+    }
+
+    fn dot(&mut self, i: usize, j: usize, tone: u8, ink: u8) {
+        const BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+        let c = &mut self.cells[(j / 4) * self.cw + i / 2];
+        c.bits |= BITS[j % 4][i % 2];
+        if tone > c.tone || (tone == c.tone && ink > c.ink) {
+            c.tone = tone;
+            c.ink = ink;
+        }
+    }
+
+    fn center(&self, i: usize, j: usize) -> (f64, f64) {
+        let x = (i as f64 / (self.dw - 1) as f64 * 2.0 - 1.0) * self.asp / self.s;
+        let y = (1.0 - j as f64 / (self.dh - 1) as f64 * 2.0) / self.s;
+        (x, y)
+    }
+}
+
+fn mix(a: [f64; 3], b: [f64; 3], f: f64) -> [f64; 3] {
+    [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
+}
+
+fn rgb(c: [f64; 3]) -> Color {
+    Color::Rgb(c[0].round() as u8, c[1].round() as u8, c[2].round() as u8)
+}
+
+fn ease_out_back(u: f64) -> f64 {
+    1.0 + 2.7 * (u - 1.0).powi(3) + 1.7 * (u - 1.0).powi(2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [State; 21] = [
+        State::Booting, State::Sleeping, State::Idle, State::Typing, State::Listening, State::NoVoice,
+        State::Transcribing, State::Thinking, State::Planning, State::Searching, State::Reading, State::Editing,
+        State::Running, State::Testing, State::Git, State::Web, State::Delegating, State::Speaking, State::Asking,
+        State::Compacting, State::Offline,
+    ];
+
+    #[test]
+    fn clasifica_herramientas() {
+        assert_eq!(tool_state("Read", "src/ui.rs"), State::Reading);
+        assert_eq!(tool_state("Grep", "draw_core"), State::Searching);
+        assert_eq!(tool_state("Write", "x"), State::Editing);
+        assert_eq!(tool_state("WebSearch", "x"), State::Web);
+        assert_eq!(tool_state("Agent", "x"), State::Delegating);
+        assert_eq!(tool_state("TodoWrite", ""), State::Planning);
+        assert_eq!(tool_state("mcp__claude_ai_Dipro__query", ""), State::Running);
+    }
+
+    #[test]
+    fn clasifica_comandos_de_bash() {
+        for c in ["git push", "cd ~/code/jarvis && git status --short", "GIT_PAGER=cat git log", "git"] {
+            assert_eq!(tool_state("Bash", c), State::Git, "{c}");
+        }
+        for c in ["cargo test", "cd x && cargo test core", "RUST_LOG=1 cargo test", "pnpm vitest run", "npx jest", "python -m pytest -q"] {
+            assert_eq!(tool_state("Bash", c), State::Testing, "{c}");
+        }
+        for c in ["cargo build", "ls -la", "echo git", "grep -rn digit src", "legit status"] {
+            assert_eq!(tool_state("Bash", c), State::Running, "{c}");
+        }
+        // Un `git` seguido de pruebas es una corrida de pruebas.
+        assert_eq!(tool_state("Bash", "git stash && cargo test"), State::Testing);
+    }
+
+    fn run(want: State, secs: f64, sig: &Signals) -> Core {
+        let mut c = Core::new();
+        let mut t = 0.0;
+        while t < secs {
+            c.step(0.04, want, sig);
+            t += 0.04;
+        }
+        c
+    }
+
+    fn render(c: &Core, w: u16, h: u16) -> Buffer {
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        c.draw(area, &mut buf);
+        buf
+    }
+
+    #[test]
+    fn todos_los_estados_dibujan_algo_en_varios_tamanos() {
+        let sig = Signals { ctx: 0.5, queue: 2, todos: (5, 2), ..Default::default() };
+        for s in ALL {
+            let c = run(s, 3.0, &sig);
+            assert_eq!(c.state(), s);
+            for (w, h) in [(36, 15), (24, 9), (60, 22), (12, 20), (6, 3)] {
+                let buf = render(&c, w, h);
+                let lit = buf.content().iter().filter(|c| c.symbol() != " ").count();
+                assert!(lit > 0, "{s:?} a {w}×{h} no dibujó nada");
+            }
+        }
+    }
+
+    #[test]
+    fn es_determinista() {
+        let sig = Signals::default();
+        let a = render(&run(State::Thinking, 2.0, &sig), 36, 15);
+        let b = render(&run(State::Thinking, 2.0, &sig), 36, 15);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn un_read_corto_no_parpadea() {
+        let sig = Signals::default();
+        let mut c = run(State::Thinking, 1.0, &sig);
+        c.step(0.04, State::Reading, &sig);
+        assert_eq!(c.state(), State::Reading);
+        // El Read terminó enseguida, pero se sigue viendo un momento.
+        c.step(0.04, State::Thinking, &sig);
+        assert_eq!(c.state(), State::Reading);
+        for _ in 0..20 {
+            c.step(0.04, State::Thinking, &sig);
+        }
+        assert_eq!(c.state(), State::Thinking);
+        // Lo urgente entra sin esperar.
+        c.step(0.04, State::Reading, &sig);
+        c.step(0.04, State::Asking, &sig);
+        assert_eq!(c.state(), State::Asking);
+    }
+
+    #[test]
+    fn eventos_no_rompen_nada() {
+        let sig = Signals::default();
+        let mut c = run(State::Idle, 1.0, &sig);
+        for ev in [Event::Key, Event::Error, Event::Done, Event::Cancel, Event::Nope, Event::Merge, Event::Copy, Event::Pass] {
+            c.fire(ev);
+            for _ in 0..10 {
+                c.step(0.04, State::Idle, &sig);
+                render(&c, 36, 15);
+            }
+        }
+    }
+
+    /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
+    /// los estados, para mirarlos en el navegador.
+    #[test]
+    fn snapshot() {
+        if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
+            return;
+        }
+        let mut html = String::from(
+            "<!doctype html><meta charset=utf-8><body style='background:#05090d;color:#ccc;font:13px monospace;\
+             display:flex;flex-wrap:wrap;gap:14px;padding:14px'>",
+        );
+        let sig = Signals { ctx: 0.35, todos: (6, 3), ..Default::default() };
+        for (s, w, h) in ALL.iter().map(|s| (*s, 36u16, 15u16)).chain([(State::Thinking, 24, 9), (State::Idle, 60, 22)]) {
+            let c = run(s, 2.6, &sig);
+            let buf = render(&c, w, h);
+            html.push_str("<div><pre style='line-height:1.12;font-family:\"JetBrainsMono Nerd Font\",monospace;font-size:15px;margin:0'>");
+            for y in 0..h {
+                for x in 0..w {
+                    let cell = &buf[(x, y)];
+                    let Color::Rgb(r, g, b) = cell.fg else {
+                        html.push(' ');
+                        continue;
+                    };
+                    html.push_str(&format!("<span style='color:rgb({r},{g},{b})'>{}</span>", cell.symbol()));
+                }
+                html.push('\n');
+            }
+            let col = s.rgb();
+            html.push_str(&format!(
+                "</pre><div style='text-align:center;color:rgb({},{},{})'>{} {w}×{h}</div></div>",
+                col[0], col[1], col[2], s.label()
+            ));
+        }
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/target/nucleo.html"), html).unwrap();
+    }
+}

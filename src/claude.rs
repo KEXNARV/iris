@@ -15,9 +15,13 @@ pub enum ClaudeEvent {
     Init { model: String, session: String, skills: Vec<String> },
     Thinking,
     Text(String),
-    ToolUse { id: String, name: String, detail: String },
+    /// `input` va entero: de ahí salen, por ejemplo, las tareas de TodoWrite.
+    ToolUse { id: String, name: String, detail: String, input: Value },
     ToolResult { id: String, is_error: bool },
-    Done { cost: f64, secs: f64, is_error: bool },
+    /// `window`: ventana de contexto del modelo, si el motor la informó.
+    Done { cost: f64, secs: f64, is_error: bool, window: Option<u64> },
+    /// Tokens de contexto que lleva la conversación (entrada + caché del último mensaje).
+    Usage(u64),
     /// El motor espera respuesta del usuario: una `AskUserQuestion` o un permiso.
     Ask { request_id: String, tool: String, input: Value },
     /// El motor tomó el mensaje con este id (lo repite al leerlo, por `--replay-user-messages`).
@@ -149,6 +153,8 @@ impl Claude {
 impl Drop for Claude {
     fn drop(&mut self) {
         let _ = self.child.kill();
+        // Sin esto el proceso muerto queda como zombi hasta que Jarvis termina.
+        let _ = self.child.wait();
     }
 }
 
@@ -181,17 +187,29 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
         }
         // El texto ya llegó por deltas; de los mensajes completos solo interesan las herramientas.
         // Los de subagentes (parent_tool_use_id) se ignoran para no ensuciar el panel.
-        Some("assistant") if v["parent_tool_use_id"].is_null() => v["message"]["content"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|b| b["type"] == "tool_use")
-            .map(|b| ClaudeEvent::ToolUse {
-                id: s(b, "id"),
-                name: s(b, "name"),
-                detail: tool_detail(&b["input"]),
-            })
-            .collect(),
+        Some("assistant") if v["parent_tool_use_id"].is_null() => {
+            let mut out: Vec<ClaudeEvent> = v["message"]["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|b| b["type"] == "tool_use")
+                .map(|b| ClaudeEvent::ToolUse {
+                    id: s(b, "id"),
+                    name: s(b, "name"),
+                    detail: tool_detail(&b["input"]),
+                    input: b["input"].clone(),
+                })
+                .collect();
+            let u = &v["message"]["usage"];
+            let used: u64 = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]
+                .iter()
+                .filter_map(|k| u[*k].as_u64())
+                .sum();
+            if used > 0 {
+                out.push(ClaudeEvent::Usage(used));
+            }
+            out
+        }
         Some("user") if v["isReplay"] == true => vec![ClaudeEvent::Taken(s(v, "uuid"))],
         Some("user") => v["message"]["content"]
             .as_array()
@@ -212,6 +230,10 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
             cost: v["total_cost_usd"].as_f64().unwrap_or(0.0),
             secs: v["duration_ms"].as_f64().unwrap_or(0.0) / 1000.0,
             is_error: v["is_error"].as_bool().unwrap_or(false),
+            // Con subagentes hay varios modelos; la ventana de la conversación es la mayor.
+            window: v["modelUsage"]
+                .as_object()
+                .and_then(|m| m.values().filter_map(|x| x["contextWindow"].as_u64()).max()),
         }],
         _ => vec![],
     }

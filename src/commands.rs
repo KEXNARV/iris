@@ -16,6 +16,7 @@ const LOCAL: &[(&str, &str)] = &[
     ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
     ("clear", "limpiar la conversación en pantalla (^L)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
+    ("calma", "menos movimiento en el núcleo (alterna)"),
     ("quit", "salir de Jarvis (^C)"),
 ];
 

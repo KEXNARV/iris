@@ -1,6 +1,7 @@
 mod ask;
 mod claude;
 mod commands;
+mod nucleo;
 mod select;
 mod sessions;
 mod ui;
@@ -13,6 +14,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
 use ask::{Ask, Outcome};
+use nucleo::{Event as Gesto, State};
 use claude::{Claude, ClaudeEvent};
 use voice::{Level, VoiceCmd, VoiceEvent};
 
@@ -108,29 +110,68 @@ pub struct App {
     pub sel: Option<select::Selection>,
     /// Aviso breve en la barra de abajo («copiado…»).
     pub flash: Option<(String, Instant)>,
+    /// El blob del panel NÚCLEO.
+    pub nucleo: nucleo::Core,
+    /// Tokens de contexto en uso y la ventana del modelo.
+    pub ctx_used: u64,
+    pub ctx_window: u64,
+    /// Tareas de la última TodoWrite: (total, completadas).
+    pub todos: (usize, usize),
+    /// Se pidió `/compact` y todavía no terminó.
+    compacting: bool,
+    /// Última tecla, clic o evento del motor; con eso se sabe si está en reposo.
+    last_activity: Instant,
+    last_key: Instant,
+    /// Escuchando: última vez que el nivel superó el piso de ruido, y ese piso.
+    last_voice: Instant,
+    noise_floor: f32,
+    /// Al arrancar o reiniciar, el núcleo se arma.
+    booted: Instant,
+    /// `/calma`: menos movimiento en el núcleo.
+    pub calm: bool,
 }
 
 impl App {
     /// Qué está haciendo en este momento, para el núcleo y la barra de estado.
-    pub fn state(&self) -> ui::State {
-        use ui::State::*;
+    /// Por prioridad: la voz, luego lo que bloquea (motor caído, una pregunta), luego el trabajo.
+    pub fn state(&self) -> State {
         match self.voice {
-            VoiceState::Listening => return Listening,
-            VoiceState::Transcribing => return Transcribing,
+            VoiceState::Listening if self.last_voice.elapsed() > Duration::from_secs(2) => return State::NoVoice,
+            VoiceState::Listening => return State::Listening,
+            VoiceState::Transcribing => return State::Transcribing,
             _ => {}
         }
         if !self.alive {
-            Offline
+            State::Offline
         } else if matches!(self.modal, Some(Modal::Ask(_))) {
-            Asking
-        } else if self.activity.iter().any(|a| a.status == ToolStatus::Running) {
-            Working
+            State::Asking
+        } else if self.booted.elapsed() < Duration::from_millis(2400) {
+            State::Booting
+        } else if self.compacting {
+            State::Compacting
+        } else if let Some(a) = self.current_tool() {
+            nucleo::tool_state(&a.name, &a.detail)
         } else if self.busy && self.thinking {
-            Thinking
+            State::Thinking
         } else if self.busy {
-            Speaking
+            State::Speaking
+        } else if !self.input.is_empty() && self.last_key.elapsed() < Duration::from_secs(3) {
+            State::Typing
+        } else if self.last_activity.elapsed() > Duration::from_secs(120) {
+            State::Sleeping
         } else {
-            Idle
+            State::Idle
+        }
+    }
+
+    pub fn signals(&self) -> nucleo::Signals {
+        nucleo::Signals {
+            level: voice::level_get(&self.level),
+            ctx: self.ctx_used as f64 / self.ctx_window.max(1) as f64,
+            queue: self.messages.iter().filter(|m| m.waiting.is_some()).count(),
+            todos: self.todos,
+            idle: self.last_activity.elapsed().as_secs_f64(),
+            calm: self.calm,
         }
     }
 
@@ -153,6 +194,7 @@ impl App {
     }
 
     fn on_claude(&mut self, ev: ClaudeEvent) {
+        self.last_activity = Instant::now();
         match ev {
             ClaudeEvent::Init { model, session, skills } => {
                 self.model = model;
@@ -169,9 +211,14 @@ impl App {
                     self.assistant_open = true;
                 }
             }
-            ClaudeEvent::ToolUse { id, name, detail } => {
+            ClaudeEvent::ToolUse { id, name, detail, input } => {
                 self.thinking = false;
                 self.assistant_open = false;
+                if name == "TodoWrite" {
+                    let todos = input["todos"].as_array().map(Vec::as_slice).unwrap_or_default();
+                    let done = todos.iter().filter(|t| t["status"] == "completed").count();
+                    self.todos = (todos.len(), done);
+                }
                 self.activity.push(Activity {
                     id,
                     name,
@@ -185,10 +232,27 @@ impl App {
                 if let Some(a) = self.activity.iter_mut().rev().find(|a| a.id == id) {
                     a.status = if is_error { ToolStatus::Err } else { ToolStatus::Ok };
                     a.took = Some(a.started.elapsed());
+                    let kind = nucleo::tool_state(&a.name, &a.detail);
+                    if is_error {
+                        self.nucleo.fire(Gesto::Error);
+                    } else if kind == State::Testing {
+                        self.nucleo.fire(Gesto::Pass);
+                    } else if kind == State::Delegating {
+                        self.nucleo.fire(Gesto::Merge);
+                    }
                 }
                 self.thinking = true;
             }
-            ClaudeEvent::Done { cost, secs, is_error } => {
+            ClaudeEvent::Done { cost, secs, is_error, window } => {
+                if let Some(w) = window {
+                    self.ctx_window = w;
+                }
+                self.compacting = false;
+                if is_error && !self.interrupted {
+                    self.nucleo.fire(Gesto::Error);
+                } else if !is_error {
+                    self.nucleo.fire(Gesto::Done);
+                }
                 self.busy = false;
                 self.thinking = false;
                 self.assistant_open = false;
@@ -209,7 +273,10 @@ impl App {
                     m.waiting = None;
                 }
             }
+            ClaudeEvent::Usage(n) => self.ctx_used = n,
             ClaudeEvent::Compacted { pre, post } => {
+                self.compacting = false;
+                self.ctx_used = post;
                 let k = |n: u64| format!("{:.1}k", n as f64 / 1000.0);
                 self.push(Role::System, format!("contexto compactado: {} → {} tokens", k(pre), k(post)));
             }
@@ -266,6 +333,17 @@ fn main() -> Result<()> {
         view: Default::default(),
         sel: None,
         flash: None,
+        nucleo: nucleo::Core::new(),
+        ctx_used: 0,
+        ctx_window: 200_000,
+        todos: (0, 0),
+        compacting: false,
+        last_activity: Instant::now(),
+        last_key: Instant::now(),
+        last_voice: Instant::now(),
+        noise_floor: 0.0,
+        booted: Instant::now(),
+        calm: std::env::var_os("JARVIS_CALM").is_some(),
     };
 
     let mut term = ratatui::init();
@@ -299,11 +377,20 @@ fn run(
     extra: &[String],
 ) -> Result<()> {
     let tick = Duration::from_millis(33);
+    let mut frame = Instant::now();
     loop {
         // La onda avanza aunque no haya audio, para que se vea viva.
         let lvl = if app.voice == VoiceState::Listening { voice::level_get(&app.level) } else { 0.0 };
         app.levels.remove(0);
         app.levels.push(lvl);
+        if app.voice == VoiceState::Listening {
+            hear(app, lvl);
+        }
+
+        let dt = frame.elapsed().as_secs_f64();
+        frame = Instant::now();
+        let (want, sig) = (app.state(), app.signals());
+        app.nucleo.step(dt, want, &sig);
 
         term.draw(|f| ui::draw(f, app))?;
         follow_drag(app);
@@ -329,6 +416,10 @@ fn run(
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
                             app.alive = true;
                             app.modal = None;
+                            app.ctx_used = 0;
+                            app.todos = (0, 0);
+                            app.booted = Instant::now();
+                            app.nucleo.reboot();
                             app.push(Role::System, "claude reiniciado — sesión nueva");
                         }
                         Flow::Resume(id) => {
@@ -340,6 +431,9 @@ fn run(
                             app.busy = false;
                             app.modal = None;
                             app.activity.clear();
+                            app.todos = (0, 0);
+                            app.booted = Instant::now();
+                            app.nucleo.reboot();
                             app.messages = sessions::history(&id);
                             app.push(Role::System, format!("sesión {} retomada", &id[..8]));
                             term.clear()?;
@@ -384,6 +478,7 @@ fn handle_key(
 ) -> Flow {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
     app.sel = None;
+    app.last_activity = Instant::now();
 
     if !ctrl {
         if let Some(flow) = modal_key(app, k, claude) {
@@ -446,6 +541,7 @@ fn handle_key(
                 if let Some(c) = claude {
                     let _ = c.interrupt();
                 }
+                app.nucleo.fire(Gesto::Cancel);
                 app.interrupted = true;
                 app.push(Role::System, "interrumpido");
             }
@@ -466,6 +562,12 @@ fn handle_key(
                     return Flow::Go;
                 }
                 "/restart" => return Flow::Restart,
+                "/calma" => {
+                    app.calm = !app.calm;
+                    let msg = if app.calm { "núcleo en calma" } else { "núcleo con todo su movimiento" };
+                    app.flash = Some((msg.into(), Instant::now()));
+                    return Flow::Go;
+                }
                 "/quit" => return Flow::Quit,
                 _ => submit(app, claude, text),
             }
@@ -482,6 +584,8 @@ fn handle_key(
                 app.input.push(c);
             }
             app.menu = 0;
+            app.last_key = Instant::now();
+            app.nucleo.fire(Gesto::Key);
         }
         KeyCode::PageUp => app.scroll += 10,
         KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
@@ -589,6 +693,7 @@ fn copied(app: &mut App, text: &str) {
     let msg = if text.is_empty() {
         "nada que copiar ahí".to_string()
     } else if select::copy(text) {
+        app.nucleo.fire(Gesto::Copy);
         format!("copiado · {n} caracteres")
     } else {
         "no pude copiar al portapapeles".to_string()
@@ -749,6 +854,9 @@ fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
         return;
     };
     let queued = app.busy;
+    if text.trim() == "/compact" || text.starts_with("/compact ") {
+        app.compacting = true;
+    }
     app.push(Role::User, text.clone());
     match c.send(&text) {
         Ok(uuid) => {
@@ -774,7 +882,16 @@ fn on_voice(app: &mut App, ev: VoiceEvent, claude: &mut Option<Claude>) {
             app.voice = VoiceState::Off;
             app.push(Role::Error, format!("voz desactivada: {e}"));
         }
-        VoiceEvent::Listening => app.voice = VoiceState::Listening,
+        VoiceEvent::Listening => {
+            app.voice = VoiceState::Listening;
+            app.last_voice = Instant::now();
+            app.noise_floor = 0.0;
+        }
+        VoiceEvent::Discarded(t) => {
+            app.voice = VoiceState::Ready;
+            app.nucleo.fire(Gesto::Nope);
+            app.push(Role::System, format!("descarté «{t}»: whisper lo inventa sobre el ruido"));
+        }
         VoiceEvent::Transcribing => app.voice = VoiceState::Transcribing,
         VoiceEvent::Transcript(t) if t.is_empty() => {
             app.voice = VoiceState::Ready;
@@ -793,5 +910,16 @@ fn on_voice(app: &mut App, ev: VoiceEvent, claude: &mut Option<Claude>) {
             app.voice = VoiceState::Ready;
             app.push(Role::Error, e);
         }
+    }
+}
+
+/// Sigue el piso de ruido mientras escucha y anota cuándo hubo voz por encima. Un umbral fijo
+/// no sirve: en una pieza con ruido de fondo el silencio ya marca tanto como la voz baja.
+fn hear(app: &mut App, lvl: f32) {
+    let floor = &mut app.noise_floor;
+    // Baja de golpe con el silencio y sube muy despacio con la voz.
+    *floor = if *floor == 0.0 || lvl < *floor { lvl } else { *floor + (lvl - *floor) * 0.002 };
+    if lvl > (*floor * 1.8).max(*floor + 0.01) {
+        app.last_voice = Instant::now();
     }
 }

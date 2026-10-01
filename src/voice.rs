@@ -29,6 +29,8 @@ pub enum VoiceEvent {
     Listening,
     Transcribing,
     Transcript(String),
+    /// Whisper devolvió una de sus frases inventadas sobre ruido; se descartó.
+    Discarded(String),
     Cancelled,
     Error(String),
 }
@@ -129,6 +131,7 @@ fn run(ctx: &WhisperContext, rx: Receiver<VoiceCmd>, level: Level, send: &dyn Fn
                 level.store(0, Ordering::Relaxed);
                 send(VoiceEvent::Transcribing);
                 match transcribe(ctx, &audio) {
+                    Ok(text) if is_hallucination(&text) => send(VoiceEvent::Discarded(text)),
                     Ok(text) => send(VoiceEvent::Transcript(text)),
                     Err(e) => send(VoiceEvent::Error(format!("whisper: {e}"))),
                 }
@@ -269,8 +272,8 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
         .filter(|s| s.no_speech_probability() < 0.6)
         .filter_map(|s| s.to_str_lossy().ok().map(|t| t.into_owned()))
         .collect();
-    let text = clean(&text);
-    Ok(if is_hallucination(&text) { String::new() } else { text })
+    // Las alucinaciones las filtra quien llama (`is_hallucination`), para poder avisar.
+    Ok(clean(&text))
 }
 
 /// Frases que whisper produce sobre ruido o silencio (vienen de subtítulos de YouTube
@@ -346,10 +349,11 @@ pub fn transcribe_file(path: &str) -> Result<()> {
     let t1 = std::time::Instant::now();
     let text = transcribe(&ctx, &audio)?;
     println!(
-        "{name}: carga {:.1}s, {:.1}s de audio en {:.1}s\n{text}",
+        "{name}: carga {:.1}s, {:.1}s de audio en {:.1}s\n{text}{}",
         load.as_secs_f32(),
         audio.len() as f32 / WHISPER_RATE as f32,
-        t1.elapsed().as_secs_f32()
+        t1.elapsed().as_secs_f32(),
+        if is_hallucination(&text) { "  (alucinación: Jarvis la descartaría)" } else { "" }
     );
     Ok(())
 }

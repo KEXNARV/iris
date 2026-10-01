@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>JARVIS · NÚCLEO vivo</title>
+<style>
+  :root { --bg:#05090d; --dim:#285a78; --faint:#5a6e7d; --text:#cde1eb; --accent:#00c8ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 "JetBrainsMono Nerd Font","JetBrains Mono",monospace; }
+  header { padding:20px 28px 4px; }
+  h1 { margin:0; font-size:18px; color:var(--accent); letter-spacing:.08em; }
+  p.sub { margin:6px 0 0; color:var(--faint); max-width:1050px; }
+  .bar { display:flex; flex-wrap:wrap; gap:7px; padding:10px 28px 0; align-items:center; }
+  .bar .h { color:var(--faint); width:70px; font-size:12px; }
+  .bar button { background:transparent; color:var(--faint); border:1px solid #1d3442; border-radius:6px; padding:5px 10px; font:inherit; font-size:12.5px; cursor:pointer; }
+  .bar button.on { color:#000; border-color:transparent; font-weight:bold; }
+  .bar .ev { border-style:dashed; }
+  .bar .auto { margin-left:auto; }
+  .script { padding:8px 28px 12px; color:var(--faint); font-size:12px; border-bottom:1px solid #12202a; min-height:2.6em; }
+  .script b { color:var(--text); font-weight:normal; }
+  main { display:flex; gap:28px; padding:22px 28px; align-items:flex-start; flex-wrap:wrap; }
+  .panel { border:1px solid var(--dim); border-radius:10px; background:#060c11; position:relative; }
+  .panel .t { position:absolute; top:-10px; left:12px; background:#060c11; padding:0 6px; color:var(--accent); font-weight:bold; }
+  .big { padding:18px 18px 10px; }
+  .label { text-align:center; font-weight:bold; margin-top:4px; }
+  .detail { text-align:center; color:var(--faint); font-size:12.5px; min-height:1.4em; }
+  .side { display:flex; flex-direction:column; gap:18px; }
+  .small { padding:14px 10px 6px; align-self:flex-start; }
+  .legend { max-width:600px; color:var(--faint); font-size:12.5px; border-collapse:collapse; }
+  .legend td { padding:3px 10px 3px 0; vertical-align:top; }
+  .legend td:first-child { white-space:nowrap; font-weight:bold; }
+  .legend td.src { color:#3f5866; }
+  .legend tr.sep td { padding-top:10px; color:var(--text); font-weight:normal; }
+  canvas { display:block; }
+  .mic { color:var(--faint); font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>◆ NÚCLEO · vivo</h1>
+  <p class="sub">El híbrido con vida propia: una pupila que mira hacia donde pasan las cosas, cuerpo elástico que rebota al cambiar, partículas en la corona y eventos breves encima de cualquier estado. Rejilla braille con un solo color por celda, como en foot. En automático recorre una sesión real de punta a punta.</p>
+</header>
+<div class="bar" id="bar-states"><span class="h">estados</span></div>
+<div class="bar" id="bar-events"><span class="h">eventos</span></div>
+<div class="script" id="script"></div>
+<main>
+  <div class="panel big"><span class="t">NÚCLEO</span>
+    <canvas id="big"></canvas>
+    <div class="label" id="lab"></div><div class="detail" id="det"></div>
+  </div>
+  <div class="side">
+    <div class="panel small"><span class="t">tamaño real</span><canvas id="small"></canvas></div>
+    <div class="mic"><label><input type="checkbox" id="realmic"> usar mi micrófono para ESCUCHANDO</label></div>
+    <div class="mic">contexto usado <input type="range" id="ctx" min="0" max="100"> <span id="ctxv"></span> · el líquido dentro del cuerpo; pasa a ámbar desde 80%</div>
+    <div class="mic">mensajes en cola <input type="range" id="q" min="0" max="4"> <span id="qv"></span> · satélites que esperan su turno</div>
+    <table class="legend" id="legend"></table>
+  </div>
+</main>
+
+<script>
+const TAU = Math.PI*2;
+const DIM = [40,90,120], GREEN = [90,230,150], RED = [255,90,90];
+
+// En JARVIS el chat está a la izquierda, la entrada abajo y el panel de actividad debajo del núcleo:
+// la pupila mira hacia allá según el estado.
+const STATES = {
+  Booting:      { label:'ARRANCANDO',       color:[0,200,255],   detail:'cargando voz…', src:'al abrir JARVIS o tras ^R',
+                  what:'Nace de un punto: la escala se arma marca por marca y el cuerpo se infla con un rebote.' },
+  Sleeping:     { label:'EN REPOSO',        color:[0,130,170],   detail:'',  src:'sin actividad ni teclas > 2 min',
+                  what:'Respira hondo y lento, sin arcos; se le escapan unas «z».' },
+  Idle:         { label:'EN ESPERA',        color:[0,200,255],   detail:'mantén o toca espacio para hablar', src:'nada en curso',
+                  what:'Mira alrededor con saltos de ojo al azar y parpadea; motas que flotan.' },
+  Typing:       { label:'TE LEO',           color:[120,215,255], detail:'', src:'escribes en la entrada',
+                  what:'Mira hacia la entrada y da un respingo con cada tecla.' },
+  Listening:    { label:'ESCUCHANDO',       color:[255,170,40],  detail:'suelta espacio para enviar · esc cancela', src:'grabando voz',
+                  what:'Se deforma con tu voz, la escala hace de vúmetro y las motas caen hacia el centro.' },
+  NoVoice:      { label:'NO TE OIGO',       color:[200,140,60],  detail:'¿sigues ahí?', src:'grabando, pero el VAD no detecta voz > 2 s',
+                  what:'Se encorva, mira a los lados buscándote y le aparece un «?».' },
+  Transcribing: { label:'TRANSCRIBIENDO',   color:[200,110,255], detail:'', src:'whisper procesando',
+                  what:'Se contrae y vibra; la escala se llena en sentido horario.' },
+  Thinking:     { label:'PENSANDO',         color:[90,150,255],  detail:'', src:'bloque thinking',
+                  what:'Ondula amplio y mira hacia arriba; tres ideas orbitan a su alrededor.' },
+  Searching:    { label:'BUSCANDO',         color:[60,200,230],  detail:'Grep · "draw_core"', src:'Grep · Glob',
+                  what:'Una lupa recorre el cuerpo; la pupila la sigue y lo que queda debajo se ve aumentado.' },
+  Reading:      { label:'LEYENDO',          color:[60,220,190],  detail:'Read · src/ui.rs', src:'Read · Grep · Glob',
+                  what:'Una línea de lectura recorre el cuerpo y la pupila va de izquierda a derecha, renglón a renglón.' },
+  Planning:     { label:'PLANIFICANDO',     color:[120,190,255], detail:'3/6 tareas', src:'TodoWrite',
+                  what:'Seis marcas grandes son las tareas: se encienden al completarse y la actual parpadea; la pupila mira la que toca.' },
+  Editing:      { label:'EDITANDO',         color:[180,235,90],  detail:'Edit · src/ui.rs', src:'Edit · Write · NotebookEdit',
+                  what:'Un cursor recorre el contorno escribiéndolo y entran piezas desde la escala.' },
+  Running:      { label:'EJECUTANDO',       color:[0,200,255],   detail:'Bash · 3s', src:'Bash',
+                  what:'Barrido de radar sobre la corona, arcos rápidos, lóbulos que giran.' },
+  Testing:      { label:'PROBANDO',         color:[0,200,255],   detail:'cargo test', src:'Bash con test / pytest / vitest',
+                  what:'Cada marca de la escala es una prueba: se pintan en verde al pasar y en rojo la que falla.' },
+  Git:          { label:'GIT',              color:[255,150,80],  detail:'git commit', src:'Bash con git',
+                  what:'Crece un grafo de commits sobre el cuerpo: tronco, rama y nodos que aparecen con un pop.' },
+  Web:          { label:'EN LA RED',        color:[255,120,170], detail:'WebSearch', src:'WebFetch · WebSearch',
+                  what:'Lanza paquetes hacia la escala y los recibe de vuelta; la marca donde rebotan se enciende.' },
+  Delegating:   { label:'DELEGANDO',        color:[170,150,255], detail:'Agent · Explore', src:'Agent (subagentes)',
+                  what:'Se le desprende un brote que se aleja y vuelve, como una célula que se divide.' },
+  Speaking:     { label:'RESPONDIENDO',     color:[160,235,255], detail:'', src:'texto en streaming',
+                  what:'Late, suelta ondas hacia el anillo y mira hacia el chat; las motas salen hacia afuera.' },
+  Asking:       { label:'ESPERANDO RESPUESTA', color:[255,170,40], detail:'elige con ↑↓ y enter', src:'AskUserQuestion',
+                  what:'Flota arriba y abajo mirando las opciones; parpadean las marcas cardinales.' },
+  Compacting:   { label:'COMPACTANDO',      color:[150,170,255], detail:'/compact', src:'/compact o auto-compact',
+                  what:'Dos prensas lo aplastan rítmicamente, las motas se comprimen hacia dentro y el líquido del contexto baja.' },
+  Offline:      { label:'DESCONECTADO',     color:[90,110,125],  detail:'', src:'el motor murió',
+                  what:'Desinflado, contorno punteado, ojo cerrado, sin arcos.' },
+};
+const EVENTS = {
+  key:   { label:'tecla', src:'cada tecla en la entrada', what:'Respingo y una onda corta.' },
+  error: { label:'error', src:'herramienta termina en ✗', what:'Destello rojo, sacudida y púas durante un segundo.' },
+  done:  { label:'listo', src:'fin de turno (result)', what:'Rebote y un anillo verde que se expande hasta la escala.' },
+  cancel:{ label:'cancelado', src:'esc durante un turno', what:'Se desinfla de golpe («pfff») y se recupera.' },
+  nope:  { label:'alucinación', src:'whisper devolvió «¡Gracias!» y se descartó', what:'Niega con la mirada: izquierda-derecha.' },
+  merge: { label:'vuelve subagente', src:'termina un Agent', what:'Una gota llega desde la escala y se funde con un pop.' },
+  copy:  { label:'copiado', src:'/copy o selección', what:'Destello rápido de toda la escala y un guiño.' },
+};
+const ORDER = Object.keys(STATES);
+
+const Z = { blobR:.40, amp:.035, wob:.35, chaos:.1, arcSpeed:.25, arcs:1, arcLen:1, ripple:0, orbit:0, sweep:0, fill:0, vu:0,
+            cardinal:0, dashed:0, scan:0, stitch:0, packets:0, bud:0, zzz:0, pupil:1, bob:0, motes:1,
+            boot:0, lens:0, plan:0, tests:0, git:0, press:0, droop:0 };
+const T = (o) => ({ ...Z, ...o });
+const TARGET = {
+  Booting:      T({ boot:1, arcSpeed:.5 }),
+  NoVoice:      T({ amp:.025, wob:.3, arcSpeed:.15, arcLen:.6, droop:1 }),
+  Searching:    T({ amp:.03, wob:.5, arcSpeed:.8, lens:1 }),
+  Planning:     T({ amp:.04, wob:.5, arcSpeed:.5, plan:1 }),
+  Testing:      T({ amp:.04, wob:1, arcSpeed:1.4, arcLen:.6, tests:1 }),
+  Git:          T({ blobR:.34, amp:.04, wob:.6, arcSpeed:.6, git:1 }),
+  Compacting:   T({ blobR:.36, amp:.03, wob:.6, arcSpeed:1.6, arcLen:.5, press:1 }),
+  Sleeping:     T({ blobR:.34, amp:.02, wob:.12, arcs:0, pupil:0, zzz:1, motes:.3 }),
+  Idle:         T({}),
+  Typing:       T({ amp:.04, wob:.5, arcSpeed:.4 }),
+  Listening:    T({ amp:.05, wob:.8, chaos:.5, arcSpeed:.6, arcLen:.8, vu:1 }),
+  Transcribing: T({ blobR:.32, amp:.05, wob:3, chaos:.9, arcSpeed:2.2, arcLen:.6, fill:1 }),
+  Thinking:     T({ amp:.10, wob:.7, chaos:.3, arcSpeed:1.1, orbit:1 }),
+  Reading:      T({ amp:.03, wob:.4, arcSpeed:.7, scan:1 }),
+  Editing:      T({ amp:.05, wob:.9, arcSpeed:1.2, arcLen:.7, stitch:1 }),
+  Running:      T({ blobR:.38, amp:.08, wob:2, chaos:.4, arcSpeed:2.4, arcLen:.7, sweep:1 }),
+  Web:          T({ blobR:.36, amp:.05, wob:1, arcSpeed:.8, packets:1 }),
+  Delegating:   T({ blobR:.36, amp:.06, wob:.8, arcSpeed:.9, bud:1 }),
+  Speaking:     T({ amp:.05, wob:1, chaos:.2, arcSpeed:.9, ripple:1 }),
+  Asking:       T({ blobR:.38, amp:.03, wob:.3, arcSpeed:.12, cardinal:1, bob:1 }),
+  Offline:      T({ blobR:.30, amp:.015, wob:0, chaos:0, arcSpeed:0, arcs:0, dashed:1, pupil:0, motes:0 }),
+};
+
+// Guion del modo automático: una sesión real. [estado, segundos, qué pasa, evento]
+const SCRIPT = [
+  ['Booting', 3.2, 'abres JARVIS'],
+  ['Idle', 2.2, ''],
+  ['Sleeping', 3.6, 'lleva rato sin uso'],
+  ['Idle', 1.8, 'tocaste una tecla y despierta'],
+  ['Typing', 3.0, 'escribes «arregla el núcleo»', 'keys'],
+  ['Thinking', 2.2, 'piensa'],
+  ['Planning', 4.0, 'arma la lista de tareas'],
+  ['Searching', 3.2, 'busca draw_core'],
+  ['Reading', 3.0, 'lee src/ui.rs'],
+  ['Editing', 3.0, 'edita src/ui.rs'],
+  ['Testing', 3.4, 'cargo test… una falla', 'error'],
+  ['Editing', 2.0, 'corrige'],
+  ['Running', 2.2, 'cargo build'],
+  ['Git', 3.4, 'hace el commit'],
+  ['Web', 3.0, 'busca en la web'],
+  ['Delegating', 3.6, 'lanza un subagente… y vuelve', 'merge'],
+  ['Speaking', 3.4, 'responde… y termina', 'done'],
+  ['Listening', 2.6, 'le hablas'],
+  ['NoVoice', 2.8, 'te quedas callado'],
+  ['Listening', 2.2, 'vuelves a hablar… era ruido', 'nope'],
+  ['Transcribing', 1.6, 'whisper transcribe'],
+  ['Thinking', 1.6, '', 'cancel'],
+  ['Asking', 3.0, 'te pregunta algo'],
+  ['Speaking', 2.4, 'responde', 'done'],
+  ['Compacting', 3.4, 'el contexto se llenó: compacta'],
+  ['Idle', 2.4, '', 'copy'],
+  ['Offline', 2.6, 'el motor se cae'],
+];
+
+// ── Estado de la simulación ─────────────────────────────────────────────
+let state = 'Booting', auto = true, autoT0 = performance.now(), stateT0 = performance.now(), stepIdx = -1;
+let P = { ...TARGET.Booting }, col = [...STATES.Booting.color];
+let phase = 0, arcPhase = 0, last = performance.now();
+let level = 0, levelSmooth = 0;
+let gaze = [0,0], gazeT = [0,0], nextSaccade = 0;
+let sq = 0, sqV = 0;               // aplastamiento elástico (resorte)
+let shake = 0, redFlash = 0;       // error
+let blooms = [], keyRipples = [];  // listo · tecla (tiempos de inicio)
+let nextKey = 0;
+let deflate = 0, nope = 0, copyFlash = 0, merges = [];  // cancelado · alucinación · copiado · vuelve subagente
+let ctxLevel = .15, queue = 0, ctxManual = false;       // contexto usado (0..1) · mensajes en cola
+const motes = Array.from({length:16}, (_,k) => ({ a: k*TAU/16 + Math.random(), r: .5 + Math.random()*.35, s: (Math.random()-.5) }));
+
+function kick(v) { sqV += v; }
+function fire(ev, t) {
+  if (ev === 'key')   { keyRipples.push(t); kick(1.2); }
+  if (ev === 'error') { redFlash = 1; shake = 1; kick(-2.5); }
+  if (ev === 'done')  { blooms.push(t); kick(3.2); }
+  if (ev === 'cancel'){ deflate = 1; kick(-3); }
+  if (ev === 'nope')  { nope = 1; }
+  if (ev === 'copy')  { copyFlash = 1; kick(.8); }
+  if (ev === 'merge') { merges.push({ t0:t, a: Math.random()*TAU }); }
+}
+
+// ── Micrófono ───────────────────────────────────────────────────────────
+let analyser = null, abuf = null;
+document.getElementById('realmic').onchange = async e => {
+  if (!e.target.checked) { analyser = null; return; }
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio:true });
+    const ac = new AudioContext(); analyser = ac.createAnalyser(); analyser.fftSize = 1024;
+    ac.createMediaStreamSource(s).connect(analyser); abuf = new Float32Array(analyser.fftSize);
+  } catch (err) { e.target.checked = false; alert('Sin acceso al micrófono: ' + err.message); }
+};
+function micLevel(t) {
+  if (analyser) { analyser.getFloatTimeDomainData(abuf); let s=0; for (const v of abuf) s+=v*v; return Math.min(1, Math.sqrt(s/abuf.length)*6); }
+  const syl = Math.max(0, Math.sin(t*9)) * Math.max(0, Math.sin(t*2.3+1));
+  return Math.min(1, syl*(Math.sin(t*.9) > -.4 ? 1 : .1)*1.1 + .04*Math.random());
+}
+
+// ── Rejilla braille: un color por celda ─────────────────────────────────
+// Cada punto trae (tono, tinta). La celda se queda con el de mayor tono: igual que en la terminal,
+// donde un carácter braille tiene un solo color de primer plano.
+class Grid {
+  constructor(cw, ch) { this.cw=cw; this.ch=ch; this.dw=cw*2; this.dh=ch*4; this.asp=this.dw/this.dh;
+    this.dot=new Uint8Array(this.dw*this.dh); this.tone=new Uint8Array(cw*ch); this.ink=new Uint8Array(cw*ch); }
+  clear() { this.dot.fill(0); this.tone.fill(0); this.ink.fill(0); }
+  plot(x, y, tone, ink=0) {
+    const i = Math.round((x/this.asp+1)/2*(this.dw-1)), j = Math.round((1-(y+1)/2)*(this.dh-1));
+    if (i<0||j<0||i>=this.dw||j>=this.dh) return;
+    this.dot[j*this.dw+i] = 1;
+    const c = (j>>2)*this.cw + (i>>1);
+    if (tone > this.tone[c] || (tone === this.tone[c] && ink > this.ink[c])) { this.tone[c] = tone; this.ink[c] = ink; }
+  }
+  center(i, j) { return [((i/(this.dw-1))*2-1)*this.asp, 1-(j/(this.dh-1))*2]; }
+}
+const INK_MAIN = 0, INK_GREEN = 1, INK_RED = 2, INK_WARM = 3;
+const easeOutBack = u => 1 + 2.7*Math.pow(u-1,3) + 1.7*Math.pow(u-1,2);
+
+// ── Dibujo ──────────────────────────────────────────────────────────────
+function paint(g, t) {
+  const p = P, lv = levelSmooth, st = (performance.now() - stateT0)/1000;
+  const errInk = redFlash > .35 ? INK_RED : INK_MAIN;
+
+  // Centro del cuerpo: deriva suave + flotar (preguntando) + sacudida (error).
+  const cx = .025*Math.sin(t*.37) + .015*Math.sin(t*.91+1) + shake*.05*Math.sin(t*48);
+  const cy = .02*Math.sin(t*.29+2) + p.bob*.05*Math.sin(t*2.2) - p.droop*.08;
+  const boot = p.boot > .01 ? Math.min(1, st/2.4) : 1;           // avance del arranque
+  const grow = p.boot > .01 ? easeOutBack(Math.min(1, st/2.0)) : 1;
+  const polar = (r,a,tone,ink) => g.plot(cx + r*Math.cos(a), cy + r*Math.sin(a), tone, ink); // pegado al cuerpo
+  const ring  = (r,a,tone,ink) => g.plot(r*Math.cos(a), r*Math.sin(a), tone, ink);           // pegado al marco
+
+  // Escala: 24 marcas.
+  for (let k=0;k<24;k++) {
+    const a = Math.PI/2 - k*TAU/24;
+    let tone = 1, ink = errInk;
+    if (p.vu > .01 && k/24 < lv*1.15*p.vu) tone = 3;
+    if (p.fill > .01 && k/24 <= ((st*.35) % 1)*p.fill) tone = 3;
+    if (p.sweep > .01) { const d = (((a + arcPhase*1.3) % TAU) + TAU) % TAU; if (d < .7*p.sweep) tone = d < .25 ? 3 : 2; }
+    if (p.cardinal > .01 && k%6===0 && Math.sin(t*4) > 0) tone = 3;
+    for (const b of blooms) { const u = (t-b)/1.1; if (u > .45 && u < 1 && Math.abs(((k/24 - (u-.45)*1.8) % 1)) < .08) { tone = 3; ink = INK_GREEN; } }
+    if (p.plan > .5 && k%4===0) {               // 6 tareas
+      const task = k/4, done = Math.floor(st*.9) % 7;
+      if (task < done) tone = 3; else if (task === done) tone = Math.sin(t*8) > 0 ? 3 : 1;
+      ring(.82, a, tone); ring(.78, a, tone);
+    }
+    if (p.tests > .5) {                         // 24 pruebas; la 17 falla
+      const ran = Math.min(24, Math.floor(st*9));
+      if (k < ran) { tone = 3; ink = k === 17 ? INK_RED : INK_GREEN; }
+    }
+    if (copyFlash > .5) tone = 3;
+    if (redFlash > .35) tone = Math.max(tone, 2);
+    if (k/24 > boot*1.05) continue;
+    ring(.94, a, tone, ink); ring(.90, a, tone, ink); if (k%6===0) ring(.86, a, tone, ink);
+  }
+
+  // Arcos.
+  if (p.arcs*boot > .05) {
+    const n1 = Math.round(60*p.arcLen*p.arcs*Math.max(0, boot*1.4-.4));
+    for (let k=0;k<3;k++) for (let q=0;q<n1;q++) ring(.80, arcPhase + k*TAU/3 + (TAU/5)*p.arcLen*q/Math.max(1,n1), 2, errInk);
+    const n2 = Math.round(14*p.arcs);
+    for (let k=0;k<6;k++) for (let q=0;q<n2;q++) ring(.70, -arcPhase*1.6 + k*TAU/6 + (TAU/16)*q/14, 1, errInk);
+  }
+
+  // Motas de la corona.
+  if (p.motes > .05) for (const m of motes.slice(0, Math.round(16*p.motes*boot))) ring(m.r * (1 - p.press*.25*(1+Math.sin(t*5))), m.a, 1);
+
+  // Mensajes en cola: satélites sólidos que esperan su turno.
+  for (let k=0;k<queue;k++) { const a = Math.PI/2 + t*.4 + k*.5, r = .6;
+    polar(r, a, 3); polar(r+.03, a, 3); polar(r, a+.06, 3); polar(r+.03, a+.06, 3); }
+
+  // Prensas (compactando).
+  if (p.press > .01) { const gap = p.blobR + .08 + .1*(.5+.5*Math.cos(t*5));
+    for (let x=-.35; x<=.35; x+=.03) { g.plot(cx+x, cy+gap*p.press + (1-p.press)*.8, 3); g.plot(cx+x, cy-gap*p.press - (1-p.press)*.8, 3); } }
+
+  // Grafo de git: tronco que sube, una rama, nodos que aparecen.
+  if (p.git > .01) { const gx = cx + .1, base = cy + p.blobR + .02, grow2 = Math.min(1, st/2.2);
+    for (let y=0; y < .42*grow2; y+=.03) g.plot(gx, base + y, 2);
+    for (let u=0; u < Math.max(0, grow2-.35)/.65; u+=.04) g.plot(gx - u*.22, base + .12 + u*.22, 2);
+    const nodes = [[gx, base+.10, .2], [gx, base+.26, .5], [gx-.22, base+.34, .8], [gx, base+.40, .95]];
+    for (const [nx, ny, at] of nodes) if (grow2 > at) { const pop = Math.min(1, (grow2-at)*8);
+      const rr = .035 + .02*Math.max(0, 1-pop)*3; for (let q=0;q<10;q++) g.plot(nx + rr*Math.cos(q*TAU/10), ny + rr*Math.sin(q*TAU/10), 3); } }
+
+  // «?» (no te oigo).
+  if (p.droop > .5) { const qx = cx + .32, qy = cy + p.blobR + .12 + .02*Math.sin(t*3);
+    const Q = [[0,4],[1,5],[2,5],[3,4],[3,3],[2,2],[1,1],[1,0],[1,-2]];
+    for (const [a2,b2] of Q) g.plot(qx + a2*.025 - .04, qy + b2*.03, 3); }
+
+  // Vuelve el subagente: una gota viaja desde la escala y se funde.
+  for (const m of merges) { const u = (t - m.t0)/.7; if (u < 0 || u > 1) continue;
+    const r = .86 - u*(.86 - p.blobR), rr = .07*(1-u*.5);
+    const bx = cx + r*Math.cos(m.a), by = cy + r*Math.sin(m.a);
+    for (let q=0;q<14;q++) g.plot(bx + rr*Math.cos(q*TAU/14), by + rr*Math.sin(q*TAU/14), 3); }
+
+  // Ondas de voz.
+  if (p.ripple > .01) for (let w=0; w<2; w++) {
+    const u = ((t*.55 + w/2) % 1), r = p.blobR + .1 + u*(.62 - p.blobR); if (u > .9) continue;
+    const n = Math.round(40 + u*30); for (let q=0;q<n;q++) polar(r, q*TAU/n + w*.2, u < .4 ? 2 : 1);
+  }
+  // Ondas de tecla: cortas y rápidas.
+  for (const k0 of keyRipples) { const u = (t-k0)/.45; if (u<0||u>1) continue;
+    const r = p.blobR + .05 + u*.16; for (let q=0;q<36;q++) polar(r, q*TAU/36, u<.5?2:1); }
+  // Listo: anillo verde que se expande.
+  for (const b of blooms) { const u = (t-b)/1.1; if (u<0||u>.75) continue;
+    const r = p.blobR + .04 + u*.62; const n = 50 + Math.round(u*40);
+    for (let q=0;q<n;q++) polar(r, q*TAU/n, u<.45?3:2, INK_GREEN); }
+
+  // Radar (ejecutando).
+  if (p.sweep > .01) { const a0 = -arcPhase*1.3;
+    for (let s2=0; s2<10; s2++) { const a = a0 + s2*.06; for (let r=p.blobR+.14; r<.78; r+=.035) ring(r, a, s2<2?3:s2<5?2:1); } }
+
+  // Ideas en órbita (pensando).
+  if (p.orbit > .01) for (let k=0;k<3;k++) {
+    const base = phase*(1.1 + k*.25) + k*TAU/3;
+    const rr = p.blobR + p.amp + .12 + k*.06 + .03*Math.sin(t*1.7 + k*2), r = p.blobR + (rr - p.blobR)*p.orbit;
+    for (let s2=0; s2<7; s2++) { const a = base - s2*.11; polar(r, a, s2<2?3:2); if (s2<2) { polar(r+.035,a,3); polar(r-.035,a,3); } }
+  }
+
+  // Paquetes (en la red): salen al anillo y vuelven; donde rebotan se enciende la escala.
+  if (p.packets > .01) for (let k=0;k<4;k++) {
+    const trip = t*.8 + k/4, n = Math.floor(trip), u = trip - n;
+    const h = Math.sin((n*4+k)*12.9898)*43758.5453, a = (h - Math.floor(h)) * TAU;
+    const out = u < .5 ? u*2 : 2 - u*2, r = p.blobR + .06 + out*(.84 - p.blobR)*p.packets;
+    for (let s2=0;s2<4;s2++) { const rs = r - (u<.5?1:-1)*s2*.04; if (rs > p.blobR) polar(rs, a, s2===0?3:s2<2?2:1); }
+    if (Math.abs(u-.5) < .08) { ring(.94, a, 3); ring(.90, a, 3); }
+  }
+
+  // Piezas (editando): entran desde la escala hacia el contorno.
+  if (p.stitch > .01) for (let k=0;k<3;k++) {
+    const u = ((t*.9 + k/3) % 1), a = k*2.4 + Math.floor(t*.9 + k/3)*1.7, r = .84 - u*(.84 - p.blobR - .06);
+    polar(r, a, 3); polar(r + .04, a, 2);
+  }
+
+  // Brote (delegando): se separa, se aleja y vuelve.
+  let bud = null;
+  if (p.bud > .01) {
+    const a = phase*.9, out = .5 + .5*Math.sin(t*1.1 - Math.PI/2);
+    const d = p.blobR + (.05 + out*.26)*p.bud;
+    bud = [cx + d*Math.cos(a), cy + d*Math.sin(a), .10 + .02*Math.sin(t*3)];
+    if (out > .35) for (let q=0;q<6;q++) { const rr = p.blobR + (q/6)*(d - p.blobR); if (q%2===0) polar(rr, a, 1); }
+  }
+
+  // Zetas (en reposo).
+  if (p.zzz > .01) for (let k=0;k<3;k++) {
+    const u = ((t*.22 + k/3) % 1), s = .03 + u*.04;
+    const zx = cx + p.blobR*.6 + u*.32, zy = cy + p.blobR*.5 + u*.38;
+    const tone = u < .5 ? 2 : 1;
+    for (let q=-1;q<=1;q++) { g.plot(zx + q*s, zy + s, tone); g.plot(zx + q*s, zy - s, tone); }
+    g.plot(zx, zy, tone);
+  }
+
+  // Cuerpo: radio por ángulo, con aplastamiento elástico y respiración.
+  const breath = p.zzz * .03*Math.sin(t*1.25) + (1-p.zzz) * .012*Math.sin(t*1.2);
+  const beat = p.ripple * .045*Math.abs(Math.sin(t*5));
+  const voice = p.vu * lv * .22;
+  const R = th => (p.blobR*grow*(1 - .35*deflate)) + breath + beat + voice*(.6 + .4*Math.sin(5*th + t*7)) + p.amp*(
+      .60*Math.sin(3*th + phase) + .40*Math.sin(5*th - phase*1.6 + 1) + .30*(p.chaos + redFlash*2)*Math.sin(7*th + phase*2.7 + 2))
+      + redFlash*.09*Math.max(0, Math.sin(11*th + t*20));
+  const sx = 1 + sq, sy = 1 - sq;
+  const cursor = t*2.6;
+  const scanY = cy + (p.blobR*.8) * Math.cos(st*1.6);
+  const pr = .085 * p.pupil;
+  const blink = ((state==='Idle' || state==='Typing') && (t % 4.3) < .12) || copyFlash > .3;
+  const px = cx + gaze[0], py = cy + gaze[1];
+  // Lupa (buscando): recorre el cuerpo en una curva de Lissajous.
+  const lx = cx + p.blobR*.55*Math.sin(st*1.3), ly = cy + p.blobR*.45*Math.sin(st*2.1 + 1), lr = .15;
+  // Líquido del contexto: nivel con oleaje; se calienta pasado el 80%.
+  const surf = x => cy - p.blobR + 2*p.blobR*ctxLevel + .02*Math.sin(x*14 + t*3);
+  if (p.lens > .01) { for (let q=0;q<40;q++) g.plot(lx + lr*Math.cos(q*TAU/40), ly + lr*Math.sin(q*TAU/40), 3);
+    for (let q=0;q<5;q++) g.plot(lx + (lr + q*.025)*.7, ly - (lr + q*.025)*.7, 3); }
+
+  for (let j=0;j<g.dh;j++) for (let i=0;i<g.dw;i++) {
+    const [x,y] = g.center(i,j);
+    const dx = (x-cx)/sx, dy = (y-cy)/sy, r = Math.hypot(dx,dy);
+    let inBud = false;
+    if (bud) { const e = bud[2] - Math.hypot(x-bud[0], y-bud[1]);
+      if (e >= 0 && e < .05) { g.plot(x,y,3,errInk); continue; } if (e >= .05) inBud = true; }
+    if (r > .8 && !inBud) continue;
+    const th = Math.atan2(dy,dx), d = R(th) - r;
+    if (d >= 0 && d < .065) {
+      if (p.dashed && Math.sin(th*18) <= 0) continue;
+      let tone = 3;
+      if (p.stitch > .5) { const da = Math.abs(((th - cursor) % TAU + TAU*1.5) % TAU - Math.PI); tone = da < .5 ? 3 : 2; }
+      g.plot(x,y,tone,errInk);
+    } else if ((d > .1 || inBud) && !p.dashed) {
+      if (p.lens > .5 && Math.hypot(x-lx, y-ly) < lr) { if ((i+j)%2===0) g.plot(x,y,3); continue; }
+      if (pr > .01 && Math.hypot(x-px, y-py) < pr * (p.lens > .5 ? 1.5 : 1)) { if (!blink || Math.abs(y-py) < .02) g.plot(x,y,3,errInk); continue; }
+      if (p.scan > .01 && Math.abs(y - scanY) < .025 && d > .08) { g.plot(x,y,3); continue; }
+      if (y < surf(x)) { if ((i + j) % 2 === 0) g.plot(x,y, 2, ctxLevel > .8 ? INK_WARM : errInk); continue; }
+      if ((i + j*2) % 3 === 0 && j % 2 === 0) g.plot(x,y, 2, errInk);
+    }
+  }
+}
+
+// ── Render ──────────────────────────────────────────────────────────────
+function makeView(id, cw, ch, px) {
+  const c = document.getElementById(id), g = new Grid(cw, ch);
+  c.width = g.dw*px; c.height = g.dh*px; c.style.width = c.width+'px'; c.style.height = c.height+'px';
+  return { g, ctx: c.getContext('2d', { willReadFrequently:true }), px };
+}
+const big = makeView('big', 36, 15, 9), small = makeView('small', 36, 15, 3.4);
+const mix = (a,b,f) => a.map((v,i) => Math.round(v*(1-f) + b[i]*f));
+function palette(base) {
+  const m = c => ({ 3:`rgb(${c})`, 2:`rgb(${mix(c,DIM,.38)})`, 1:`rgb(${DIM})` });
+  return [m(base), m(GREEN), m(RED), m([255,170,40])];
+}
+function render(v, t) {
+  const { g, ctx, px } = v; g.clear(); paint(g, t);
+  ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+  const pal = palette(col.map(Math.round));
+  for (let j=0;j<g.dh;j++) for (let i=0;i<g.dw;i++) {
+    if (!g.dot[j*g.dw+i]) continue;
+    const c = (j>>2)*g.cw + (i>>1);
+    ctx.fillStyle = pal[g.ink[c]][g.tone[c]];
+    ctx.beginPath(); ctx.arc(i*px+px/2, j*px+px/2, px*.36, 0, TAU); ctx.fill();
+  }
+}
+
+// ── Mirada ──────────────────────────────────────────────────────────────
+function gazeTarget(t, st) {
+  const lim = P.blobR * .42;
+  switch (state) {
+    case 'Idle': if (t > nextSaccade) { const a = Math.random()*TAU, r = Math.random()*lim; gazeT = [r*Math.cos(a), r*Math.sin(a)*.8]; nextSaccade = t + 1.2 + Math.random()*2.5; } return gazeT;
+    case 'Typing':     return [-lim*.6, -lim*.8];
+    case 'Listening':  return [0, -lim*.7];
+    case 'Transcribing': return [.02*Math.sin(t*30), .02*Math.cos(t*27)];
+    case 'Thinking':   return [lim*.5*Math.sin(t*.7), lim*.75];
+    case 'Reading': { const line = st*.9, u = line % 1; return [-lim*.8 + u*lim*1.6, lim*.6 - (Math.floor(line)%4)*lim*.4]; }
+    case 'Editing':    return [lim*.6*Math.cos(t*2.6), lim*.6*Math.sin(t*2.6)];
+    case 'Running':    return [0, -lim*.75];
+    case 'Web':        return [lim*.7*Math.cos(t*.8), lim*.7*Math.sin(t*.8)];
+    case 'Delegating': { const a = phase*.9; return [lim*.8*Math.cos(a), lim*.8*Math.sin(a)]; }
+    case 'Speaking':   return [-lim*.8, 0];
+    case 'Booting':    return [0, 0];
+    case 'NoVoice':    return [lim*.9*Math.sign(Math.sin(t*1.4)), -lim*.2];
+    case 'Searching':  return [lim*.55*Math.sin(st*1.3)/.42*.42, lim*.45*Math.sin(st*2.1+1)];
+    case 'Planning': { const a = Math.PI/2 - (Math.floor(st*.9)%7)*TAU/6; return [lim*.9*Math.cos(a), lim*.9*Math.sin(a)]; }
+    case 'Testing':  { const a = Math.PI/2 - Math.min(24, st*9)*TAU/24; return [lim*.8*Math.cos(a), lim*.8*Math.sin(a)]; }
+    case 'Git':        return [lim*.3, lim*.9];
+    case 'Compacting': return [0, 0];
+    case 'Asking':     return [-lim*.4, -lim*.8];
+    default:           return [0,0];
+  }
+}
+
+// ── UI ──────────────────────────────────────────────────────────────────
+const barS = document.getElementById('bar-states'), barE = document.getElementById('bar-events'), btns = {};
+for (const id of ORDER) { const b = document.createElement('button'); b.textContent = STATES[id].label;
+  b.onclick = () => { auto = false; setState(id); }; barS.appendChild(b); btns[id] = b; }
+for (const [id, e] of Object.entries(EVENTS)) { const b = document.createElement('button'); b.className='ev'; b.textContent = '⚡ ' + e.label;
+  b.onclick = () => fire(id, performance.now()/1000); barE.appendChild(b); }
+const ab = document.createElement('button'); ab.className = 'auto'; ab.textContent = '▶ automático';
+ab.onclick = () => { auto = true; autoT0 = performance.now(); stepIdx = -1; }; barE.appendChild(ab);
+document.getElementById('legend').innerHTML =
+  `<tr class="sep"><td>estado</td><td>qué hace</td><td>cuándo, en JARVIS</td></tr>` +
+  ORDER.map(id => `<tr><td style="color:rgb(${STATES[id].color})">${STATES[id].label}</td><td>${STATES[id].what}</td><td class="src">${STATES[id].src}</td></tr>`).join('') +
+  `<tr class="sep"><td>evento</td><td></td><td></td></tr>` +
+  Object.values(EVENTS).map(e => `<tr><td>⚡ ${e.label}</td><td>${e.what}</td><td class="src">${e.src}</td></tr>`).join('');
+
+function setState(id) { if (id !== state) { state = id; stateT0 = performance.now(); kick(id==='Offline' ? -1.5 : 1.6); } }
+function paintButtons() {
+  for (const id of ORDER) { const on = id===state; btns[id].classList.toggle('on', on); btns[id].style.background = on ? `rgb(${STATES[id].color})` : 'transparent'; }
+  ab.classList.toggle('on', auto); ab.style.background = auto ? '#00c8ff' : 'transparent';
+}
+
+const total = SCRIPT.reduce((s, x) => s + x[1], 0);
+let firedEnd = false;
+function runScript(now, t) {
+  let el = ((now - autoT0)/1000) % total, k = 0;
+  while (el > SCRIPT[k][1]) { el -= SCRIPT[k][1]; k++; }
+  const [id, dur, , ev] = SCRIPT[k];
+  if (k !== stepIdx) { stepIdx = k; firedEnd = false; setState(id); nextKey = t + .2; }
+  if (ev === 'keys' && t > nextKey) { fire('key', t); nextKey = t + .12 + Math.random()*.25; }
+  if (ev && ev !== 'keys' && !firedEnd && el > dur*.72) { firedEnd = true; fire(ev, t); }
+  document.getElementById('script').innerHTML =
+    SCRIPT.map((s, i) => i === k ? `<b>▸ ${STATES[s[0]].label.toLowerCase()}${s[2] ? ' — ' + s[2] : ''}</b>` : STATES[s[0]].label.toLowerCase()).join(' · ');
+}
+
+document.getElementById('ctx').oninput = e => { ctxManual = true; ctxLevel = e.target.value/100; };
+document.getElementById('q').oninput = e => { ctxManual = true; queue = +e.target.value; };
+const errBox = document.createElement('pre'); errBox.style.cssText = 'color:#ff5a5a;padding:0 28px'; document.body.prepend(errBox);
+function tick() {
+  const now = performance.now(), t = now/1000, dt = Math.min(.1, (now-last)/1000); last = now;
+  if (auto) runScript(now, t); else document.getElementById('script').textContent = 'modo manual · elige un estado o dispara un evento';
+  paintButtons();
+  const st = (now - stateT0)/1000;
+
+  // Parámetros y color hacia el objetivo (~0.35 s); el error tiñe de rojo de inmediato.
+  const k = 1 - Math.exp(-dt/0.35), TG = TARGET[state];
+  for (const key in TG) P[key] += (TG[key] - P[key]) * k;
+  const target = redFlash > .05 ? mix(STATES[state].color, RED, Math.min(1, redFlash*1.4)) : STATES[state].color;
+  col = col.map((v,i) => v + (target[i] - v) * (redFlash > .05 ? .5 : k));
+
+  // Resorte del aplastamiento (rebota y se asienta).
+  sqV += (-140*sq - 9*sqV) * dt; sq += sqV * dt * .06; sq = Math.max(-.18, Math.min(.18, sq));
+  redFlash = Math.max(0, redFlash - dt*1.1); shake = Math.max(0, shake - dt*1.6);
+  deflate = Math.max(0, deflate - dt*1.4); nope = Math.max(0, nope - dt*1.1); copyFlash = Math.max(0, copyFlash - dt*3);
+  merges = merges.filter(m => { if (t - m.t0 > .7 && !m.popped) { m.popped = true; kick(2.4); blooms.push(t); } return t - m.t0 < 1; });
+  if (!ctxManual) {
+    if (state === 'Compacting') ctxLevel += (.12 - ctxLevel)*dt*.9; else if (!['Idle','Sleeping','Offline','Booting'].includes(state)) ctxLevel = Math.min(.95, ctxLevel + dt*.012);
+    queue = (state === 'Thinking' || state === 'Delegating') && auto ? (Math.floor(st) % 3) : 0;
+  }
+  document.getElementById('ctxv').textContent = Math.round(ctxLevel*100) + '%'; document.getElementById('ctx').value = Math.round(ctxLevel*100);
+  document.getElementById('qv').textContent = queue; document.getElementById('q').value = queue;
+  blooms = blooms.filter(b => t - b < 1.2); keyRipples = keyRipples.filter(k0 => t - k0 < .5);
+
+  phase += dt * P.wob; arcPhase += dt * P.arcSpeed;
+  level = state==='Listening' ? micLevel(t) : 0;
+  levelSmooth += (level - levelSmooth) * (level > levelSmooth ? .5 : .12);
+
+  // Mirada: salto rápido hacia el objetivo, como una sacada.
+  const gt0 = gazeTarget(t, st), gt = nope > .01 ? [P.blobR*.4*Math.sin(t*22)*Math.min(1,nope*2), gt0[1]] : gt0; gaze = gaze.map((v,i) => v + (gt[i]-v) * Math.min(1, dt*14));
+
+  // Motas: caen al centro escuchando, salen respondiendo, flotan el resto.
+  for (const m of motes) {
+    if (state === 'Listening') { m.r -= dt*(.18 + levelSmooth*.5); if (m.r < P.blobR + .08) m.r = .86; }
+    else if (state === 'Speaking') { m.r += dt*.22; if (m.r > .86) m.r = P.blobR + .1; }
+    else { m.a += dt*.08*(1 + m.s); m.r += Math.sin(t*.7 + m.a*3)*dt*.02; m.r = Math.max(P.blobR+.12, Math.min(.84, m.r)); }
+  }
+
+  render(big, t); render(small, t);
+  const dots = (['Idle','Offline','Sleeping'].includes(state)) ? '' : ['   ','.  ','.. ','...'][Math.floor(t*3)%4];
+  const lab = document.getElementById('lab'); lab.textContent = STATES[state].label + dots; lab.style.color = `rgb(${col.map(Math.round)})`;
+  document.getElementById('det').textContent = STATES[state].detail;
+}
+if (STATES[location.hash.slice(1)]) { auto = false; state = location.hash.slice(1); P = { ...TARGET[state] }; col = [...STATES[state].color]; }
+setInterval(() => { try { tick(); } catch (e) { errBox.textContent = 'Error: ' + e.stack; } }, 40);
+</script>
+</body>
+</html>

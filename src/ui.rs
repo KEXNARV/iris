@@ -1,10 +1,7 @@
-use std::f64::consts::TAU;
 
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::canvas::{Canvas, Circle, Points};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
@@ -15,49 +12,10 @@ const DIM: Color = Color::Rgb(40, 90, 120);
 const FAINT: Color = Color::Rgb(90, 110, 125);
 const TEXT: Color = Color::Rgb(205, 225, 235);
 const WARM: Color = Color::Rgb(255, 170, 40);
-const MAGENTA: Color = Color::Rgb(200, 110, 255);
 const RED: Color = Color::Rgb(255, 90, 90);
 const GREEN: Color = Color::Rgb(90, 230, 150);
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum State {
-    Idle,
-    Listening,
-    Transcribing,
-    Thinking,
-    Working,
-    Speaking,
-    Asking,
-    Offline,
-}
-
-impl State {
-    fn label(self) -> &'static str {
-        match self {
-            State::Idle => "EN ESPERA",
-            State::Listening => "ESCUCHANDO",
-            State::Transcribing => "TRANSCRIBIENDO",
-            State::Thinking => "PENSANDO",
-            State::Working => "TRABAJANDO",
-            State::Speaking => "RESPONDIENDO",
-            State::Asking => "ESPERANDO RESPUESTA",
-            State::Offline => "DESCONECTADO",
-        }
-    }
-
-    fn color(self) -> Color {
-        match self {
-            State::Idle => ACCENT,
-            State::Listening => WARM,
-            State::Transcribing => MAGENTA,
-            State::Thinking => Color::Rgb(90, 150, 255),
-            State::Working => ACCENT,
-            State::Speaking => Color::Rgb(160, 235, 255),
-            State::Asking => WARM,
-            State::Offline => FAINT,
-        }
-    }
-}
+pub use crate::nucleo::State;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
@@ -66,7 +24,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let [header, body, bottom, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(8),
-        Constraint::Length(if state == State::Listening { 5 } else { 3 }),
+        Constraint::Length(if matches!(state, State::Listening | State::NoVoice) { 5 } else { 3 }),
         Constraint::Length(1),
     ])
     .areas(f.area());
@@ -79,10 +37,10 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let core_h = (side.width / 2 + 3).min(side.height / 2).max(10);
     let [core, act] = Layout::vertical([Constraint::Length(core_h), Constraint::Min(4)]).areas(side);
-    draw_core(f, core, app, state, t);
+    draw_core(f, core, app, t);
     draw_activity(f, act, app, t);
 
-    if state == State::Listening {
+    if matches!(state, State::Listening | State::NoVoice) {
         draw_wave(f, bottom, app, t);
     } else {
         draw_input(f, bottom, app, state, t);
@@ -122,7 +80,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(clock).alignment(Alignment::Right), area);
 }
 
-fn draw_core(f: &mut Frame, area: Rect, app: &App, state: State, t: f64) {
+fn draw_core(f: &mut Frame, area: Rect, app: &App, t: f64) {
     let block = panel("NÚCLEO");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -130,86 +88,39 @@ fn draw_core(f: &mut Frame, area: Rect, app: &App, state: State, t: f64) {
         return;
     }
     let [ring, label] = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).areas(inner);
+    app.nucleo.draw(ring, f.buffer_mut());
 
-    // Celdas ~1:2 y braille 2×4 → puntos casi cuadrados; se corrige el aspecto para que el círculo sea redondo.
-    let aspect = ring.width as f64 / (ring.height as f64 * 2.0);
-    let color = state.color();
-    let level = crate::voice::level_get(&app.level) as f64;
-
-    let (speed, pulse) = match state {
-        State::Idle => (0.25, 0.03 * (t * 1.2).sin()),
-        State::Listening => (0.6, (level * 6.0).min(0.25)),
-        State::Transcribing => (2.2, 0.04 * (t * 6.0).sin()),
-        State::Thinking => (1.4, 0.05 * (t * 3.0).sin()),
-        State::Working => (2.0, 0.04 * (t * 4.0).sin()),
-        State::Speaking => (0.9, 0.06 * (t * 5.0).sin().abs()),
-        State::Asking => (0.15, 0.05 * (t * 2.0).sin()),
-        State::Offline => (0.0, 0.0),
-    };
-    let rot = t * speed;
-
-    let canvas = Canvas::default()
-        .marker(Marker::Braille)
-        .x_bounds([-aspect, aspect])
-        .y_bounds([-1.0, 1.0])
-        .paint(move |ctx| {
-            ctx.draw(&Circle { x: 0.0, y: 0.0, radius: 0.94, color: DIM });
-
-            // Arcos que giran en sentidos opuestos.
-            let arc = |r: f64, start: f64, len: f64, n: usize| -> Vec<(f64, f64)> {
-                (0..n)
-                    .map(|i| {
-                        let a = start + len * i as f64 / n as f64;
-                        (r * a.cos(), r * a.sin())
-                    })
-                    .collect()
-            };
-            for k in 0..3 {
-                let s = rot + k as f64 * TAU / 3.0;
-                ctx.draw(&Points { coords: &arc(0.82, s, TAU / 5.0, 60), color });
-            }
-            for k in 0..6 {
-                let s = -rot * 1.6 + k as f64 * TAU / 6.0;
-                ctx.draw(&Points { coords: &arc(0.66 + pulse, s, TAU / 14.0, 20), color });
-            }
-
-            // Marcas de escala fijas.
-            let ticks: Vec<(f64, f64)> = (0..24)
-                .flat_map(|i| {
-                    let a = i as f64 * TAU / 24.0;
-                    [(0.94 * a.cos(), 0.94 * a.sin()), (0.88 * a.cos(), 0.88 * a.sin())]
-                })
-                .collect();
-            ctx.draw(&Points { coords: &ticks, color: DIM });
-
-            // Núcleo.
-            let core = 0.30 + pulse * 1.5;
-            for i in 0..5 {
-                ctx.draw(&Circle { x: 0.0, y: 0.0, radius: core * (1.0 - i as f64 * 0.2), color });
-            }
-            ctx.draw(&Circle { x: 0.0, y: 0.0, radius: core + 0.1, color: DIM });
-        });
-    f.render_widget(canvas, ring);
-
+    // El rótulo sigue al estado que se ve, no al pedido: así no se adelanta a la animación.
+    let state = app.nucleo.state();
     let detail = match state {
-        State::Working => app
-            .current_tool()
-            .map(|a| format!("{} · {:.0}s", a.name, a.started.elapsed().as_secs_f64()))
-            .unwrap_or_default(),
+        State::Planning if app.todos.0 > 0 => format!("{}/{} tareas", app.todos.1, app.todos.0),
+        s if app.current_tool().is_some() && matches!(s,
+            State::Searching | State::Reading | State::Editing | State::Running | State::Testing
+            | State::Git | State::Web | State::Delegating | State::Planning) =>
+        {
+            let a = app.current_tool().unwrap();
+            let room = (label.width as usize).saturating_sub(a.name.len() + 10);
+            let what = truncate(&a.detail, room);
+            let secs = a.started.elapsed().as_secs_f64();
+            if what.is_empty() { format!("{} · {secs:.0}s", a.name) } else { format!("{} · {what} · {secs:.0}s", a.name) }
+        }
         State::Listening if app.ptt.is_some() => "suelta espacio para enviar · esc cancela".into(),
         State::Listening => "espacio para enviar · esc cancela".into(),
+        State::NoVoice => "no llega tu voz · ¿el micrófono correcto?".into(),
         State::Asking => "elige con ↑↓ y enter".into(),
+        State::Compacting => "resumiendo la conversación".into(),
+        State::Sleeping => "toca una tecla o espacio para hablar".into(),
+        State::Booting | State::Idle if app.voice == VoiceState::Loading => "cargando voz…".into(),
         State::Idle if app.voice == VoiceState::Ready => "mantén o toca espacio para hablar".into(),
-        State::Idle if app.voice == VoiceState::Loading => "cargando voz…".into(),
         _ => String::new(),
     };
-    let dots = if matches!(state, State::Idle | State::Offline) {
+    let dots = if matches!(state, State::Idle | State::Offline | State::Sleeping) {
         ""
     } else {
         ["   ", ".  ", ".. ", "..."][(t * 3.0) as usize % 4]
     };
     let lines = vec![
-        Line::from(Span::styled(format!("{}{dots}", state.label()), Style::new().fg(color).bold())),
+        Line::from(Span::styled(format!("{}{dots}", state.label()), Style::new().fg(app.nucleo.color()).bold())),
         Line::from(Span::styled(detail, Style::new().fg(FAINT))),
     ];
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), label);
@@ -640,8 +551,12 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         _ => format!("voz {}", app.voice_model),
     };
     let up = app.started.elapsed().as_secs();
+    let ctx = match app.ctx_used {
+        0 => String::new(),
+        n => format!("contexto {:.0}% · ", n as f64 * 100.0 / app.ctx_window.max(1) as f64),
+    };
     let stats = format!(
-        "   {voice} · {} turno{} · ${:.2} · {:02}:{:02} ",
+        "   {voice} · {ctx}{} turno{} · ${:.2} · {:02}:{:02} ",
         app.turns,
         if app.turns == 1 { "" } else { "s" },
         app.cost,
