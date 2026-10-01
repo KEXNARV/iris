@@ -1,9 +1,13 @@
 mod ask;
 mod claude;
+mod clip;
 mod commands;
+mod estilo;
+mod md;
 mod nucleo;
 mod select;
 mod sessions;
+mod theme;
 mod ui;
 mod voice;
 
@@ -69,6 +73,8 @@ pub enum Modal {
     Sessions { list: Vec<sessions::Session>, sel: usize },
     Ask(Ask),
     Model { sel: usize },
+    /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
+    Estilo { sel: usize, antes: estilo::Estilo },
 }
 
 pub struct App {
@@ -129,6 +135,15 @@ pub struct App {
     booted: Instant,
     /// `/calma`: menos movimiento en el núcleo.
     pub calm: bool,
+    /// Markdown ya dibujado de cada mensaje, con el largo del texto y el ancho con que se hizo.
+    /// A 60 fps no conviene volver a interpretar toda la conversación en cada cuadro.
+    md_cache: std::cell::RefCell<Vec<Option<(usize, usize, Vec<md::Row>)>>>,
+    /// Imágenes pegadas que se van con el próximo mensaje.
+    pub images: Vec<clip::Image>,
+    /// Cómo se compone la pantalla (`/theme`).
+    pub estilo: estilo::Estilo,
+    /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
+    pub turn_from: usize,
 }
 
 impl App {
@@ -172,6 +187,21 @@ impl App {
             todos: self.todos,
             idle: self.last_activity.elapsed().as_secs_f64(),
             calm: self.calm,
+        }
+    }
+
+    pub fn md_rows(&self, i: usize, text: &str, width: usize) -> Vec<md::Row> {
+        let mut cache = self.md_cache.borrow_mut();
+        if cache.len() <= i {
+            cache.resize_with(i + 1, || None);
+        }
+        match &cache[i] {
+            Some((len, w, rows)) if *len == text.len() && *w == width => rows.clone(),
+            _ => {
+                let rows = md::render(text, width);
+                cache[i] = Some((text.len(), width, rows.clone()));
+                rows
+            }
         }
     }
 
@@ -344,6 +374,10 @@ fn main() -> Result<()> {
         noise_floor: 0.0,
         booted: Instant::now(),
         calm: std::env::var_os("JARVIS_CALM").is_some(),
+        md_cache: Default::default(),
+        images: vec![],
+        estilo: estilo::cargar(),
+        turn_from: 0,
     };
 
     let mut term = ratatui::init();
@@ -358,11 +392,15 @@ fn main() -> Result<()> {
     // Con el mouse en manos de Jarvis, arrastrar copia solo texto del chat; Shift+arrastrar
     // sigue siendo la selección de la terminal.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
+    // primer salto, y una ruta de imagen arrastrada a la terminal se puede adjuntar.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
     if app.key_release {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
     }
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     ratatui::restore();
     res
 }
@@ -376,9 +414,19 @@ fn run(
     rx: &mpsc::Receiver<AppEvent>,
     extra: &[String],
 ) -> Result<()> {
-    let tick = Duration::from_millis(33);
+    // 60 fps: lo que más se mueve es el núcleo.
+    let tick = Duration::from_millis(16);
     let mut frame = Instant::now();
+    let mut theme_check = Instant::now();
+    theme::poll();
     loop {
+        // El tema puede cambiar en cualquier momento (Omarchy, Aether): se mira una vez por segundo.
+        if theme_check.elapsed() >= Duration::from_secs(1) {
+            theme_check = Instant::now();
+            if theme::poll() {
+                app.md_cache.borrow_mut().clear(); // el markdown guardado lleva los colores viejos
+            }
+        }
         // La onda avanza aunque no haya audio, para que se vea viva.
         let lvl = if app.voice == VoiceState::Listening { voice::level_get(&app.level) } else { 0.0 };
         app.levels.remove(0);
@@ -399,6 +447,10 @@ fn run(
             let ev = event::read()?;
             if let Event::Mouse(m) = ev {
                 on_mouse(app, m);
+            }
+            if let Event::Paste(text) = &ev {
+                app.last_activity = Instant::now();
+                pasted(app, text);
             }
             if let Event::Key(k) = ev {
                 let space = k.code == KeyCode::Char(' ');
@@ -422,6 +474,23 @@ fn run(
                             app.nucleo.reboot();
                             app.push(Role::System, "claude reiniciado — sesión nueva");
                         }
+                        Flow::NewChat => {
+                            *claude = None;
+                            app.drop_waiting();
+                            *claude = Some(Claude::spawn(extra, tx.clone())?);
+                            app.alive = true;
+                            app.busy = false;
+                            app.modal = None;
+                            app.messages.clear();
+                            app.md_cache.borrow_mut().clear();
+                            app.activity.clear();
+                            app.ctx_used = 0;
+                            app.todos = (0, 0);
+                            app.booted = Instant::now();
+                            app.nucleo.reboot();
+                            app.push(Role::System, "conversación nueva · la anterior se retoma con /resume");
+                            term.clear()?;
+                        }
                         Flow::Resume(id) => {
                             let mut args = extra.to_vec();
                             args.extend(["--resume".into(), id.clone()]);
@@ -435,6 +504,7 @@ fn run(
                             app.booted = Instant::now();
                             app.nucleo.reboot();
                             app.messages = sessions::history(&id);
+                            app.md_cache.borrow_mut().clear();
                             app.push(Role::System, format!("sesión {} retomada", &id[..8]));
                             term.clear()?;
                         }
@@ -464,6 +534,8 @@ fn run(
 
 enum Flow {
     Go,
+    /// `/clear`: conversación nueva, como en Claude Code. La anterior queda guardada.
+    NewChat,
     Redraw,
     Quit,
     Restart,
@@ -519,6 +591,7 @@ fn handle_key(
         KeyCode::Char('r') if ctrl => return Flow::Restart,
         KeyCode::Char('l') if ctrl => return clear(app),
         KeyCode::Char('u') if ctrl => app.input.clear(),
+        KeyCode::Char('v') if ctrl => paste(app),
 
         // Espacio con la entrada vacía: empezar/terminar de escuchar.
         KeyCode::Char(' ') if app.input.is_empty() && space_repeat(app) => {}
@@ -552,7 +625,11 @@ fn handle_key(
             let (cmd, arg) = text.split_once(' ').unwrap_or((&text, ""));
             match cmd {
                 "/resume" => return resume(app, arg.trim()),
-                "/clear" => return clear(app),
+                "/clear" if app.busy => {
+                    app.push(Role::Error, "espera a que termine el turno (o Esc) antes de empezar otra conversación");
+                    return Flow::Go;
+                }
+                "/clear" => return Flow::NewChat,
                 "/copy" => {
                     copy_last(app);
                     return Flow::Go;
@@ -568,9 +645,17 @@ fn handle_key(
                     app.flash = Some((msg.into(), Instant::now()));
                     return Flow::Go;
                 }
+                "/theme" => {
+                    theme(app, arg.trim());
+                    return Flow::Go;
+                }
                 "/quit" => return Flow::Quit,
                 _ => submit(app, claude, text),
             }
+        }
+        // Con la entrada vacía, retroceso quita la última imagen adjunta.
+        KeyCode::Backspace if app.input.is_empty() && !app.images.is_empty() => {
+            app.images.pop();
         }
         KeyCode::Backspace => {
             app.input.pop();
@@ -703,7 +788,9 @@ fn copied(app: &mut App, text: &str) {
 
 fn clear(app: &mut App) -> Flow {
     app.messages.clear();
+    app.md_cache.borrow_mut().clear();
     app.activity.clear();
+    app.turn_from = 0;
     Flow::Redraw
 }
 
@@ -739,6 +826,28 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
                 _ => {}
             }
             Some(Flow::Go)
+        }
+        Modal::Estilo { sel, antes } => {
+            let n = estilo::TODOS.len();
+            match k.code {
+                KeyCode::Up => *sel = (*sel + n - 1) % n,
+                KeyCode::Down => *sel = (*sel + 1) % n,
+                KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
+                KeyCode::Enter => {
+                    app.modal = None;
+                    set_estilo(app, app.estilo);
+                    return Some(Flow::Redraw);
+                }
+                KeyCode::Esc => {
+                    app.estilo = *antes;
+                    app.modal = None;
+                    return Some(Flow::Redraw);
+                }
+                _ => {}
+            }
+            // Vista previa: la pantalla cambia mientras se elige.
+            app.estilo = estilo::TODOS[*sel].0;
+            Some(Flow::Redraw)
         }
         Modal::Ask(a) => {
             match k.code {
@@ -787,6 +896,31 @@ fn model(app: &mut App, claude: &mut Option<Claude>, arg: &str) {
         }
         Err(e) => app.push(Role::Error, format!("no pude cambiar de modelo: {e}")),
     }
+}
+
+/// `/theme`: sin argumento abre la lista con vista previa; con uno (`cabina`, `cine`…) lo aplica.
+fn theme(app: &mut App, arg: &str) {
+    if arg.is_empty() {
+        let sel = estilo::TODOS.iter().position(|e| e.0 == app.estilo).unwrap_or(0);
+        app.modal = Some(Modal::Estilo { sel, antes: app.estilo });
+        return;
+    }
+    match estilo::Estilo::buscar(arg) {
+        Some(e) => set_estilo(app, e),
+        None => {
+            let ids: Vec<&str> = estilo::TODOS.iter().map(|e| e.1).collect();
+            app.push(Role::Error, format!("no conozco el estilo «{arg}» · hay {}", ids.join(", ")));
+        }
+    }
+}
+
+fn set_estilo(app: &mut App, e: estilo::Estilo) {
+    app.estilo = e;
+    let msg = match estilo::guardar(e) {
+        Ok(()) => format!("estilo {}", e.nombre()),
+        Err(err) => format!("estilo {} (no se guardó: {err})", e.nombre()),
+    };
+    app.flash = Some((msg, Instant::now()));
 }
 
 /// Responde la pregunta en curso (escrita, dictada o elegida) y, si era la última, la envía.
@@ -846,7 +980,7 @@ fn resume(app: &mut App, arg: &str) -> Flow {
 }
 
 fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
-    if text.is_empty() {
+    if text.is_empty() && app.images.is_empty() {
         return;
     }
     let Some(c) = claude.as_mut().filter(|_| app.alive) else {
@@ -857,12 +991,23 @@ fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
     if text.trim() == "/compact" || text.starts_with("/compact ") {
         app.compacting = true;
     }
-    app.push(Role::User, text.clone());
-    match c.send(&text) {
+    let images = std::mem::take(&mut app.images);
+    let shown = match images.len() {
+        0 => text.clone(),
+        n => {
+            let list: Vec<String> = images.iter().enumerate().map(|(i, im)| im.label(i + 1)).collect();
+            let head = format!("▣ {n} imagen{} ({})", if n == 1 { "" } else { "es" }, list.join(", "));
+            if text.is_empty() { head } else { format!("{head}\n{text}") }
+        }
+    };
+    app.push(Role::User, shown);
+    match c.send(&text, &images) {
         Ok(uuid) => {
             // Con el motor libre lo toma al instante; solo a mitad de turno queda esperando.
             if queued {
                 app.messages.last_mut().unwrap().waiting = Some(uuid);
+            } else {
+                app.turn_from = app.activity.len();
             }
             app.busy = true;
             app.thinking = true;
@@ -922,4 +1067,36 @@ fn hear(app: &mut App, lvl: f32) {
     if lvl > (*floor * 1.8).max(*floor + 0.01) {
         app.last_voice = Instant::now();
     }
+}
+
+/// Ctrl+V: una imagen del portapapeles se adjunta; texto, se pega en la entrada.
+fn paste(app: &mut App) {
+    match clip::paste() {
+        Ok(clip::Clip::Image(img)) => attach(app, img),
+        Ok(clip::Clip::Text(t)) => pasted(app, &t),
+        Ok(clip::Clip::Nothing) => app.flash = Some(("el portapapeles está vacío".into(), Instant::now())),
+        Err(e) => app.push(Role::Error, format!("no pude pegar: {e}")),
+    }
+}
+
+/// Texto pegado (o archivos arrastrados a la terminal, que llegan como rutas).
+fn pasted(app: &mut App, text: &str) {
+    if let Some(paths) = clip::paths(text) {
+        for p in paths {
+            match clip::read(&p) {
+                Ok(img) => attach(app, img),
+                Err(e) => app.push(Role::Error, format!("no pude adjuntar {p}: {e}")),
+            }
+        }
+        return;
+    }
+    app.input.push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+    app.menu = 0;
+    app.last_key = Instant::now();
+}
+
+fn attach(app: &mut App, img: clip::Image) {
+    let label = img.label(app.images.len() + 1);
+    app.images.push(img);
+    app.flash = Some((format!("{label} adjunta · se va con el próximo mensaje"), Instant::now()));
 }

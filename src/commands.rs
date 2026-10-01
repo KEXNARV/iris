@@ -14,9 +14,10 @@ const LOCAL: &[(&str, &str)] = &[
     ("resume", "retomar una sesión anterior · /resume N"),
     ("model", "cambiar de modelo · /model sonnet"),
     ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
-    ("clear", "limpiar la conversación en pantalla (^L)"),
+    ("clear", "conversación nueva; la anterior queda en /resume (^L solo limpia la pantalla)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
     ("calma", "menos movimiento en el núcleo (alterna)"),
+    ("theme", "elegir el estilo de la pantalla · /theme cabina"),
     ("quit", "salir de Jarvis (^C)"),
 ];
 

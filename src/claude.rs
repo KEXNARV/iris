@@ -98,12 +98,25 @@ impl Claude {
     }
 
     /// Devuelve el id con que el motor avisará que lo tomó.
-    pub fn send(&mut self, text: &str) -> Result<String> {
+    pub fn send(&mut self, text: &str, images: &[crate::clip::Image]) -> Result<String> {
         let uuid = uuid();
+        // Con imágenes el contenido va en bloques: primero las imágenes, después el texto.
+        let content = if images.is_empty() {
+            json!(text)
+        } else {
+            let mut blocks: Vec<Value> = images
+                .iter()
+                .map(|i| json!({ "type": "image", "source": { "type": "base64", "media_type": i.media, "data": i.data } }))
+                .collect();
+            if !text.is_empty() {
+                blocks.push(json!({ "type": "text", "text": text }));
+            }
+            Value::Array(blocks)
+        };
         self.write(json!({
             "type": "user",
             "uuid": uuid,
-            "message": { "role": "user", "content": text },
+            "message": { "role": "user", "content": content },
         }))?;
         Ok(uuid)
     }

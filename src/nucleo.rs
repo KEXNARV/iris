@@ -75,7 +75,9 @@ pub struct Signals {
     pub calm: bool,
 }
 
-const DIM: [f64; 3] = [40.0, 90.0, 120.0];
+/// Motas de la corona, repartidas en tres capas de profundidad.
+const MOTES: usize = 24;
+
 const GREEN: [f64; 3] = [90.0, 230.0, 150.0];
 const RED: [f64; 3] = [255.0, 90.0, 90.0];
 const WARM: [f64; 3] = [255.0, 170.0, 40.0];
@@ -108,16 +110,26 @@ impl State {
         }
     }
 
-    /// Por familias: presencia en celestes, «tu turno» en ámbar, la mente en azules y
+    /// Por familias: presencia en el acento del tema, «tu turno» en ámbar, la mente en azules y
     /// violetas, las herramientas del verde al rosa. Dentro de cada familia el movimiento
     /// es lo que distingue.
     fn rgb(self) -> [f64; 3] {
+        let c = self.base_rgb();
+        if self.is_presence() { c } else { apart(c, crate::theme::accent_rgb()) }
+    }
+
+    fn is_presence(self) -> bool {
+        matches!(self, State::Booting | State::Idle | State::Sleeping | State::Typing | State::Speaking)
+    }
+
+    fn base_rgb(self) -> [f64; 3] {
         use State::*;
+        use crate::theme::{accent_darker, accent_rgb, accent_toward_white};
         match self {
-            Booting | Idle => [0.0, 200.0, 255.0],
-            Sleeping => [0.0, 115.0, 155.0],
-            Typing => [110.0, 215.0, 255.0],
-            Speaking => [190.0, 240.0, 255.0],
+            Booting | Idle => accent_rgb(),
+            Sleeping => accent_darker(0.43),
+            Typing => accent_toward_white(0.35),
+            Speaking => accent_toward_white(0.7),
             Listening => [255.0, 170.0, 40.0],
             NoVoice => [205.0, 135.0, 70.0],
             Asking => [255.0, 205.0, 60.0],
@@ -316,10 +328,14 @@ enum Gesture {
     Yawn,
 }
 
+#[derive(Clone, Copy)]
 struct Mote {
     a: f64,
     r: f64,
     s: f64,
+    /// Profundidad: 0 al fondo, 1 al frente. Lo cercano brilla más, es más grande, va más
+    /// rápido y se desplaza más con la mirada: eso es lo que da el paralaje.
+    z: f64,
 }
 
 pub struct Core {
@@ -387,7 +403,13 @@ impl Core {
             sig: Signals::default(),
             rng: 0x9E37_79B9_7F4A_7C15,
         };
-        c.motes = (0..16).map(|k| Mote { a: k as f64 * TAU / 16.0 + c.rand(), r: 0.5 + c.rand() * 0.35, s: c.rand() - 0.5 }).collect();
+        c.motes = (0..MOTES)
+            .map(|k| {
+                let z = ((k % 3) as f64 / 2.0 + (c.rand() - 0.5) * 0.2).clamp(0.0, 1.0);
+                let (lo, hi) = mote_band(z, 0.40);
+                Mote { a: k as f64 * TAU / MOTES as f64 + c.rand(), r: lo + c.rand() * (hi - lo), s: c.rand() - 0.5, z }
+            })
+            .collect();
         c
     }
 
@@ -580,21 +602,38 @@ impl Core {
                     m.r = 0.86;
                 }
             } else if shown == State::Listening {
-                m.r -= dt * (0.18 + level * 0.5);
+                m.r -= dt * (0.18 + level * 0.5) * mote_speed(m.z);
                 if m.r < r0 + 0.08 {
-                    m.r = 0.86;
+                    m.r = mote_band(m.z, r0).1;
                 }
             } else if shown == State::Speaking {
-                m.r += dt * 0.22;
-                if m.r > 0.86 {
+                m.r += dt * 0.22 * mote_speed(m.z);
+                if m.r > mote_band(m.z, r0).1 {
                     m.r = r0 + 0.1;
                 }
             } else {
-                m.a += dt * 0.08 * (1.0 + m.s) * calm;
+                let (lo, hi) = mote_band(m.z, r0);
+                m.a += dt * 0.12 * (1.0 + m.s * 0.5) * mote_speed(m.z) * calm;
                 m.r += (t * 0.7 + m.a * 3.0).sin() * dt * 0.02;
-                m.r = m.r.clamp(r0 + 0.12, 0.84);
+                m.r = m.r.clamp(lo, hi);
             }
         }
+    }
+
+    /// La «cámara» se mece despacio y sigue un poco a la mirada.
+    fn camera(&self) -> [f64; 2] {
+        let c = self.calm();
+        [
+            0.12 * (self.t * 0.23).sin() * c - self.gaze[0] * 0.8,
+            0.07 * (self.t * 0.17 + 1.0).sin() * c - self.gaze[1] * 0.8,
+        ]
+    }
+
+    /// Dónde cae una mota: lo cercano se corre mucho con la cámara, lo lejano casi nada.
+    fn mote_pos(&self, m: &Mote, cam: [f64; 2], press: f64, t: f64) -> (f64, f64) {
+        let r = m.r * (1.0 - press * 0.25 * (1.0 + (t * 5.0).sin()));
+        let shift = 0.1 + m.z * m.z * 1.9;
+        (r * m.a.cos() + cam[0] * shift, r * m.a.sin() + cam[1] * shift)
     }
 
     fn gaze_target(&mut self, st: f64) -> [f64; 2] {
@@ -658,7 +697,8 @@ impl Core {
         }
         let mut g = Grid::new(area.width as usize, area.height as usize);
         self.paint(&mut g);
-        let pal = [self.col, GREEN, RED, WARM].map(|c| [rgb(DIM), rgb(DIM), rgb(mix(c, DIM, 0.38)), rgb(c)]);
+        let dim = crate::theme::dim_rgb();
+        let pal = [self.col, GREEN, RED, WARM].map(|c| [rgb(dim), rgb(dim), rgb(mix(c, dim, 0.38)), rgb(c)]);
         for cy in 0..g.ch {
             for cx in 0..g.cw {
                 let c = &g.cells[cy * g.cw + cx];
@@ -772,13 +812,7 @@ impl Core {
             }
         }
 
-        // Motas de la corona.
-        if p.motes > 0.05 && !low {
-            let n = (16.0 * p.motes * boot).round() as usize;
-            for m in self.motes.iter().take(n) {
-                g.polar(m.r * (1.0 - p.press * 0.25 * (1.0 + (t * 5.0).sin())), m.a, 1, INK_MAIN);
-            }
-        }
+        let cam = self.camera();
 
         // Mensajes en cola: satélites sólidos que esperan su turno.
         for k in 0..self.sig.queue.min(6) {
@@ -1093,6 +1127,37 @@ impl Core {
                 }
             }
         }
+
+        // Motas lejanas y medias: al final y solo en celdas vacías, así el anillo, los arcos
+        // y el cuerpo las tapan. Las cercanas van después, por encima de todo.
+        if p.motes > 0.05 && !low {
+            let n = (MOTES as f64 * p.motes * boot).round() as usize;
+            for m in self.motes.iter().take(n).filter(|m| m.z < 0.66) {
+                let (x, y) = self.mote_pos(m, cam, p.press, t);
+                g.plot_under(x, y, 1);
+                if m.z >= 0.33 {
+                    g.plot_under(x + g.du, y, 1);
+                }
+            }
+        }
+
+        // Motas cercanas: al frente de todo, al color pleno, más grandes y con estela.
+        if p.motes > 0.05 {
+            let n = (MOTES as f64 * p.motes * boot).round() as usize;
+            let d = g.du;
+            for m in self.motes.iter().take(n).filter(|m| m.z >= 0.66) {
+                let (x, y) = self.mote_pos(m, cam, p.press, t);
+                for (ox, oy) in [(0.0, 0.0), (d, 0.0), (0.0, d), (d, d)] {
+                    g.plot(x + ox, y + oy, 3, INK_MAIN);
+                }
+                // Estela hacia atrás en su giro.
+                for k in 1..3 {
+                    let back = Mote { a: m.a - k as f64 * 0.05, ..*m };
+                    let (x, y) = self.mote_pos(&back, cam, p.press, t);
+                    g.plot(x, y, if k == 1 { 2 } else { 1 }, INK_MAIN);
+                }
+            }
+        }
     }
 }
 
@@ -1145,6 +1210,19 @@ impl Grid {
         self.dot(i as usize, j as usize, tone, ink);
     }
 
+    /// Como `plot`, pero solo si la celda está vacía: para lo que queda detrás.
+    fn plot_under(&mut self, x: f64, y: f64, tone: u8) {
+        let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
+        let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
+        if i < 0.0 || j < 0.0 || i >= self.dw as f64 || j >= self.dh as f64 {
+            return;
+        }
+        let (i, j) = (i as usize, j as usize);
+        if self.cells[(j / 4) * self.cw + i / 2].bits == 0 {
+            self.dot(i, j, tone, INK_MAIN);
+        }
+    }
+
     fn polar(&mut self, r: f64, a: f64, tone: u8, ink: u8) {
         self.plot(r * a.cos(), r * a.sin(), tone, ink);
     }
@@ -1164,6 +1242,70 @@ impl Grid {
         let y = (1.0 - j as f64 / (self.dh - 1) as f64 * 2.0) / self.s;
         (x, y)
     }
+}
+
+/// Entre qué radios vive una mota según su profundidad: las lejanas entre el cuerpo y el
+/// anillo, las cercanas por fuera, encima de la escala.
+fn mote_band(z: f64, blob_r: f64) -> (f64, f64) {
+    if z < 0.33 {
+        (blob_r + 0.12, 0.72)
+    } else if z < 0.66 {
+        (0.55, 0.88)
+    } else {
+        (0.70, 1.05)
+    }
+}
+
+/// Velocidad relativa de una mota: las cercanas van ~10× más rápido.
+fn mote_speed(z: f64) -> f64 {
+    0.25 + 2.4 * z * z
+}
+
+/// Si un color fijo cae demasiado cerca del acento del tema (Pensando azul con un tema azul),
+/// se gira su tono hasta separarlo: cada estado tiene que seguir leyéndose distinto de En espera.
+fn apart(c: [f64; 3], accent: [f64; 3]) -> [f64; 3] {
+    let (h, s, v) = hsv(c);
+    let (ha, sa, _) = hsv(accent);
+    if s < 0.15 || sa < 0.15 {
+        return c; // grises: no hay tono que comparar
+    }
+    let d = (h - ha + 540.0) % 360.0 - 180.0; // diferencia con signo, en grados
+    if d.abs() >= 40.0 {
+        return c;
+    }
+    let h = ha + if d >= 0.0 { 40.0 } else { -40.0 };
+    from_hsv(h.rem_euclid(360.0), s, v)
+}
+
+fn hsv(c: [f64; 3]) -> (f64, f64, f64) {
+    let [r, g, b] = c.map(|x| x / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h, if max == 0.0 { 0.0 } else { d / max }, max)
+}
+
+fn from_hsv(h: f64, s: f64, v: f64) -> [f64; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [(r + m) * 255.0, (g + m) * 255.0, (b + m) * 255.0]
 }
 
 fn mix(a: [f64; 3], b: [f64; 3], f: f64) -> [f64; 3] {
@@ -1247,10 +1389,23 @@ mod tests {
     }
 
     #[test]
+    fn los_estados_se_separan_del_acento() {
+        let azul = [69.0, 123.0, 255.0];
+        let pensando = [90.0, 150.0, 255.0];
+        let (h, _, _) = hsv(apart(pensando, azul));
+        let (ha, _, _) = hsv(azul);
+        assert!(((h - ha + 540.0) % 360.0 - 180.0).abs() >= 39.9);
+        // Lo que ya está lejos no se toca.
+        let verde = [120.0, 235.0, 120.0];
+        assert_eq!(apart(verde, azul), verde);
+    }
+
+    #[test]
     fn es_determinista() {
         let sig = Signals::default();
-        let a = render(&run(State::Thinking, 2.0, &sig), 36, 15);
-        let b = render(&run(State::Thinking, 2.0, &sig), 36, 15);
+        let shape = |b: Buffer| b.content().iter().map(|c| c.symbol().to_string()).collect::<String>();
+        let a = shape(render(&run(State::Thinking, 2.0, &sig), 36, 15));
+        let b = shape(render(&run(State::Thinking, 2.0, &sig), 36, 15));
         assert_eq!(a, b);
     }
 
@@ -1293,6 +1448,7 @@ mod tests {
         if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
             return;
         }
+        crate::theme::poll();
         let mut html = String::from(
             "<!doctype html><meta charset=utf-8><body style='background:#05090d;color:#ccc;font:13px monospace;\
              display:flex;flex-wrap:wrap;gap:14px;padding:14px'>",
@@ -1320,5 +1476,39 @@ mod tests {
             ));
         }
         std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/target/nucleo.html"), html).unwrap();
+
+        // Animación: cuadros reales del núcleo a 25 fps, para ver lo que una foto no muestra.
+        let mut frames = Vec::new();
+        let mut c = Core::new();
+        let script = [(State::Idle, 5.0), (State::Thinking, 4.0), (State::Listening, 3.0), (State::Speaking, 4.0)];
+        let sig = Signals { ctx: 0.3, level: 0.03, idle: 30.0, ..Default::default() };
+        for (s, secs) in script {
+            let mut t = 0.0;
+            while t < secs {
+                c.step(0.04, s, &sig);
+                t += 0.04;
+                let buf = render(&c, 36, 15);
+                let mut f = String::new();
+                for y in 0..15 {
+                    for x in 0..36 {
+                        let cell = &buf[(x, y)];
+                        match cell.fg {
+                            Color::Rgb(r, g, b) => f.push_str(&format!("<span style=color:rgb({r},{g},{b})>{}</span>", cell.symbol())),
+                            _ => f.push(' '),
+                        }
+                    }
+                    f.push('\n');
+                }
+                frames.push(format!("[{:?},{:?}]", f, s.label()));
+            }
+        }
+        let anim = format!(
+            "<!doctype html><meta charset=utf-8><body style='background:#05090d;color:#ccc;font:14px monospace;padding:20px'>\
+             <pre id=f style='font-family:\"JetBrainsMono Nerd Font\",monospace;font-size:22px;line-height:1.12;margin:0'></pre>\
+             <div id=l style='font-size:16px;margin-top:8px'></div><script>const F=[{}];let i=0;\
+             setInterval(()=>{{const[x,l]=F[i++%F.length];f.innerHTML=x;document.getElementById('l').textContent=l;}},40)</script>",
+            frames.join(",")
+        );
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/target/nucleo-anim.html"), anim).unwrap();
     }
 }

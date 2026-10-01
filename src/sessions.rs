@@ -109,12 +109,18 @@ fn turn(v: &Value) -> Option<(Role, String)> {
     let content = &v["message"]["content"];
     let text = match content {
         Value::String(s) => s.clone(),
-        Value::Array(blocks) => blocks
-            .iter()
-            .filter(|b| b["type"] == "text")
-            .filter_map(|b| b["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter(|b| b["type"] == "text")
+                .filter_map(|b| b["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            match blocks.iter().filter(|b| b["type"] == "image").count() {
+                0 => text,
+                n => format!("▣ {n} imagen{}\n{text}", if n == 1 { "" } else { "es" }),
+            }
+        }
         _ => return None,
     };
     let text = text.trim();
