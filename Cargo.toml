@@ -1,0 +1,15 @@
+[package]
+name = "jarvis"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+cpal = "0.18.2"
+crossterm = "0.29.0"
+ratatui = "0.30.2"
+serde = "1.0.229"
+serde_json = "1.0.151"
+textwrap = "0.16.4"
+unicode-width = "0.2.2"
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
