@@ -32,6 +32,8 @@ pub enum Role {
 pub struct Msg {
     pub role: Role,
     pub text: String,
+    /// Escrito a mitad de un turno y todavía sin leer: el id que el motor repetirá al tomarlo.
+    pub waiting: Option<String>,
 }
 
 #[derive(PartialEq)]
@@ -89,6 +91,17 @@ pub struct App {
     interrupted: bool,
     assistant_open: bool,
     level: Level,
+    /// La terminal avisa cuándo se suelta una tecla (protocolo de teclado de kitty).
+    key_release: bool,
+    /// Espacio apretado y todavía sin soltar: lo que llegue mientras tanto es auto-repetición.
+    space_down: bool,
+    /// Sin aviso de soltar, la auto-repetición se reconoce por lo seguido que llega.
+    last_space: Instant,
+    /// Un soltar recién llegado. Solo cuenta si no lo sigue otro apretar enseguida: hay
+    /// terminales que auto-repiten como pares soltar+apretar.
+    released: Option<Instant>,
+    /// Cuándo empezó a escuchar el espacio en curso; al soltarlo tras un rato, envía.
+    pub ptt: Option<Instant>,
 }
 
 impl App {
@@ -121,8 +134,16 @@ impl App {
 
     fn push(&mut self, role: Role, text: impl Into<String>) {
         self.assistant_open = false;
-        self.messages.push(Msg { role, text: text.into() });
+        self.messages.push(Msg { role, text: text.into(), waiting: None });
         self.scroll = 0;
+    }
+
+    /// El proceso que los iba a leer ya no existe.
+    fn drop_waiting(&mut self) {
+        let lost = self.messages.iter_mut().filter_map(|m| m.waiting.take()).count();
+        if lost > 0 {
+            self.push(Role::Error, format!("{lost} mensaje(s) en espera no llegaron a Claude"));
+        }
     }
 
     fn on_claude(&mut self, ev: ClaudeEvent) {
@@ -177,6 +198,11 @@ impl App {
             ClaudeEvent::Ask { request_id, tool, input } => {
                 self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input)));
             }
+            ClaudeEvent::Taken(id) => {
+                for m in self.messages.iter_mut().filter(|m| m.waiting.as_deref() == Some(&id)) {
+                    m.waiting = None;
+                }
+            }
             ClaudeEvent::Compacted { pre, post } => {
                 let k = |n: u64| format!("{:.1}k", n as f64 / 1000.0);
                 self.push(Role::System, format!("contexto compactado: {} → {} tokens", k(pre), k(post)));
@@ -184,6 +210,7 @@ impl App {
             ClaudeEvent::Stderr(line) => self.push(Role::Error, line),
             ClaudeEvent::Exited => {
                 self.modal = None;
+                self.drop_waiting();
                 self.alive = false;
                 self.busy = false;
                 self.push(Role::Error, "el proceso de claude terminó. Ctrl+R para reiniciar.");
@@ -225,10 +252,26 @@ fn main() -> Result<()> {
         interrupted: false,
         assistant_open: false,
         level,
+        key_release: false,
+        space_down: false,
+        last_space: Instant::now(),
+        released: None,
+        ptt: None,
     };
 
     let mut term = ratatui::init();
+    // Para mantener espacio y hablar hace falta saber cuándo se suelta. Con «desambiguar» y
+    // «tipos de evento» las letras siguen llegando como texto (acentos y tildes muertas
+    // intactos) y además llega el soltar. «Todas las teclas como códigos» duplica la é en foot.
+    use crossterm::event::{KeyboardEnhancementFlags as K, PushKeyboardEnhancementFlags};
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
+        app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
+    }
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
+    if app.key_release {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
+    }
     ratatui::restore();
     res
 }
@@ -253,11 +296,18 @@ fn run(
 
         if event::poll(tick)? {
             if let Event::Key(k) = event::read()? {
-                if k.kind == KeyEventKind::Press {
+                let space = k.code == KeyCode::Char(' ');
+                if k.kind == KeyEventKind::Release && space {
+                    app.space_down = false;
+                    app.released = Some(Instant::now());
+                }
+                // Las repeticiones sirven para borrar o moverse con la tecla apretada.
+                if k.kind == KeyEventKind::Press || (k.kind == KeyEventKind::Repeat && !space) {
                     match handle_key(app, k, claude, voice_tx) {
                         Flow::Quit => return Ok(()),
                         Flow::Restart => {
                             *claude = None;
+                            app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
                             app.alive = true;
                             app.modal = None;
@@ -281,6 +331,11 @@ fn run(
                     }
                 }
             }
+        }
+
+        if app.released.is_some_and(|t| t.elapsed() >= REPEAT_GAP) {
+            app.released = None;
+            space_up(app, voice_tx);
         }
 
         while let Ok(ev) = rx.try_recv() {
@@ -352,12 +407,15 @@ fn handle_key(
         KeyCode::Char('u') if ctrl => app.input.clear(),
 
         // Espacio con la entrada vacía: empezar/terminar de escuchar.
+        KeyCode::Char(' ') if app.input.is_empty() && space_repeat(app) => {}
         KeyCode::Char(' ') if app.input.is_empty() => match app.voice {
             VoiceState::Ready => {
                 let _ = voice_tx.send(VoiceCmd::Start);
+                app.ptt = Some(Instant::now());
             }
             VoiceState::Listening => {
                 let _ = voice_tx.send(VoiceCmd::Stop);
+                app.ptt = None;
             }
             VoiceState::Loading => app.push(Role::System, "el modelo de voz todavía está cargando…"),
             _ => {}
@@ -394,7 +452,12 @@ fn handle_key(
             app.menu = 0;
         }
         KeyCode::Char(c) => {
-            app.input.push(c);
+            // Con el protocolo de kitty Shift+n puede llegar como «n» más el modificador.
+            if k.modifiers.contains(KeyModifiers::SHIFT) && c.is_lowercase() {
+                app.input.extend(c.to_uppercase());
+            } else {
+                app.input.push(c);
+            }
             app.menu = 0;
         }
         KeyCode::PageUp => app.scroll += 10,
@@ -405,6 +468,32 @@ fn handle_key(
         _ => {}
     }
     Flow::Go
+}
+
+/// Espacio con la entrada vacía, dos modos: mantenerlo (escucha hasta soltarlo) o tocarlo
+/// (un toque empieza, otro envía). Lo que llega mientras sigue apretado es auto-repetición.
+const REPEAT_GAP: Duration = Duration::from_millis(80);
+
+fn space_repeat(app: &mut App) -> bool {
+    if app.key_release {
+        let paired = app.released.take().is_some_and(|t| t.elapsed() < REPEAT_GAP);
+        return std::mem::replace(&mut app.space_down, true) || paired;
+    }
+    // Sin aviso de soltar: la repetición llega cada ~25 ms y una persona no toca tan rápido.
+    let repeat = app.last_space.elapsed() < Duration::from_millis(150);
+    app.last_space = Instant::now();
+    repeat
+}
+
+/// Soltar tras mantenerlo un rato es «ya terminé de hablar»; soltar un toque corto no hace
+/// nada y sigue escuchando hasta el siguiente toque.
+fn space_up(app: &mut App, voice_tx: &Sender<VoiceCmd>) {
+    let Some(t) = app.ptt.take() else { return };
+    if t.elapsed() < Duration::from_millis(400) {
+        app.ptt = None;
+    } else if app.voice == VoiceState::Listening {
+        let _ = voice_tx.send(VoiceCmd::Stop);
+    }
 }
 
 fn clear(app: &mut App) -> Flow {
@@ -559,9 +648,14 @@ fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
         app.push(Role::Error, "claude no está corriendo (Ctrl+R)");
         return;
     };
+    let queued = app.busy;
     app.push(Role::User, text.clone());
     match c.send(&text) {
-        Ok(()) => {
+        Ok(uuid) => {
+            // Con el motor libre lo toma al instante; solo a mitad de turno queda esperando.
+            if queued {
+                app.messages.last_mut().unwrap().waiting = Some(uuid);
+            }
             app.busy = true;
             app.thinking = true;
             app.interrupted = false;

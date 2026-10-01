@@ -205,7 +205,9 @@ impl Recording {
         let rate = self.rate;
         let samples = std::mem::take(&mut *self.buf.lock().unwrap());
         drop(self);
-        resample(&samples, rate, WHISPER_RATE)
+        // Al abrir el micrófono interno llega un golpe que satura; nadie habla tan pronto.
+        let skip = (rate as usize / 5).min(samples.len());
+        resample(&samples[skip..], rate, WHISPER_RATE)
     }
 }
 

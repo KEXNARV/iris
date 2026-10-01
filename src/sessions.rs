@@ -74,7 +74,7 @@ pub fn history(id: &str) -> Vec<Msg> {
                 last.text.push_str("\n\n");
                 last.text.push_str(&text);
             }
-            _ => out.push(Msg { role, text }),
+            _ => out.push(Msg { role, text, waiting: None }),
         }
     }
     out

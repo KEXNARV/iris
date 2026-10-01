@@ -20,6 +20,8 @@ pub enum ClaudeEvent {
     Done { cost: f64, secs: f64, is_error: bool },
     /// El motor espera respuesta del usuario: una `AskUserQuestion` o un permiso.
     Ask { request_id: String, tool: String, input: Value },
+    /// El motor tomó el mensaje con este id (lo repite al leerlo, por `--replay-user-messages`).
+    Taken(String),
     /// `/compact` terminó: tokens de contexto antes y después.
     Compacted { pre: u64, post: u64 },
     Stderr(String),
@@ -48,6 +50,9 @@ impl Claude {
                 "stream-json",
                 "--verbose",
                 "--include-partial-messages",
+                // Repite cada mensaje nuestro en el momento en que lo lee: así se sabe cuándo
+                // uno escrito a mitad de turno deja de estar en espera.
+                "--replay-user-messages",
                 // Sin esto `AskUserQuestion` no existe en `-p`; con esto el motor nos pregunta a
                 // nosotros por stdout (`control_request` `can_use_tool`) y espera la respuesta.
                 "--permission-prompt-tool",
@@ -88,11 +93,15 @@ impl Claude {
         Ok(Self { id, child, stdin, next_req: 0 })
     }
 
-    pub fn send(&mut self, text: &str) -> Result<()> {
+    /// Devuelve el id con que el motor avisará que lo tomó.
+    pub fn send(&mut self, text: &str) -> Result<String> {
+        let uuid = uuid();
         self.write(json!({
             "type": "user",
+            "uuid": uuid,
             "message": { "role": "user", "content": text },
-        }))
+        }))?;
+        Ok(uuid)
     }
 
     pub fn interrupt(&mut self) -> Result<()> {
@@ -183,6 +192,7 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
                 detail: tool_detail(&b["input"]),
             })
             .collect(),
+        Some("user") if v["isReplay"] == true => vec![ClaudeEvent::Taken(s(v, "uuid"))],
         Some("user") => v["message"]["content"]
             .as_array()
             .into_iter()
@@ -205,6 +215,20 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
         }],
         _ => vec![],
     }
+}
+
+/// UUID v4 de /dev/urandom; el motor lo guarda tal cual en el transcript.
+fn uuid() -> String {
+    use std::io::Read;
+    let mut b = [0u8; 16];
+    if std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).is_err() {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+        b = t.as_nanos().to_le_bytes();
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
 /// Lo más representativo de la entrada de una herramienta, en una línea.

@@ -196,9 +196,10 @@ fn draw_core(f: &mut Frame, area: Rect, app: &App, state: State, t: f64) {
             .current_tool()
             .map(|a| format!("{} · {:.0}s", a.name, a.started.elapsed().as_secs_f64()))
             .unwrap_or_default(),
+        State::Listening if app.ptt.is_some() => "suelta espacio para enviar · esc cancela".into(),
         State::Listening => "espacio para enviar · esc cancela".into(),
         State::Asking => "elige con ↑↓ y enter".into(),
-        State::Idle if app.voice == VoiceState::Ready => "espacio para hablar".into(),
+        State::Idle if app.voice == VoiceState::Ready => "mantén o toca espacio para hablar".into(),
         State::Idle if app.voice == VoiceState::Loading => "cargando voz…".into(),
         _ => String::new(),
     };
@@ -276,9 +277,15 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
         match m.role {
             Role::User => {
                 lines.push(Line::default());
-                lines.push(Line::from(Span::styled("  TÚ", Style::new().fg(WARM).bold())));
+                let mut head = vec![Span::styled("  TÚ", Style::new().fg(WARM).bold())];
+                if m.waiting.is_some() {
+                    head.push(Span::styled("  ◷ en espera", Style::new().fg(FAINT)));
+                    head.push(Span::styled(" — Claude lo lee al terminar lo que está haciendo", Style::new().fg(DIM)));
+                }
+                lines.push(Line::from(head));
+                let fg = if m.waiting.is_some() { FAINT } else { TEXT };
                 for l in wrap(&m.text, width) {
-                    lines.push(Line::from(Span::styled(format!("  {l}"), Style::new().fg(TEXT))));
+                    lines.push(Line::from(Span::styled(format!("  {l}"), Style::new().fg(fg))));
                 }
             }
             Role::Assistant => {
