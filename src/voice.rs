@@ -210,8 +210,44 @@ impl Recording {
         drop(self);
         // Al abrir el micrófono interno llega un golpe que satura; nadie habla tan pronto.
         let skip = (rate as usize / 5).min(samples.len());
-        resample(&samples[skip..], rate, WHISPER_RATE)
+        normalize(resample(&samples[skip..], rate, WHISPER_RATE))
     }
+}
+
+/// Sube la grabación a un nivel parejo antes de whisper. La ganancia del micrófono tiene que
+/// quedar baja (al 97% recortaba y whisper inventaba frases; al 35% ya no, pero la voz llega
+/// floja y hay que acercarse y hablar fuerte): lo que falta se sube acá, sin recortar.
+fn normalize(mut audio: Vec<f32>) -> Vec<f32> {
+    if audio.is_empty() {
+        return audio;
+    }
+    // El «pico» es lo que supera solo el 0,1% de las muestras: un golpe suelto no frena la subida.
+    let mut mags: Vec<f32> = audio.iter().map(|x| x.abs()).collect();
+    let k = ((mags.len() as f32 * 0.999) as usize).min(mags.len() - 1);
+    let peak = *mags.select_nth_unstable_by(k, f32::total_cmp).1;
+    // Casi nada grabado: no se inventa voz subiendo el ruido de fondo.
+    if peak < 0.003 {
+        return audio;
+    }
+    // Sin subir el ruido: el micrófono interno tiene un piso de RMS ~0,04 al 40%, y amplificado
+    // whisper inventa frases sobre él («¿Qué es el baile?»). El piso es el tramo de 50 ms más
+    // callado (percentil 10); después de la ganancia tiene que quedar por debajo de 0,03.
+    let mut rms: Vec<f32> = audio
+        .chunks(800)
+        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    let floor = if rms.len() >= 4 {
+        let k = rms.len() / 10;
+        *rms.select_nth_unstable_by(k, f32::total_cmp).1
+    } else {
+        0.0
+    };
+    let quiet = if floor > 0.0 { 0.03 / floor } else { 10.0 };
+    let gain = (0.9 / peak).min(quiet).clamp(1.0, 10.0);
+    for x in &mut audio {
+        *x = (*x * gain).clamp(-1.0, 1.0);
+    }
+    audio
 }
 
 fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
@@ -342,6 +378,7 @@ pub fn transcribe_file(path: &str) -> Result<()> {
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
+    let audio = normalize(audio); // igual que una grabación de la interfaz
     let t0 = std::time::Instant::now();
     let (ctx, name) = load_model()?;
     let load = t0.elapsed();
@@ -361,6 +398,29 @@ pub fn transcribe_file(path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normaliza_la_voz_floja_sin_recortar() {
+        // Voz baja (pico 0,1) entre silencios, como una grabación real, con un golpe suelto.
+        let mut a: Vec<f32> =
+            (0..16000).map(|i| if (4000..12000).contains(&i) { 0.1 * (i as f32 * 0.05).sin() } else { 0.0005 }).collect();
+        a[10] = 0.8;
+        let out = normalize(a);
+        let peak = out.iter().skip(100).fold(0.0f32, |m, x| m.max(x.abs()));
+        assert!(peak > 0.8 && peak <= 1.0, "{peak}");
+        // El silencio queda como está.
+        assert_eq!(normalize(vec![0.001; 1000]), vec![0.001; 1000]);
+        // Con ruido de fondo alto no se sube: amplificado, whisper inventa frases.
+        let ruidoso: Vec<f32> = (0..16000)
+            .map(|i| 0.04 * ((i * 7919 % 101) as f32 / 50.0 - 1.0) + if i > 8000 { 0.15 * (i as f32 * 0.05).sin() } else { 0.0 })
+            .collect();
+        let out = normalize(ruidoso.clone());
+        let g = out[100] / ruidoso[100];
+        assert!(g < 1.3, "subió el ruido ×{g}");
+        // Lo que ya llega fuerte no se toca.
+        let fuerte: Vec<f32> = (0..1000).map(|i| 0.95 * (i as f32 * 0.1).sin()).collect();
+        assert_eq!(normalize(fuerte.clone()), fuerte);
+    }
 
     #[test]
     fn alucinaciones() {

@@ -17,6 +17,7 @@ const LOCAL: &[(&str, &str)] = &[
     ("clear", "conversación nueva; la anterior queda en /resume (^L solo limpia la pantalla)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
     ("calma", "menos movimiento en el núcleo (alterna)"),
+    ("voz", "cuándo contesta hablando: auto (si le hablas), siempre o nunca"),
     ("theme", "elegir el estilo de la pantalla · /theme cabina"),
     ("quit", "salir de Jarvis (^C)"),
 ];

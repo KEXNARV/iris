@@ -2,11 +2,14 @@ mod ask;
 mod claude;
 mod clip;
 mod commands;
+mod habla;
 mod estilo;
 mod md;
 mod nucleo;
 mod select;
 mod sessions;
+mod sixel;
+mod teclado;
 mod theme;
 mod ui;
 mod voice;
@@ -26,6 +29,15 @@ pub enum AppEvent {
     /// Generación del proceso que lo emitió (ver `Claude::id`).
     Claude(u64, ClaudeEvent),
     Voice(VoiceEvent),
+    Habla(habla::HablaEvent),
+}
+
+/// Cuándo contesta en voz alta: `Auto` cuando le hablaste (si escribiste, en silencio).
+#[derive(Clone, Copy, PartialEq)]
+pub enum VozModo {
+    Auto,
+    Siempre,
+    Nunca,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -140,8 +152,30 @@ pub struct App {
     md_cache: std::cell::RefCell<Vec<Option<(usize, usize, Vec<md::Row>)>>>,
     /// Imágenes pegadas que se van con el próximo mensaje.
     pub images: Vec<clip::Image>,
+    /// La voz de JARVIS (Kokoro) y el que arma las frases de la respuesta para decirlas.
+    habla: habla::Habla,
+    lector: habla::Lector,
+    pub voz_modo: VozModo,
+    /// El próximo mensaje llegó por voz; y si este turno se contesta hablando.
+    spoken_next: bool,
+    speak_turn: bool,
+    /// Está sonando su voz, y con qué volumen.
+    pub talking: bool,
+    tts_level: f32,
     /// Cómo se compone la pantalla (`/theme`).
     pub estilo: estilo::Estilo,
+    /// Cine: la respuesta abierta entera en el centro (lo decide el dibujo, que sabe si cabe).
+    pub reading: std::cell::Cell<bool>,
+    /// ^O fuerza leer o volver al núcleo; un mensaje nuevo devuelve la decisión al dibujo.
+    pub read_override: Option<bool>,
+    /// Primera fila visible de la respuesta abierta, y qué mensaje era (al cambiar, vuelve arriba).
+    pub read_top: std::cell::Cell<usize>,
+    pub read_msg: std::cell::Cell<usize>,
+    /// Núcleo como imagen de puntos: el tamaño en píxeles de una celda, si la terminal muestra
+    /// Sixel (foot); `None` es braille. Dónde va este cuadro, y dónde quedó la última imagen.
+    pub sixel_cell: Option<(u16, u16)>,
+    pub core_rect: std::cell::Cell<Option<ratatui::layout::Rect>>,
+    sixel_shown: Option<ratatui::layout::Rect>,
     /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
     pub turn_from: usize,
 }
@@ -160,6 +194,8 @@ impl App {
             State::Offline
         } else if matches!(self.modal, Some(Modal::Ask(_))) {
             State::Asking
+        } else if self.talking {
+            State::Speaking
         } else if self.booted.elapsed() < Duration::from_millis(2400) {
             State::Booting
         } else if self.compacting {
@@ -181,7 +217,7 @@ impl App {
 
     pub fn signals(&self) -> nucleo::Signals {
         nucleo::Signals {
-            level: voice::level_get(&self.level),
+            level: if self.talking { self.tts_level } else { voice::level_get(&self.level) },
             ctx: self.ctx_used as f64 / self.ctx_window.max(1) as f64,
             queue: self.messages.iter().filter(|m| m.waiting.is_some()).count(),
             todos: self.todos,
@@ -234,6 +270,11 @@ impl App {
             ClaudeEvent::Thinking => self.thinking = true,
             ClaudeEvent::Text(t) => {
                 self.thinking = false;
+                if self.speak_turn {
+                    for frase in self.lector.push(&t) {
+                        self.habla.say(&frase);
+                    }
+                }
                 if self.assistant_open {
                     self.messages.last_mut().unwrap().text.push_str(&t);
                 } else {
@@ -274,6 +315,11 @@ impl App {
                 self.thinking = true;
             }
             ClaudeEvent::Done { cost, secs, is_error, window } => {
+                if std::mem::take(&mut self.speak_turn) {
+                    for frase in self.lector.finish() {
+                        self.habla.say(&frase);
+                    }
+                }
                 if let Some(w) = window {
                     self.ctx_window = w;
                 }
@@ -303,7 +349,14 @@ impl App {
                     m.waiting = None;
                 }
             }
-            ClaudeEvent::Usage(n) => self.ctx_used = n,
+            ClaudeEvent::Usage(n) => {
+                self.ctx_used = n;
+                // La ventana real llega recién al terminar el turno; mientras tanto se supone de
+                // 200k, y una sesión retomada ya puede pasarla (salía «235%»): entonces es de 1M.
+                if n > self.ctx_window {
+                    self.ctx_window = 1_000_000;
+                }
+            }
             ClaudeEvent::Compacted { pre, post } => {
                 self.compacting = false;
                 self.ctx_used = post;
@@ -376,7 +429,25 @@ fn main() -> Result<()> {
         calm: std::env::var_os("JARVIS_CALM").is_some(),
         md_cache: Default::default(),
         images: vec![],
+        habla: habla::Habla::new(tx.clone()),
+        lector: habla::Lector::new(),
+        voz_modo: match std::env::var("JARVIS_HABLA").as_deref() {
+            Ok("siempre") => VozModo::Siempre,
+            Ok("nunca") | Ok("0") => VozModo::Nunca,
+            _ => VozModo::Auto,
+        },
+        spoken_next: false,
+        speak_turn: false,
+        talking: false,
+        tts_level: 0.0,
         estilo: estilo::cargar(),
+        reading: Default::default(),
+        read_override: None,
+        read_top: Default::default(),
+        read_msg: std::cell::Cell::new(usize::MAX),
+        sixel_cell: sixel_cell(),
+        core_rect: Default::default(),
+        sixel_shown: None,
         turn_from: 0,
     };
 
@@ -417,6 +488,8 @@ fn run(
     // 60 fps: lo que más se mueve es el núcleo.
     let tick = Duration::from_millis(16);
     let mut frame = Instant::now();
+    let mut frames: u64 = 0;
+    let mut teclado = teclado::Teclado::new();
     let mut theme_check = Instant::now();
     theme::poll();
     loop {
@@ -439,8 +512,15 @@ fn run(
         frame = Instant::now();
         let (want, sig) = (app.state(), app.signals());
         app.nucleo.step(dt, want, &sig);
+        // El teclado acompaña al núcleo: su estado, la voz y los eventos.
+        teclado.tick(app.nucleo.state(), sig.level);
+        for ev in app.nucleo.take_fired() {
+            teclado.event(ev);
+        }
 
+        app.core_rect.set(None);
         term.draw(|f| ui::draw(f, app))?;
+        sixel_frame(term, app, &mut frames)?;
         follow_drag(app);
 
         if event::poll(tick)? {
@@ -527,6 +607,17 @@ fn run(
                 }
                 AppEvent::Claude(..) => {}
                 AppEvent::Voice(e) => on_voice(app, e, claude),
+                AppEvent::Habla(e) => match e {
+                    habla::HablaEvent::Start => app.talking = true,
+                    habla::HablaEvent::Level(l) => app.tts_level = l,
+                    habla::HablaEvent::Idle => {
+                        app.talking = false;
+                        app.tts_level = 0.0;
+                    }
+                    habla::HablaEvent::Unavailable(why) => {
+                        app.push(Role::Error, format!("sin voz: {why}"));
+                    }
+                },
             }
         }
     }
@@ -592,11 +683,13 @@ fn handle_key(
         KeyCode::Char('l') if ctrl => return clear(app),
         KeyCode::Char('u') if ctrl => app.input.clear(),
         KeyCode::Char('v') if ctrl => paste(app),
+        KeyCode::Char('o') if ctrl => app.read_override = Some(!app.reading.get()),
 
         // Espacio con la entrada vacía: empezar/terminar de escuchar.
         KeyCode::Char(' ') if app.input.is_empty() && space_repeat(app) => {}
         KeyCode::Char(' ') if app.input.is_empty() => match app.voice {
             VoiceState::Ready => {
+                app.habla.stop(); // si estaba hablando, se calla para escucharte
                 let _ = voice_tx.send(VoiceCmd::Start);
                 app.ptt = Some(Instant::now());
             }
@@ -608,6 +701,9 @@ fn handle_key(
             _ => {}
         },
         KeyCode::Esc => {
+            // Esc siempre lo calla; si además está trabajando, lo interrumpe.
+            app.habla.stop();
+            app.speak_turn = false;
             if app.voice == VoiceState::Listening {
                 let _ = voice_tx.send(VoiceCmd::Cancel);
             } else if app.busy {
@@ -639,6 +735,26 @@ fn handle_key(
                     return Flow::Go;
                 }
                 "/restart" => return Flow::Restart,
+                "/voz" => {
+                    app.voz_modo = match (arg.trim(), app.voz_modo) {
+                        ("siempre", _) => VozModo::Siempre,
+                        ("nunca", _) | ("no", _) => VozModo::Nunca,
+                        ("auto", _) => VozModo::Auto,
+                        (_, VozModo::Auto) => VozModo::Siempre,
+                        (_, VozModo::Siempre) => VozModo::Nunca,
+                        (_, VozModo::Nunca) => VozModo::Auto,
+                    };
+                    if app.voz_modo == VozModo::Nunca {
+                        app.habla.stop();
+                    }
+                    let msg = match app.voz_modo {
+                        VozModo::Auto => "voz: contesta hablando cuando le hablas",
+                        VozModo::Siempre => "voz: contesta hablando siempre",
+                        VozModo::Nunca => "voz: no habla",
+                    };
+                    app.flash = Some((msg.into(), Instant::now()));
+                    return Flow::Go;
+                }
                 "/calma" => {
                     app.calm = !app.calm;
                     let msg = if app.calm { "núcleo en calma" } else { "núcleo con todo su movimiento" };
@@ -672,10 +788,12 @@ fn handle_key(
             app.last_key = Instant::now();
             app.nucleo.fire(Gesto::Key);
         }
-        KeyCode::PageUp => app.scroll += 10,
-        KeyCode::PageDown => app.scroll = app.scroll.saturating_sub(10),
-        KeyCode::Up if app.input.is_empty() => app.scroll += 1,
-        KeyCode::Down if app.input.is_empty() => app.scroll = app.scroll.saturating_sub(1),
+        KeyCode::PageUp => scroll(app, true, 10),
+        KeyCode::PageDown => scroll(app, false, 10),
+        KeyCode::Up if app.input.is_empty() => scroll(app, true, 1),
+        KeyCode::Down if app.input.is_empty() => scroll(app, false, 1),
+        KeyCode::Home if app.reading.get() => app.read_top.set(0),
+        KeyCode::End if app.reading.get() => app.read_top.set(usize::MAX),
         KeyCode::End => app.scroll = 0,
         _ => {}
     }
@@ -738,6 +856,8 @@ fn on_mouse(app: &mut App, m: crossterm::event::MouseEvent) {
             copied(app, &text);
         }
         // Con la rueda se puede seguir estirando la selección más allá de lo que se ve.
+        MouseEventKind::ScrollUp if app.reading.get() => scroll(app, true, 3),
+        MouseEventKind::ScrollDown if app.reading.get() => scroll(app, false, 3),
         MouseEventKind::ScrollUp if inside || dragging => {
             app.scroll = (app.scroll + 3).min(app.view.borrow().max_scroll());
         }
@@ -988,6 +1108,16 @@ fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
         return;
     };
     let queued = app.busy;
+    app.read_override = None;
+    // Contesta hablando si le hablaste (o si la voz está en «siempre»).
+    app.habla.stop();
+    app.speak_turn = match app.voz_modo {
+        VozModo::Siempre => true,
+        VozModo::Nunca => false,
+        VozModo::Auto => std::mem::take(&mut app.spoken_next),
+    };
+    app.spoken_next = false;
+    app.lector = habla::Lector::new();
     if text.trim() == "/compact" || text.starts_with("/compact ") {
         app.compacting = true;
     }
@@ -1048,6 +1178,7 @@ fn on_voice(app: &mut App, ev: VoiceEvent, claude: &mut Option<Claude>) {
         }
         VoiceEvent::Transcript(t) => {
             app.voice = VoiceState::Ready;
+            app.spoken_next = true;
             submit(app, claude, t);
         }
         VoiceEvent::Cancelled => app.voice = VoiceState::Ready,
@@ -1099,4 +1230,73 @@ fn attach(app: &mut App, img: clip::Image) {
     let label = img.label(app.images.len() + 1);
     app.images.push(img);
     app.flash = Some((format!("{label} adjunta · se va con el próximo mensaje"), Instant::now()));
+}
+
+/// Hacia arriba o abajo: la respuesta abierta en Cine si la hay; si no, la conversación.
+fn scroll(app: &mut App, up: bool, n: usize) {
+    if app.reading.get() {
+        let top = app.read_top.get();
+        app.read_top.set(if up { top.saturating_sub(n) } else { top.saturating_add(n) });
+    } else if up {
+        app.scroll += n;
+    } else {
+        app.scroll = app.scroll.saturating_sub(n);
+    }
+}
+
+
+/// ¿Se puede dibujar el núcleo como imagen? Hace falta una terminal con Sixel (foot) y saber
+/// cuántos píxeles mide una celda. `JARVIS_SIXEL=0` lo apaga; `=1` lo fuerza en otra terminal.
+fn sixel_cell() -> Option<(u16, u16)> {
+    let want = std::env::var("JARVIS_SIXEL").ok();
+    let foot = std::env::var("TERM").is_ok_and(|t| t.starts_with("foot"));
+    if want.as_deref() == Some("0") || (!foot && want.as_deref() != Some("1")) {
+        return None;
+    }
+    cell_px()
+}
+
+fn cell_px() -> Option<(u16, u16)> {
+    let ws = crossterm::terminal::window_size().ok()?;
+    (ws.width > 0 && ws.columns > 0 && ws.rows > 0).then(|| (ws.width / ws.columns, ws.height / ws.rows))
+}
+
+/// Manda la imagen del núcleo a 30 fps (uno de cada dos cuadros). Si el panel se movió o el
+/// núcleo volvió a braille (menú abierto), limpia la pantalla: la imagen vieja no se borra sola.
+fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut u64) -> Result<()> {
+    use std::io::Write;
+    let target = app.core_rect.get();
+    if app.sixel_shown.is_some() && app.sixel_shown != target {
+        app.sixel_shown = None;
+        term.clear()?;
+        if target.is_none() {
+            term.draw(|f| ui::draw(f, app))?;
+        }
+    }
+    let Some(r) = target else { return Ok(()) };
+    *frames += 1;
+    if app.sixel_shown == Some(r) && *frames % 2 == 1 {
+        return Ok(());
+    }
+    // El tamaño de la celda cambia con el zoom de la fuente; se vuelve a medir.
+    let Some((cw, ch)) = cell_px().or(app.sixel_cell) else { return Ok(()) };
+    app.sixel_cell = Some((cw, ch));
+    let sp = std::env::var("JARVIS_DOT").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let img = app.nucleo.sixel(r.width as usize * cw as usize, r.height as usize * ch as usize, sp);
+    // Cada imagen tiene fondo transparente y foot deja ver por ahí la anterior: sin borrar el
+    // panel, los cuadros viejos se acumulan. Borrar las celdas (ECH) elimina la imagen de abajo;
+    // dentro de una actualización sincronizada (modo 2026) borrar y dibujar se ven juntos.
+    let mut seq = String::with_capacity(img.len() + 32 * r.height as usize);
+    seq.push_str("\x1b[?2026h\x1b7");
+    for y in r.y..r.bottom() {
+        seq.push_str(&format!("\x1b[{};{}H\x1b[{}X", y + 1, r.x + 1, r.width));
+    }
+    seq.push_str(&format!("\x1b[{};{}H", r.y + 1, r.x + 1));
+    seq.push_str(&img);
+    seq.push_str("\x1b8\x1b[?2026l");
+    let mut out = std::io::stdout().lock();
+    out.write_all(seq.as_bytes())?;
+    out.flush()?;
+    app.sixel_shown = Some(r);
+    Ok(())
 }

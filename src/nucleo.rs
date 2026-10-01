@@ -183,12 +183,12 @@ impl State {
             Sleeping => Params { blob_r: 0.34, amp: 0.02, wob: 0.12, arcs: 0.0, pupil: 0.0, zzz: 1.0, motes: 0.3, ..b },
             Idle => b,
             Typing => Params { amp: 0.04, wob: 0.5, arc_speed: 0.4, ..b },
-            Listening => Params { amp: 0.05, wob: 0.8, chaos: 0.5, arc_speed: 0.6, arc_len: 0.8, vu: 1.0, ..b },
-            NoVoice => Params { amp: 0.025, wob: 0.3, arc_speed: 0.15, arc_len: 0.6, droop: 1.0, ..b },
+            Listening => Params { amp: 0.05, wob: 0.8, chaos: 0.5, arc_speed: 0.6, arc_len: 0.8, vu: 1.0, dilate: 1.3, ..b },
+            NoVoice => Params { amp: 0.025, wob: 0.3, arc_speed: 0.15, arc_len: 0.6, droop: 1.0, dilate: 1.4, ..b },
             Transcribing => Params {
                 blob_r: 0.32, amp: 0.05, wob: 3.0, chaos: 0.9, arc_speed: 2.2, arc_len: 0.6, fill: 1.0, ..b
             },
-            Thinking => Params { amp: 0.10, wob: 0.7, chaos: 0.3, arc_speed: 1.1, orbit: 1.0, ..b },
+            Thinking => Params { amp: 0.10, wob: 0.7, chaos: 0.3, arc_speed: 1.1, orbit: 1.0, dilate: 0.75, ..b },
             Planning => Params { amp: 0.04, wob: 0.5, arc_speed: 0.5, plan: 1.0, ..b },
             Searching => Params { amp: 0.03, wob: 0.5, arc_speed: 0.8, lens: 1.0, ..b },
             Reading => Params { amp: 0.03, wob: 0.4, arc_speed: 0.7, scan: 1.0, ..b },
@@ -198,7 +198,7 @@ impl State {
             Git => Params { blob_r: 0.34, amp: 0.04, wob: 0.6, arc_speed: 0.6, git: 1.0, ..b },
             Web => Params { blob_r: 0.36, amp: 0.05, wob: 1.0, arc_speed: 0.8, packets: 1.0, ..b },
             Delegating => Params { blob_r: 0.36, amp: 0.06, wob: 0.8, arc_speed: 0.9, bud: 1.0, ..b },
-            Speaking => Params { amp: 0.05, wob: 1.0, chaos: 0.2, arc_speed: 0.9, ripple: 1.0, ..b },
+            Speaking => Params { amp: 0.05, wob: 1.0, chaos: 0.2, arc_speed: 0.9, ripple: 1.0, dilate: 1.1, ..b },
             Asking => Params { blob_r: 0.38, amp: 0.03, wob: 0.3, arc_speed: 0.12, cardinal: 1.0, bob: 1.0, ..b },
             Compacting => Params { blob_r: 0.36, amp: 0.03, wob: 0.6, arc_speed: 1.6, arc_len: 0.5, press: 1.0, ..b },
             Offline => Params {
@@ -276,6 +276,8 @@ struct Params {
     git: f64,
     press: f64,
     droop: f64,
+    /// Apertura de la pupila: >1 dilatada (escucha, busca), <1 contraída (concentrado).
+    dilate: f64,
 }
 
 const BASE: Params = Params {
@@ -308,6 +310,7 @@ const BASE: Params = Params {
     git: 0.0,
     press: 0.0,
     droop: 0.0,
+    dilate: 1.0,
 };
 
 impl Params {
@@ -316,7 +319,7 @@ impl Params {
             ($($f:ident),*) => { $( self.$f += (to.$f - self.$f) * k; )* };
         }
         go!(blob_r, amp, wob, chaos, arc_speed, arcs, arc_len, ripple, orbit, sweep, fill, vu, cardinal, dashed,
-            scan, stitch, packets, bud, zzz, pupil, bob, motes, boot, lens, plan, tests, git, press, droop);
+            scan, stitch, packets, bud, zzz, pupil, bob, motes, boot, lens, plan, tests, git, press, droop, dilate);
     }
 }
 
@@ -369,6 +372,7 @@ pub struct Core {
     level: f64,
     sig: Signals,
     rng: u64,
+    fired: Vec<Event>,
 }
 
 impl Core {
@@ -402,6 +406,7 @@ impl Core {
             level: 0.0,
             sig: Signals::default(),
             rng: 0x9E37_79B9_7F4A_7C15,
+            fired: vec![],
         };
         c.motes = (0..MOTES)
             .map(|k| {
@@ -443,7 +448,13 @@ impl Core {
         self.sq_v += v * self.calm();
     }
 
+    /// Los eventos disparados desde la última vez, para avisarle al teclado.
+    pub fn take_fired(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.fired)
+    }
+
     pub fn fire(&mut self, ev: Event) {
+        self.fired.push(ev);
         let t = self.t;
         match ev {
             Event::Key => {
@@ -552,7 +563,7 @@ impl Core {
         self.phase += dt * self.p.wob * calm;
         self.arc_phase += dt * self.p.arc_speed * calm;
 
-        let lvl = if self.shown == State::Listening { (sig.level as f64 * 6.0).min(1.0) } else { 0.0 };
+        let lvl = if matches!(self.shown, State::Listening | State::Speaking) { (sig.level as f64 * 6.0).min(1.0) } else { 0.0 };
         self.level += (lvl - self.level) * if lvl > self.level { 0.5 } else { 0.12 };
 
         // Gestos ocasionales cuando lleva rato quieto, para que no repita siempre lo mismo.
@@ -695,21 +706,79 @@ impl Core {
         if area.width < 6 || area.height < 3 {
             return;
         }
-        let mut g = Grid::new(area.width as usize, area.height as usize);
+        let (cw, ch) = (area.width as usize, area.height as usize);
+        let mut g = Grid::new(cw, ch);
         self.paint(&mut g);
-        let dim = crate::theme::dim_rgb();
-        let pal = [self.col, GREEN, RED, WARM].map(|c| [rgb(dim), rgb(dim), rgb(mix(c, dim, 0.38)), rgb(c)]);
-        for cy in 0..g.ch {
-            for cx in 0..g.cw {
-                let c = &g.cells[cy * g.cw + cx];
-                if c.bits == 0 {
+        let pal = self.palette();
+        const BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
+        for cy in 0..ch {
+            for cx in 0..cw {
+                // La celda: los bits de sus 8 puntos y el color del más brillante.
+                let (mut bits, mut best) = (0u8, 0u8);
+                for dy in 0..4 {
+                    for dx in 0..2 {
+                        let d = g.dots[(cy * 4 + dy) * g.dw + cx * 2 + dx];
+                        if d & 3 != 0 {
+                            bits |= BITS[dy][dx];
+                            if (d & 3, d >> 2) > (best & 3, best >> 2) {
+                                best = d;
+                            }
+                        }
+                    }
+                }
+                if bits == 0 {
                     continue;
                 }
-                let ch = char::from_u32(0x2800 + c.bits as u32).unwrap_or(' ');
+                let ch = char::from_u32(0x2800 + bits as u32).unwrap_or(' ');
                 let pos = (area.x + cx as u16, area.y + cy as u16);
-                buf[pos].set_char(ch).set_fg(pal[c.ink as usize][c.tone as usize]);
+                let c = pal[(best >> 2) as usize][(best & 3) as usize];
+                buf[pos].set_char(ch).set_fg(rgb(c));
             }
         }
+    }
+
+    /// Colores por tinta (normal, verde, rojo, ámbar) y tono (1 apagado … 3 pleno).
+    fn palette(&self) -> [[[f64; 3]; 4]; 4] {
+        let dim = crate::theme::dim_rgb();
+        [self.col, GREEN, RED, WARM].map(|c| [dim, dim, mix(c, dim, 0.38), c])
+    }
+
+    /// El núcleo como imagen Sixel de `w`×`h` píxeles, con puntos redondos cada `sp` píxeles y
+    /// fondo transparente: la misma estética de puntos que el braille, más fina y con un color
+    /// por punto en vez de uno por celda.
+    pub fn sixel(&self, w: usize, h: usize, sp: usize) -> String {
+        let sp = sp.max(2);
+        let (dw, dh) = ((w / sp).max(8), (h / sp).max(8));
+        // Bloques de ~3×3 puntos: lo de atrás queda tapado igual que en braille.
+        let mut g = Grid::with_dots(dw, dh, 3, 3);
+        self.paint(&mut g);
+        let pal = self.palette();
+        // Índice 0 = transparente; 1 + tinta·3 + (tono-1) para los demás.
+        let mut img = vec![0u8; w * h];
+        // Casi media separación de radio: círculos que se ven como puntos y no como cuadraditos.
+        let r = sp as f64 * 0.46;
+        let offs: Vec<(isize, isize)> = {
+            let n = r.ceil() as isize;
+            (-n..=n).flat_map(|y| (-n..=n).map(move |x| (x, y))).filter(|(x, y)| ((*x * *x + *y * *y) as f64) <= r * r).collect()
+        };
+        for j in 0..dh {
+            for i in 0..dw {
+                let d = g.dots[j * dw + i];
+                if d & 3 == 0 {
+                    continue;
+                }
+                let idx = 1 + (d >> 2) * 3 + (d & 3) - 1;
+                let (cx, cy) = ((i * sp + sp / 2) as isize, (j * sp + sp / 2) as isize);
+                for (ox, oy) in &offs {
+                    let (x, y) = (cx + ox, cy + oy);
+                    if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+                        img[y as usize * w + x as usize] = idx;
+                    }
+                }
+            }
+        }
+        let colors: Vec<[f64; 3]> = (0..4).flat_map(|ink| (1..4).map(move |tone| pal[ink][tone])).collect();
+        crate::sixel::encode(&img, w, h, &colors)
     }
 
     fn paint(&self, g: &mut Grid) {
@@ -1029,7 +1098,8 @@ impl Core {
             _ => 0.0,
         };
         let breath = p.zzz * 0.03 * (t * 1.25).sin() + (1.0 - p.zzz) * 0.012 * (t * 1.2).sin() + yawn * 0.05;
-        let beat = p.ripple * 0.045 * (t * 5.0).sin().abs();
+        // Respondiendo late con el volumen real de su voz; sin voz, a su propio ritmo.
+        let beat = p.ripple * 0.045 * if self.level > 0.01 { self.level * 1.6 } else { (t * 5.0).sin().abs() };
         let voice = p.vu * lv * 0.22;
         let radius = p.blob_r * grow * (1.0 - 0.35 * self.deflate);
         let chaos = p.chaos + self.red * 2.0;
@@ -1046,7 +1116,13 @@ impl Core {
         let (sx, sy) = (1.0 + self.sq, 1.0 - self.sq);
         let cursor = t * 2.6;
         let scan_y = cy + p.blob_r * 0.8 * (st * 1.6).cos();
-        let pr = 0.085 * p.pupil * (1.0 - yawn * 0.8);
+        // Pupila: se dilata según el estado, se contrae de golpe con un error, y nunca baja de
+        // ~2,5 puntos de radio (en el panel grande de Cine se perdía).
+        let pr = if p.pupil > 0.01 {
+            (0.085 * p.dilate * (1.0 - self.red * 0.45)).max(2.5 * g.du) * p.pupil * (1.0 - yawn * 0.8)
+        } else {
+            0.0
+        };
         let blink = (matches!(self.shown, Idle | Typing) && (t % 4.3) < 0.12) || self.copy > 0.3;
         let (px, py) = (cx + self.gaze[0], cy + self.gaze[1]);
         let (lx, ly, lr) = (cx + p.blob_r * 0.55 * (st * 1.3).sin(), cy + p.blob_r * 0.45 * (st * 2.1 + 1.0).sin(), 0.15);
@@ -1099,8 +1175,11 @@ impl Core {
                 } else if (d > band + 0.035 || in_bud) && p.dashed < 0.5 {
                     // Capas de adentro hacia afuera: pupila > lupa > línea de lectura > líquido > trama.
                     let pupil_r = pr * if p.lens > 0.5 { 1.5 } else { 1.0 };
-                    if pupil_r > 0.01 && (x - px).hypot(y - py) < pupil_r {
-                        if !blink || (y - py).abs() < 0.02 {
+                    let (ex, ey) = (x - px, y - py);
+                    let er = ex.hypot(ey);
+                    if pupil_r > 0.01 && er < pupil_r {
+                        // Al parpadear queda solo una raya.
+                        if !blink || ey.abs() < 0.02 {
                             g.dot(i, j, 3, err);
                         }
                         continue;
@@ -1172,55 +1251,64 @@ const INK_GREEN: u8 = 1;
 const INK_RED: u8 = 2;
 const INK_WARM: u8 = 3;
 
-#[derive(Clone, Copy, Default)]
-struct Cell {
-    bits: u8,
-    tone: u8,
-    ink: u8,
-}
-
-/// Rejilla braille. Coordenadas del mundo: y ∈ [-1, 1] (x proporcional); si el panel es más
-/// alto que ancho, se encoge todo para que el anillo entre.
+/// Rejilla de puntos. Coordenadas del mundo: y ∈ [-1, 1] (x proporcional); si el panel es
+/// más alto que ancho, se encoge todo para que el anillo entre.
+///
+/// Cada punto guarda su tono (1-3, 0 = vacío) y su tinta. La salida decide cómo se ven: en
+/// braille se agrupan de a 2×4 por celda y la celda toma el color del más brillante; en
+/// imagen (Sixel) cada punto es un círculo con su propio color.
 struct Grid {
-    cw: usize,
-    ch: usize,
     dw: usize,
     dh: usize,
     asp: f64,
     s: f64,
     /// Tamaño de un punto en unidades del mundo.
     du: f64,
-    cells: Vec<Cell>,
+    /// tono | tinta << 2, por punto.
+    dots: Vec<u8>,
+    /// Bloques para `plot_under` (lo de atrás solo se dibuja donde no hay nada): en braille,
+    /// la celda; en imagen, un cuadrado de unos pocos puntos.
+    bw: usize,
+    bh: usize,
+    used: Vec<bool>,
 }
 
 impl Grid {
+    /// Para braille: `cw`×`ch` celdas de 2×4 puntos.
     fn new(cw: usize, ch: usize) -> Self {
-        let (dw, dh) = (cw * 2, ch * 4);
+        Self::with_dots(cw * 2, ch * 4, 2, 4)
+    }
+
+    fn with_dots(dw: usize, dh: usize, bw: usize, bh: usize) -> Self {
         let asp = dw as f64 / dh as f64;
         let s = asp.min(1.0);
-        Grid { cw, ch, dw, dh, asp, s, du: 2.0 / (s * dh as f64), cells: vec![Cell::default(); cw * ch] }
+        let (bx, by) = (dw.div_ceil(bw), dh.div_ceil(bh));
+        Grid { dw, dh, asp, s, du: 2.0 / (s * dh as f64), dots: vec![0; dw * dh], bw, bh, used: vec![false; bx * by] }
+    }
+
+    fn index(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
+        let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
+        (i >= 0.0 && j >= 0.0 && i < self.dw as f64 && j < self.dh as f64).then_some((i as usize, j as usize))
     }
 
     fn plot(&mut self, x: f64, y: f64, tone: u8, ink: u8) {
-        let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
-        let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
-        if i < 0.0 || j < 0.0 || i >= self.dw as f64 || j >= self.dh as f64 {
-            return;
+        if let Some((i, j)) = self.index(x, y) {
+            self.dot(i, j, tone, ink);
         }
-        self.dot(i as usize, j as usize, tone, ink);
     }
 
-    /// Como `plot`, pero solo si la celda está vacía: para lo que queda detrás.
+    /// Como `plot`, pero solo si su bloque está vacío: para lo que queda detrás.
     fn plot_under(&mut self, x: f64, y: f64, tone: u8) {
-        let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
-        let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
-        if i < 0.0 || j < 0.0 || i >= self.dw as f64 || j >= self.dh as f64 {
-            return;
+        if let Some((i, j)) = self.index(x, y) {
+            if !self.used[self.block(i, j)] {
+                self.dot(i, j, tone, INK_MAIN);
+            }
         }
-        let (i, j) = (i as usize, j as usize);
-        if self.cells[(j / 4) * self.cw + i / 2].bits == 0 {
-            self.dot(i, j, tone, INK_MAIN);
-        }
+    }
+
+    fn block(&self, i: usize, j: usize) -> usize {
+        (j / self.bh) * self.dw.div_ceil(self.bw) + i / self.bw
     }
 
     fn polar(&mut self, r: f64, a: f64, tone: u8, ink: u8) {
@@ -1228,13 +1316,14 @@ impl Grid {
     }
 
     fn dot(&mut self, i: usize, j: usize, tone: u8, ink: u8) {
-        const BITS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
-        let c = &mut self.cells[(j / 4) * self.cw + i / 2];
-        c.bits |= BITS[j % 4][i % 2];
-        if tone > c.tone || (tone == c.tone && ink > c.ink) {
-            c.tone = tone;
-            c.ink = ink;
+        let k = j * self.dw + i;
+        let old = self.dots[k];
+        let (ot, oi) = (old & 3, old >> 2);
+        if tone > ot || (tone == ot && ink > oi) {
+            self.dots[k] = tone | ink << 2;
         }
+        let b = self.block(i, j);
+        self.used[b] = true;
     }
 
     fn center(&self, i: usize, j: usize) -> (f64, f64) {

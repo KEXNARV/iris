@@ -96,7 +96,7 @@ fn draw_core(f: &mut Frame, area: Rect, app: &App, t: f64) {
         return;
     }
     let [ring, label] = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).areas(inner);
-    app.nucleo.draw(ring, f.buffer_mut());
+    core_draw(app, ring, f.buffer_mut());
     let (title, detail) = core_label(app, t, label.width as usize);
     let lines = vec![
         Line::from(Span::styled(title, Style::new().fg(app.nucleo.color()).bold())),
@@ -876,7 +876,7 @@ fn propuesta(f: &mut Frame, app: &App) {
             Constraint::Min(0),
         ])
         .areas(side);
-        app.nucleo.draw(core, f.buffer_mut());
+        core_draw(app, core, f.buffer_mut());
         let (title, detail) = core_label(app, t, label.width as usize);
         let buf = f.buffer_mut();
         put_center(buf, label, label.y, &spaced_title(&title), Style::new().fg(tone).bold());
@@ -1001,7 +1001,7 @@ fn cabina(f: &mut Frame, app: &App) {
             corners(buf, frame, Style::new().fg(theme::dim()), Some("NÚCLEO"));
         }
         let core = Rect { x: frame.x + 1, y: frame.y + 1, width: frame.width.saturating_sub(2), height: frame.height.saturating_sub(4) };
-        app.nucleo.draw(core, f.buffer_mut());
+        core_draw(app, core, f.buffer_mut());
         let (title, detail) = core_label(app, t, frame.width as usize / 2);
         let buf = f.buffer_mut();
         let ly = frame.bottom().saturating_sub(3);
@@ -1120,23 +1120,56 @@ fn cine(f: &mut Frame, app: &App) {
         width: area.width.saturating_sub(6),
         height: area.height.saturating_sub(6),
     };
+    // La respuesta que se abre para leer: la más nueva que se ve en el historial (con pgup se
+    // puede ir a una anterior). Se abre sola si terminó el turno y no cabe en el subtítulo.
+    let said: Vec<(usize, &crate::Msg)> = app
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none())
+        .collect();
+    let skip = (app.scroll / 5).min(said.len().saturating_sub(1));
+    let pick = said.iter().rev().skip(skip).find(|(_, m)| m.role == Role::Assistant).copied();
+    let long = pick.is_some_and(|(_, m)| wrap(&plain(&m.text), 60).len() > 4 || m.text.contains('\n'));
+    let reading = !hear && pick.is_some() && app.read_override.unwrap_or(!app.busy && long);
+    app.reading.set(reading);
+
     let rails = inner.width >= 110;
-    let center_w = if rails { (inner.width * 40 / 100).clamp(52, 64) } else { inner.width.min(72) };
-    let rail_w = if rails { ((inner.width - center_w) / 2).saturating_sub(4).min(44) } else { 0 };
+    let (center_w, rail_w) = if reading && rails {
+        // Leyendo, el centro se lleva el ancho y los rieles se angostan.
+        let rail = (inner.width / 5).clamp(30, 40);
+        (inner.width - 2 * (rail + 3), rail)
+    } else if rails {
+        let c = (inner.width * 40 / 100).clamp(52, 64);
+        (c, ((inner.width - c) / 2).saturating_sub(4).min(44))
+    } else {
+        (inner.width.min(if reading { 110 } else { 72 }), 0)
+    };
     let center = Rect { x: inner.x + (inner.width - center_w) / 2, width: center_w, ..inner };
 
-    // Centro: núcleo, estado, subtítulo y la orden.
+    // Centro: núcleo, estado, subtítulo (o la respuesta entera) y la orden.
     let caption_h = if hear { 6 } else { 5 };
-    let [core, label, caption, orden, keyrow] = Layout::vertical([
-        Constraint::Min(6),
-        Constraint::Length(2),
-        Constraint::Length(caption_h),
-        Constraint::Length(3),
-        Constraint::Length(1),
-    ])
-    .areas(center);
+    let [core, label, caption, orden, keyrow] = if reading {
+        Layout::vertical([
+            Constraint::Length(9.min(center.height / 4).max(4)),
+            Constraint::Length(2),
+            Constraint::Min(4),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(center)
+    } else {
+        Layout::vertical([
+            Constraint::Min(6),
+            Constraint::Length(2),
+            Constraint::Length(caption_h),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(center)
+    };
     let core_w = core.width.min(core.height * 2 + 8);
-    app.nucleo.draw(Rect { x: core.x + (core.width - core_w) / 2, width: core_w, ..core }, f.buffer_mut());
+    core_draw(app, Rect { x: core.x + (core.width - core_w) / 2, width: core_w, ..core }, f.buffer_mut());
     let (title, detail) = core_label(app, t, label.width as usize);
     {
         let buf = f.buffer_mut();
@@ -1144,8 +1177,12 @@ fn cine(f: &mut Frame, app: &App) {
         put_center(buf, label, label.y + 1, &detail, Style::new().fg(theme::faint()));
     }
 
+    if let (true, Some((i, m))) = (reading, pick) {
+        read_panel(f, caption, app, i, &m.text);
+    }
     // El subtítulo: lo último que se dijo, con el final a la vista mientras llega.
     let last = app.messages.iter().rev().find(|m| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none());
+    let last = if reading { None } else { last };
     let cap_lines = if hear { 2 } else { (caption.height as usize).saturating_sub(1) };
     if let Some(m) = last {
         let text = plain(&m.text);
@@ -1160,7 +1197,7 @@ fn cine(f: &mut Frame, app: &App) {
         for (i, l) in tail.iter().enumerate() {
             put_center(buf, caption, caption.y + 1 + i as u16, l, st);
         }
-    } else {
+    } else if !reading {
         let buf = f.buffer_mut();
         put_center(buf, caption, caption.y + 1, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold());
         put_center(buf, caption, caption.y + 2, "¿En qué trabajamos?", Style::new().fg(theme::accent()).bold());
@@ -1200,7 +1237,12 @@ fn cine(f: &mut Frame, app: &App) {
                 buf.set_line(keyrow.x + keyrow.width.saturating_sub(w) / 2, keyrow.y, &l, keyrow.width);
             }
             None => {
-                let items = hints_for(app, state);
+                let mut items = hints_for(app, state);
+                if reading {
+                    items.insert(0, ("^O", "núcleo"));
+                } else if long && !hear {
+                    items.insert(0, ("^O", "leer entera"));
+                }
                 let spans: Vec<(String, Style)> = items
                     .iter()
                     .enumerate()
@@ -1214,8 +1256,10 @@ fn cine(f: &mut Frame, app: &App) {
         }
     }
 
-    // En Cine no hay conversación dibujada que seleccionar con el mouse.
-    *app.view.borrow_mut() = Default::default();
+    // Sin respuesta abierta no hay texto dibujado que seleccionar con el mouse.
+    if !reading {
+        *app.view.borrow_mut() = Default::default();
+    }
 
     if rails {
         let left = Rect { x: inner.x, width: rail_w, height: orden.bottom() - inner.y, ..inner };
@@ -1227,6 +1271,42 @@ fn cine(f: &mut Frame, app: &App) {
     if !hear {
         draw_modal(f, Rect { y: orden.y, height: 1, ..center }, app);
     }
+}
+
+/// Cine leyendo: la respuesta entera con su markdown, desde el principio, desplazable.
+fn read_panel(f: &mut Frame, r: Rect, app: &App, i: usize, text: &str) {
+    let rows = app.md_rows(i, text, r.width.saturating_sub(2) as usize);
+    let h = r.height.saturating_sub(1) as usize;
+    let max_top = rows.len().saturating_sub(h);
+    // Otro mensaje: se lee desde arriba. El mismo creciendo (o desplazado): donde estaba.
+    if app.read_msg.get() != i {
+        app.read_msg.set(i);
+        app.read_top.set(0);
+    }
+    let top = app.read_top.get().min(max_top);
+    app.read_top.set(top);
+    let body = Rect { y: r.y + 1, height: h as u16, ..r };
+    let visible: Vec<Line> = rows.iter().skip(top).take(h).map(|(l, _, _)| l.clone()).collect();
+    f.render_widget(Paragraph::new(visible), body);
+
+    let buf = f.buffer_mut();
+    let dim = Style::new().fg(theme::dim());
+    put(buf, r.x, r.y, &"─".repeat(r.width as usize), dim, r.width);
+    if top > 0 {
+        put_right(buf, r.right().saturating_sub(1), r.y, " ↑ pgup ", Style::new().fg(theme::accent()));
+    }
+    if top < max_top {
+        let pct = (top + h) * 100 / rows.len().max(1);
+        put_right(buf, r.right().saturating_sub(1), r.bottom().saturating_sub(1), &format!(" ↓ pgdn · {pct}% "), Style::new().fg(theme::accent()));
+    }
+
+    // Para seleccionar y copiar con el mouse, como en la conversación del Clásico.
+    let mut view = crate::select::View { area: body, rows: Vec::with_capacity(rows.len()), first: top };
+    for (line, skip, cont) in &rows {
+        let text = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        view.rows.push(crate::select::Row { text, skip: *skip, cont: *cont });
+    }
+    *app.view.borrow_mut() = view;
 }
 
 /// Markdown aplanado para leerlo en una línea: sin asteriscos, comillas invertidas ni almohadillas.
@@ -1245,7 +1325,8 @@ fn plain(s: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-        .replace("**", "")
+        // Negrita y cursiva (** y *); los guiones bajos se quedan: son parte de nombres como ghub_palette.
+        .replace('*', "")
         .replace('`', "")
 }
 
@@ -1460,5 +1541,16 @@ fn greeting() -> &'static str {
         5..=11 => "Buenos días",
         12..=18 => "Buenas tardes",
         _ => "Buenas noches",
+    }
+}
+
+/// El núcleo: como imagen de puntos (Sixel) si se puede, y si no en braille. En modo imagen
+/// el texto deja el panel vacío y se anota dónde va; la app manda la imagen después del cuadro.
+/// Con un menú abierto va en braille: la imagen se pintaría encima del menú.
+fn core_draw(app: &App, r: Rect, buf: &mut Buffer) {
+    if app.sixel_cell.is_some() && app.modal.is_none() && r.width >= 6 && r.height >= 3 {
+        app.core_rect.set(Some(r));
+    } else {
+        app.nucleo.draw(r, buf);
     }
 }
