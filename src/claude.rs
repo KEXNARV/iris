@@ -17,7 +17,8 @@ pub enum ClaudeEvent {
     Text(String),
     /// `input` va entero: de ahí salen, por ejemplo, las tareas de TodoWrite.
     ToolUse { id: String, name: String, detail: String, input: Value },
-    ToolResult { id: String, is_error: bool },
+    /// `output`: lo que devolvió la herramienta (texto), para verlo con Ctrl+G.
+    ToolResult { id: String, is_error: bool, output: String },
     /// `window`: ventana de contexto del modelo, si el motor la informó.
     Done { cost: f64, secs: f64, is_error: bool, window: Option<u64> },
     /// Tokens de contexto que lleva la conversación (entrada + caché del último mensaje).
@@ -232,6 +233,7 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
             .map(|b| ClaudeEvent::ToolResult {
                 id: s(b, "tool_use_id"),
                 is_error: b["is_error"].as_bool().unwrap_or(false),
+                output: tool_output(&b["content"]),
             })
             .collect(),
         Some("control_request") if v["request"]["subtype"] == "can_use_tool" => vec![ClaudeEvent::Ask {
@@ -282,5 +284,29 @@ pub fn tool_detail(input: &Value) -> String {
         line.replace(&home, "~")
     } else {
         line.to_string()
+    }
+}
+
+/// El texto que devolvió una herramienta: viene como texto o como bloques; se corta en
+/// 40 000 caracteres para no guardar salidas enormes.
+fn tool_output(c: &Value) -> String {
+    let text = match c {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .map(|b| match b["type"].as_str() {
+                Some("text") => b["text"].as_str().unwrap_or("").to_string(),
+                Some("image") => "[imagen]".to_string(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    if text.chars().count() > 40_000 {
+        let cut: String = text.chars().take(40_000).collect();
+        format!("{cut}\n… (cortado)")
+    } else {
+        text
     }
 }

@@ -12,6 +12,8 @@ pub struct Teclado {
     sock: Option<UnixDatagram>,
     path: PathBuf,
     last: Option<State>,
+    /// Con varios JARVIS abiertos, ghubd muestra el que está haciendo algo: cada uno manda su pid.
+    id: u32,
     beat: Instant,
     level_at: Instant,
 }
@@ -23,6 +25,7 @@ impl Teclado {
             sock: UnixDatagram::unbound().ok(),
             path: dir.join("ghub-linux.sock"),
             last: None,
+            id: std::process::id(),
             beat: Instant::now(),
             level_at: Instant::now(),
         }
@@ -40,11 +43,11 @@ impl Teclado {
         if self.last != Some(state) || self.beat.elapsed() >= Duration::from_secs(1) {
             self.last = Some(state);
             self.beat = Instant::now();
-            self.send(&format!("state {}", format!("{state:?}").to_lowercase()));
+            self.send(&format!("state {} {}", self.id, format!("{state:?}").to_lowercase()));
         }
         if matches!(state, State::Listening | State::Speaking) && self.level_at.elapsed() >= Duration::from_millis(33) {
             self.level_at = Instant::now();
-            self.send(&format!("level {level:.3}"));
+            self.send(&format!("level {} {level:.3}", self.id));
         }
     }
 
@@ -54,6 +57,6 @@ impl Teclado {
             Event::Done | Event::Pass => "done",
             _ => return,
         };
-        self.send(&format!("event {name}"));
+        self.send(&format!("event {} {name}", self.id));
     }
 }

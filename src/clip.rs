@@ -14,6 +14,8 @@ pub struct Image {
     /// En base64, listo para el bloque `image` del mensaje.
     pub data: String,
     pub bytes: usize,
+    /// Los bytes tal cual, para la miniatura del chat.
+    pub raw: Vec<u8>,
 }
 
 impl Image {
@@ -80,7 +82,7 @@ fn image(raw: Vec<u8>, media: &str) -> Result<Image> {
         bail!("el portapapeles está vacío");
     }
     let (raw, media) = if raw.len() > MAX_BYTES { (shrink(&raw)?, "image/jpeg") } else { (raw, media) };
-    Ok(Image { media: media.into(), bytes: raw.len(), data: crate::select::base64(&raw) })
+    Ok(Image { media: media.into(), bytes: raw.len(), data: crate::select::base64(&raw), raw })
 }
 
 /// Achica con ImageMagick a JPEG de 2000 px de lado como máximo.

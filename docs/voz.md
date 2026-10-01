@@ -37,3 +37,26 @@ listo…). Sin `ghubd`, los mensajes se pierden sin más.
 
 En foot el núcleo se dibuja con Sixel, con puntos más finos que el braille. `JARVIS_SIXEL=0`
 vuelve al braille; `JARVIS_DOT` cambia la separación de los puntos en píxeles (4 por defecto).
+
+## JARVIS flotante (Hyprland)
+
+`jarvis --flotante` es una ventana para órdenes rápidas: al aparecer escucha sola, ejecuta,
+contesta en voz alta en una frase y se esconde. Con la config de Omarchy en Lua:
+
+```lua
+-- hyprland.lua
+o.window({ class = "jarvis-flotante" }, {
+  float = true, center = true, size = { 1100, 650 }, workspace = "special:jarvis silent",
+})
+-- bindings.lua
+o.bind("SUPER + ALT + C", "JARVIS flotante", hl.dsp.workspace.toggle_special("jarvis"))
+-- autostart.lua (foot directo: omarchy-launch-tui no le pasa el --app-id)
+o.exec_on_start("cd ~ && setsid foot --app-id=jarvis-flotante jarvis --flotante --dangerously-skip-permissions")
+```
+
+## Teclas
+
+- Ctrl+T: la conversación entera (en Cine). Ctrl+O: abrir o cerrar la respuesta larga.
+- Ctrl+G: qué hizo cada herramienta, con su entrada y su salida completas.
+- ← → Ctrl+← → Inicio Fin Ctrl+A/E/W/K/U para editar; Shift+Enter, nueva línea; ↑ ↓, lo que enviaste.
+- Ctrl+V pega una imagen; en foot se ve en miniatura en el chat.

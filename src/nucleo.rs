@@ -78,8 +78,11 @@ pub struct Signals {
 /// Motas de la corona, repartidas en tres capas de profundidad.
 const MOTES: usize = 24;
 
-const GREEN: [f64; 3] = [90.0, 230.0, 150.0];
-const RED: [f64; 3] = [255.0, 90.0, 90.0];
+/// Fijos, como en el teclado: escuchando y transcribiendo no dependen del tema.
+const YELLOW: [f64; 3] = [255.0, 210.0, 0.0];
+const PURPLE: [f64; 3] = [150.0, 0.0, 255.0];
+const GREEN: [f64; 3] = [40.0, 235.0, 90.0];
+const RED: [f64; 3] = [255.0, 40.0, 40.0];
 const WARM: [f64; 3] = [255.0, 170.0, 40.0];
 
 impl State {
@@ -113,39 +116,21 @@ impl State {
     /// Por familias: presencia en el acento del tema, «tu turno» en ámbar, la mente en azules y
     /// violetas, las herramientas del verde al rosa. Dentro de cada familia el movimiento
     /// es lo que distingue.
+    /// Los mismos colores que el teclado (ghubd): escuchar en amarillo, transcribir en morado,
+    /// y todo lo demás en el primario del tema, más claro o más oscuro. Los estados se
+    /// distinguen por el movimiento, no por el color.
     fn rgb(self) -> [f64; 3] {
-        let c = self.base_rgb();
-        if self.is_presence() { c } else { apart(c, crate::theme::accent_rgb()) }
-    }
-
-    fn is_presence(self) -> bool {
-        matches!(self, State::Booting | State::Idle | State::Sleeping | State::Typing | State::Speaking)
-    }
-
-    fn base_rgb(self) -> [f64; 3] {
         use State::*;
         use crate::theme::{accent_darker, accent_rgb, accent_toward_white};
         match self {
-            Booting | Idle => accent_rgb(),
+            Listening => YELLOW,
+            NoVoice => mix(YELLOW, [0.0; 3], 0.35),
+            Transcribing => PURPLE,
             Sleeping => accent_darker(0.43),
             Typing => accent_toward_white(0.35),
-            Speaking => accent_toward_white(0.7),
-            Listening => [255.0, 170.0, 40.0],
-            NoVoice => [205.0, 135.0, 70.0],
-            Asking => [255.0, 205.0, 60.0],
-            Transcribing => [210.0, 110.0, 255.0],
-            Thinking => [90.0, 150.0, 255.0],
-            Planning => [125.0, 125.0, 255.0],
-            Delegating => [175.0, 140.0, 255.0],
-            Compacting => [160.0, 165.0, 205.0],
-            Searching => [60.0, 215.0, 165.0],
-            Reading => [70.0, 220.0, 215.0],
-            Editing => [175.0, 235.0, 80.0],
-            Testing => [120.0, 235.0, 120.0],
-            Running => [235.0, 225.0, 90.0],
-            Git => [255.0, 130.0, 70.0],
-            Web => [255.0, 110.0, 170.0],
+            Speaking => accent_toward_white(0.5),
             Offline => [90.0, 110.0, 125.0],
+            _ => accent_rgb(),
         }
     }
 
@@ -1350,53 +1335,6 @@ fn mote_speed(z: f64) -> f64 {
     0.25 + 2.4 * z * z
 }
 
-/// Si un color fijo cae demasiado cerca del acento del tema (Pensando azul con un tema azul),
-/// se gira su tono hasta separarlo: cada estado tiene que seguir leyéndose distinto de En espera.
-fn apart(c: [f64; 3], accent: [f64; 3]) -> [f64; 3] {
-    let (h, s, v) = hsv(c);
-    let (ha, sa, _) = hsv(accent);
-    if s < 0.15 || sa < 0.15 {
-        return c; // grises: no hay tono que comparar
-    }
-    let d = (h - ha + 540.0) % 360.0 - 180.0; // diferencia con signo, en grados
-    if d.abs() >= 40.0 {
-        return c;
-    }
-    let h = ha + if d >= 0.0 { 40.0 } else { -40.0 };
-    from_hsv(h.rem_euclid(360.0), s, v)
-}
-
-fn hsv(c: [f64; 3]) -> (f64, f64, f64) {
-    let [r, g, b] = c.map(|x| x / 255.0);
-    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-    let d = max - min;
-    let h = if d == 0.0 {
-        0.0
-    } else if max == r {
-        60.0 * ((g - b) / d).rem_euclid(6.0)
-    } else if max == g {
-        60.0 * ((b - r) / d + 2.0)
-    } else {
-        60.0 * ((r - g) / d + 4.0)
-    };
-    (h, if max == 0.0 { 0.0 } else { d / max }, max)
-}
-
-fn from_hsv(h: f64, s: f64, v: f64) -> [f64; 3] {
-    let c = v * s;
-    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
-    let m = v - c;
-    let (r, g, b) = match (h / 60.0) as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    [(r + m) * 255.0, (g + m) * 255.0, (b + m) * 255.0]
-}
-
 fn mix(a: [f64; 3], b: [f64; 3], f: f64) -> [f64; 3] {
     [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]
 }
@@ -1475,18 +1413,6 @@ mod tests {
                 assert!(lit > 0, "{s:?} a {w}×{h} no dibujó nada");
             }
         }
-    }
-
-    #[test]
-    fn los_estados_se_separan_del_acento() {
-        let azul = [69.0, 123.0, 255.0];
-        let pensando = [90.0, 150.0, 255.0];
-        let (h, _, _) = hsv(apart(pensando, azul));
-        let (ha, _, _) = hsv(azul);
-        assert!(((h - ha + 540.0) % 360.0 - 180.0).abs() >= 39.9);
-        // Lo que ya está lejos no se toca.
-        let verde = [120.0, 235.0, 120.0];
-        assert_eq!(apart(verde, azul), verde);
     }
 
     #[test]

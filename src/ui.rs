@@ -27,6 +27,136 @@ pub fn draw(f: &mut Frame, app: &App) {
         Estilo::Cine if fits(64, 22) => cine(f, app),
         _ => clasico(f, app),
     }
+    if app.tools_view.is_some() {
+        tools_overlay(f, app);
+    }
+}
+
+/// Ctrl+G: la lista de herramientas a la izquierda y la elegida entera a la derecha.
+fn tools_overlay(f: &mut Frame, app: &App) {
+    use crate::ToolStatus;
+    let Some((sel, scroll)) = app.tools_view else { return };
+    let a = f.area();
+    let area = Rect { x: a.x + 2, y: a.y + 1, width: a.width.saturating_sub(4), height: a.height.saturating_sub(2) };
+    f.render_widget(Clear, area);
+    let block = panel("HERRAMIENTAS · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let list_w = (inner.width / 3).clamp(28, 44);
+    let [list, _, detail] =
+        Layout::horizontal([Constraint::Length(list_w), Constraint::Length(2), Constraint::Min(20)]).areas(inner);
+
+    // La lista, con la elegida siempre a la vista.
+    let n = app.activity.len();
+    let sel = sel.min(n.saturating_sub(1));
+    let h = list.height as usize;
+    let first = (sel + 1).saturating_sub(h);
+    let rows: Vec<Line> = app
+        .activity
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(h)
+        .map(|(i, t)| {
+            let (icon, col) = match t.status {
+                ToolStatus::Running => ("◐", WARM),
+                ToolStatus::Ok => ("✓", GREEN),
+                ToolStatus::Err => ("✗", RED),
+            };
+            let secs = t.took.unwrap_or_else(|| t.started.elapsed()).as_secs_f64();
+            let label = truncate(&format!("{} {}", t.name, tool_summary(t)), (list.width as usize).saturating_sub(10));
+            let st = if i == sel { Style::new().fg(Color::Black).bg(theme::accent()) } else { Style::new().fg(theme::text()) };
+            Line::from(vec![
+                Span::styled(format!("{icon} "), if i == sel { st } else { Style::new().fg(col) }),
+                Span::styled(format!("{label:<w$}", w = (list.width as usize).saturating_sub(9)), st),
+                Span::styled(format!("{secs:>5.1}s"), if i == sel { st } else { Style::new().fg(theme::dim()) }),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(rows), list);
+
+    // El detalle de la elegida.
+    let Some(t) = app.activity.get(sel) else { return };
+    let w = detail.width as usize;
+    let mut lines: Vec<Line> = vec![];
+    let head = |s: &str| Line::from(Span::styled(s.to_string(), Style::new().fg(theme::accent()).bold()));
+    let (state, col) = match t.status {
+        ToolStatus::Running => ("en curso", WARM),
+        ToolStatus::Ok => ("terminó bien", GREEN),
+        ToolStatus::Err => ("terminó con error", RED),
+    };
+    let secs = t.took.unwrap_or_else(|| t.started.elapsed()).as_secs_f64();
+    lines.push(Line::from(vec![
+        Span::styled(t.name.clone(), Style::new().fg(theme::text()).bold()),
+        Span::styled(format!("  ·  {state}  ·  {secs:.1}s"), Style::new().fg(col)),
+    ]));
+    lines.push(Line::default());
+    let push_wrapped = |lines: &mut Vec<Line>, text: &str, st: Style, prefix: &str| {
+        for raw in text.lines() {
+            let raw = raw.replace('\t', "    ");
+            for piece in wrap(&raw, w.saturating_sub(prefix.chars().count()).max(10)) {
+                lines.push(Line::from(Span::styled(format!("{prefix}{piece}"), st)));
+            }
+            if raw.is_empty() {
+                lines.push(Line::from(Span::styled(prefix.to_string(), st)));
+            }
+        }
+    };
+    let s = |k: &str| t.input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    lines.push(head("ENTRADA"));
+    match t.name.as_str() {
+        "Bash" => {
+            if !s("description").is_empty() {
+                push_wrapped(&mut lines, &s("description"), Style::new().fg(theme::faint()), "");
+            }
+            push_wrapped(&mut lines, &s("command"), Style::new().fg(GREEN), "$ ");
+        }
+        "Edit" | "MultiEdit" => {
+            push_wrapped(&mut lines, &s("file_path"), Style::new().fg(theme::faint()), "");
+            let edits: Vec<(String, String)> = match t.input.get("edits").and_then(|e| e.as_array()) {
+                Some(es) => es
+                    .iter()
+                    .map(|e| {
+                        let g = |k: &str| e.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        (g("old_string"), g("new_string"))
+                    })
+                    .collect(),
+                None => vec![(s("old_string"), s("new_string"))],
+            };
+            for (old, new) in edits {
+                lines.push(Line::default());
+                push_wrapped(&mut lines, &old, Style::new().fg(RED), "- ");
+                push_wrapped(&mut lines, &new, Style::new().fg(GREEN), "+ ");
+            }
+        }
+        "Write" => {
+            push_wrapped(&mut lines, &s("file_path"), Style::new().fg(theme::faint()), "");
+            push_wrapped(&mut lines, &s("content"), Style::new().fg(GREEN), "+ ");
+        }
+        _ => {
+            let pretty = serde_json::to_string_pretty(&t.input).unwrap_or_default();
+            push_wrapped(&mut lines, &pretty, Style::new().fg(theme::faint()), "");
+        }
+    }
+    lines.push(Line::default());
+    lines.push(head("SALIDA"));
+    if t.output.trim().is_empty() {
+        let none = if t.status == ToolStatus::Running { "todavía corriendo…" } else { "(sin salida)" };
+        lines.push(Line::from(Span::styled(none, Style::new().fg(theme::dim()))));
+    } else {
+        let st = Style::new().fg(if t.status == ToolStatus::Err { RED } else { theme::text() });
+        push_wrapped(&mut lines, &t.output, st, "");
+    }
+    let dh = detail.height as usize;
+    let max = lines.len().saturating_sub(dh);
+    let top = scroll.min(max);
+    let shown: Vec<Line> = lines.into_iter().skip(top).take(dh).collect();
+    f.render_widget(Paragraph::new(shown), detail);
+    if top < max {
+        let tag = Span::styled(format!(" ↓ pgdn · {}% ", (top + dh) * 100 / (max + dh).max(1)), Style::new().fg(Color::Black).bg(theme::dim()));
+        let r = Rect { y: detail.bottom().saturating_sub(1), height: 1, ..detail };
+        f.render_widget(Paragraph::new(tag).alignment(Alignment::Right), r);
+    }
 }
 
 fn listening(state: State) -> bool {
@@ -271,6 +401,18 @@ fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'static>, usize, bo
                         }
                     }
                 }
+                // Las imágenes que mandaste: se reserva su lugar y la app las dibuja encima.
+                if let Some(cell) = app.sixel_cell {
+                    let x = if voz == Voz::Guion { GUION } else { pad } as u16;
+                    for t in &m.images {
+                        let (cols, h) = t.cells(cell, (width as u16).saturating_sub(2));
+                        rows.push(blank());
+                        app.thumb_slots.borrow_mut().push((rows.len(), x, cols, h, t.clone()));
+                        for _ in 0..h {
+                            rows.push(blank());
+                        }
+                    }
+                }
             }
             Role::Assistant => {
                 rows.push(blank());
@@ -309,9 +451,76 @@ fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'static>, usize, bo
                     rows.push((Line::from(Span::styled(format!("{indent}! {l}"), Style::new().fg(RED))), pad + 2, cont));
                 }
             }
+            Role::Tool => {
+                let Some(a) = m.tool.and_then(|t| app.activity.get(t)) else { continue };
+                rows.extend(tool_rows(a, &indent, pad, width));
+            }
         }
     }
     rows
+}
+
+/// Una herramienta en el chat: su línea (estado, nombre, qué hizo, cuánto tardó) y, para
+/// Bash, las primeras líneas de la salida. El detalle completo, con Ctrl+G.
+fn tool_rows(a: &crate::Activity, indent: &str, pad: usize, width: usize) -> Vec<(Line<'static>, usize, bool)> {
+    use crate::ToolStatus;
+    let (icon, col) = match a.status {
+        ToolStatus::Running => ("◐", WARM),
+        ToolStatus::Ok => ("✓", GREEN),
+        ToolStatus::Err => ("✗", RED),
+    };
+    let secs = a.took.unwrap_or_else(|| a.started.elapsed()).as_secs_f64();
+    let what = tool_summary(a);
+    let room = width.saturating_sub(a.name.chars().count() + 12);
+    let mut out = vec![(
+        Line::from(vec![
+            Span::raw(format!("{indent}")),
+            Span::styled(format!("{icon} "), Style::new().fg(col)),
+            Span::styled(a.name.clone(), Style::new().fg(theme::text()).bold()),
+            Span::styled(format!("  {}", truncate(&what, room)), Style::new().fg(theme::faint())),
+            Span::styled(format!("  {secs:.1}s"), Style::new().fg(theme::dim())),
+        ]),
+        pad,
+        false,
+    )];
+    // Bash: un vistazo a la salida (o al error).
+    if a.name == "Bash" && !a.output.trim().is_empty() {
+        let lines: Vec<&str> = a.output.lines().filter(|l| !l.trim().is_empty()).collect();
+        for (k, l) in lines.iter().take(3).enumerate() {
+            let mark = if k == 0 { "⎿ " } else { "  " };
+            let st = Style::new().fg(if a.status == ToolStatus::Err { RED } else { theme::dim() });
+            out.push((Line::from(Span::styled(format!("{indent}  {mark}{}", truncate(l, width.saturating_sub(6))), st)), pad + 4, false));
+        }
+        if lines.len() > 3 {
+            out.push((
+                Line::from(Span::styled(format!("{indent}    … {} líneas más · ctrl+g", lines.len() - 3), Style::new().fg(theme::dim()))),
+                usize::MAX,
+                false,
+            ));
+        }
+    }
+    out
+}
+
+/// Lo que hizo una herramienta, en una línea: el comando, el archivo y el cambio, lo buscado…
+pub(crate) fn tool_summary(a: &crate::Activity) -> String {
+    let s = |k: &str| a.input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let short = |p: String| if home.is_empty() { p } else { p.replace(&home, "~") };
+    match a.name.as_str() {
+        "Bash" => s("command").lines().next().unwrap_or("").to_string(),
+        "Edit" | "MultiEdit" => {
+            let (minus, plus) = (s("old_string").lines().count(), s("new_string").lines().count());
+            format!("{}  −{minus} +{plus}", short(s("file_path")))
+        }
+        "Write" => format!("{}  {} líneas", short(s("file_path")), s("content").lines().count()),
+        "Read" => short(s("file_path")),
+        "Grep" => format!("«{}» {}", s("pattern"), short(s("path"))),
+        "Glob" => s("pattern"),
+        "WebFetch" => s("url"),
+        "WebSearch" => s("query"),
+        _ => a.detail.clone(),
+    }
 }
 
 /// Dibuja las filas que caben (respetando el desplazamiento), pinta la selección y deja la
@@ -332,10 +541,26 @@ fn render_chat(f: &mut Frame, inner: Rect, app: &App, rows: Vec<(Line<'static>, 
     }
     f.render_widget(Paragraph::new(visible), inner);
 
+    // Las miniaturas que entran enteras en lo visible (las cortadas se ven al desplazar).
+    // Con un menú o la lista de comandos encima, ninguna: se pintarían sobre el menú.
+    let menu = app.modal.is_some() || app.tools_view.is_some() || !crate::commands::matches(&app.commands, &app.input).is_empty();
+    if !menu {
+        let end = start + h_rows(inner);
+        for (row, x, cols, h, t) in app.thumb_slots.borrow().iter() {
+            // La parte de la imagen que cae en lo visible (puede estar cortada arriba o abajo).
+            let (top, bottom) = ((*row).max(start), (row + *h as usize).min(end));
+            if top < bottom {
+                let r = Rect { x: inner.x + x, y: inner.y + (top - start) as u16, width: *cols, height: (bottom - top) as u16 };
+                let crop = ((top - row) as u16, (bottom - row) as u16, *h);
+                app.thumb_targets.borrow_mut().push((r, t.clone(), crop));
+            }
+        }
+    }
+
     if let Some(sel) = &app.sel {
         let buf = f.buffer_mut();
         for (x, y) in sel.cells(&view) {
-            buf[(x, y)].set_bg(Color::Rgb(20, 70, 100)).set_fg(Color::White);
+            buf[(x, y)].set_bg(theme::dim()).set_fg(Color::White);
         }
     }
     *app.view.borrow_mut() = view;
@@ -397,13 +622,16 @@ fn input_spans(app: &App, state: State, t: f64, w: usize, accent: Color) -> Vec<
         spans.push(Span::styled(chip, Style::new().fg(Color::Black).bg(accent)));
         spans.push(Span::raw(" "));
     }
-    let w = w.saturating_sub(used + 1);
-    // Los saltos de línea pegados se ven como «↵»; se envían tal cual.
-    let flat = app.input.replace('\n', "↵");
-    let shown: String = {
-        let n = flat.chars().count();
-        flat.chars().skip(n.saturating_sub(w)).collect()
-    };
+    let w = w.saturating_sub(used + 1).max(4);
+    // Los saltos de línea se ven como «↵»; se envían tal cual. La ventana de texto se corre
+    // para que el cursor siempre quede a la vista.
+    let chars: Vec<char> = app.input.chars().map(|c| if c == '\n' { '↵' } else { c }).collect();
+    let cur = app.cur.min(chars.len());
+    let start = if chars.len() < w { 0 } else { (cur + 1).saturating_sub(w).min(chars.len() + 1 - w) };
+    let end = (start + w).min(chars.len());
+    let before: String = chars[start..cur].iter().collect();
+    let at: Option<char> = chars.get(cur).copied().filter(|_| cur < end);
+    let after: String = chars.get(cur + 1..end).map(|c| c.iter().collect()).unwrap_or_default();
     if app.input.is_empty() && !app.images.is_empty() {
         spans.push(Span::styled(cursor, Style::new().fg(accent)));
         spans.push(Span::styled("escribe algo para acompañarla, o enter · ⌫ quita", Style::new().fg(theme::dim())));
@@ -418,8 +646,13 @@ fn input_spans(app: &App, state: State, t: f64, w: usize, accent: Color) -> Vec<
         };
         spans.push(Span::styled(hint, Style::new().fg(theme::dim())));
     } else {
-        spans.push(Span::styled(shown, Style::new().fg(theme::text())));
-        spans.push(Span::styled(cursor, Style::new().fg(accent)));
+        spans.push(Span::styled(before, Style::new().fg(theme::text())));
+        match at {
+            // En medio del texto: un bloque sobre la letra, fijo (si parpadeara, la letra se perdería).
+            Some(c) => spans.push(Span::styled(c.to_string(), Style::new().fg(Color::Black).bg(accent))),
+            None => spans.push(Span::styled(cursor, Style::new().fg(accent))),
+        }
+        spans.push(Span::styled(after, Style::new().fg(theme::text())));
     }
     spans
 }
@@ -1114,6 +1347,35 @@ fn cine(f: &mut Frame, app: &App) {
         put_right(buf, area.right().saturating_sub(4), bot, &right, Style::new().fg(theme::faint()));
     }
 
+    // ^T: la conversación entera como una cortina, con su markdown; la orden sigue abajo.
+    if app.transcript {
+        app.reading.set(false);
+        let body = Rect {
+            x: area.x + 2,
+            y: area.y + 3,
+            width: area.width.saturating_sub(4),
+            height: area.height.saturating_sub(9),
+        };
+        draw_chat(f, body, app);
+        let line = Rect { x: area.x + 4, y: body.bottom() + 1, width: area.width.saturating_sub(8), height: 1 };
+        let mut spans = vec![Span::styled("› ", Style::new().fg(theme::accent()).bold())];
+        spans.extend(input_spans(app, state, t, line.width.saturating_sub(2) as usize, theme::accent()));
+        f.render_widget(Paragraph::new(Line::from(spans)), line);
+        let hint = Line::from(vec![
+            Span::styled("^T", Style::new().fg(theme::accent())),
+            Span::styled(" o ", Style::new().fg(theme::faint())),
+            Span::styled("esc", Style::new().fg(theme::accent())),
+            Span::styled(" vuelve a Cine   ", Style::new().fg(theme::faint())),
+            Span::styled("pgup/pgdn", Style::new().fg(theme::accent())),
+            Span::styled(" recorre   ", Style::new().fg(theme::faint())),
+            Span::styled("arrastra", Style::new().fg(theme::accent())),
+            Span::styled(" para copiar", Style::new().fg(theme::faint())),
+        ]);
+        let hr = Rect { y: line.y + 1, ..line };
+        f.render_widget(Paragraph::new(hint).alignment(Alignment::Center), hr);
+        return;
+    }
+
     let inner = Rect {
         x: area.x + 3,
         y: area.y + 3,
@@ -1180,6 +1442,7 @@ fn cine(f: &mut Frame, app: &App) {
     if let (true, Some((i, m))) = (reading, pick) {
         read_panel(f, caption, app, i, &m.text);
     }
+    let mut subtitle: Option<crate::select::View> = None;
     // El subtítulo: lo último que se dijo, con el final a la vista mientras llega.
     let last = app.messages.iter().rev().find(|m| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none());
     let last = if reading { None } else { last };
@@ -1197,6 +1460,14 @@ fn cine(f: &mut Frame, app: &App) {
         for (i, l) in tail.iter().enumerate() {
             put_center(buf, caption, caption.y + 1 + i as u16, l, st);
         }
+        // El subtítulo también se selecciona y se copia con el mouse.
+        let area = Rect { y: caption.y + 1, height: tail.len() as u16, ..caption };
+        let mut view = crate::select::View { area, rows: Vec::with_capacity(tail.len()), first: 0 };
+        for (i, l) in tail.iter().enumerate() {
+            let pad = (caption.width as usize).saturating_sub(l.width().min(caption.width as usize)) / 2;
+            view.rows.push(crate::select::Row { text: format!("{}{l}", " ".repeat(pad)), skip: pad, cont: i > 0 });
+        }
+        subtitle = Some(view);
     } else if !reading {
         let buf = f.buffer_mut();
         put_center(buf, caption, caption.y + 1, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold());
@@ -1256,9 +1527,17 @@ fn cine(f: &mut Frame, app: &App) {
         }
     }
 
-    // Sin respuesta abierta no hay texto dibujado que seleccionar con el mouse.
+    // Lo que se puede seleccionar con el mouse: la respuesta abierta (ya puesta por
+    // read_panel) o, si no, el subtítulo.
     if !reading {
-        *app.view.borrow_mut() = Default::default();
+        *app.view.borrow_mut() = subtitle.unwrap_or_default();
+    }
+    if let Some(sel) = &app.sel {
+        let view = app.view.borrow();
+        let buf = f.buffer_mut();
+        for (x, y) in sel.cells(&view) {
+            buf[(x, y)].set_bg(theme::dim()).set_fg(Color::White);
+        }
     }
 
     if rails {
@@ -1371,9 +1650,9 @@ fn cine_history(buf: &mut Buffer, r: Rect, app: &App) {
         }
         y = top.saturating_sub(2);
     }
-    let x = put(buf, r.x, r.bottom() - 1, "pgup/pgdn", Style::new().fg(theme::accent()), 9);
-    let what = if skip > 0 { format!("recorrer · {skip} más recientes ocultos") } else { "recorrer".into() };
-    put(buf, x + 1, r.bottom() - 1, &what, Style::new().fg(theme::dim()), r.width.saturating_sub(10));
+    let x = put(buf, r.x, r.bottom() - 1, "^T", Style::new().fg(theme::accent()), 2);
+    let what = if skip > 0 { format!("ver todo · {skip} más recientes ocultos") } else { "ver todo".into() };
+    put(buf, x + 1, r.bottom() - 1, &what, Style::new().fg(theme::dim()), r.width.saturating_sub(3));
 }
 
 /// Riel derecho: lo que está haciendo ahora, el turno, la línea de tiempo, el plan y la cola.
@@ -1548,9 +1827,13 @@ fn greeting() -> &'static str {
 /// el texto deja el panel vacío y se anota dónde va; la app manda la imagen después del cuadro.
 /// Con un menú abierto va en braille: la imagen se pintaría encima del menú.
 fn core_draw(app: &App, r: Rect, buf: &mut Buffer) {
-    if app.sixel_cell.is_some() && app.modal.is_none() && r.width >= 6 && r.height >= 3 {
+    if app.sixel_cell.is_some() && app.modal.is_none() && app.tools_view.is_none() && r.width >= 6 && r.height >= 3 {
         app.core_rect.set(Some(r));
     } else {
         app.nucleo.draw(r, buf);
     }
+}
+
+fn h_rows(r: Rect) -> usize {
+    r.height as usize
 }

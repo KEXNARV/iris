@@ -2,9 +2,11 @@ mod ask;
 mod claude;
 mod clip;
 mod commands;
+mod entrada;
 mod habla;
 mod estilo;
 mod md;
+mod miniatura;
 mod nucleo;
 mod select;
 mod sessions;
@@ -46,6 +48,8 @@ pub enum Role {
     Assistant,
     System,
     Error,
+    /// Una herramienta que usó, en su lugar de la conversación (`Msg::tool` dice cuál).
+    Tool,
 }
 
 pub struct Msg {
@@ -53,6 +57,10 @@ pub struct Msg {
     pub text: String,
     /// Escrito a mitad de un turno y todavía sin leer: el id que el motor repetirá al tomarlo.
     pub waiting: Option<String>,
+    /// Las imágenes que mandaste con este mensaje, para verlas en el chat.
+    pub images: Vec<std::rc::Rc<miniatura::Thumb>>,
+    /// Para `Role::Tool`: qué actividad es (índice en `App::activity`).
+    pub tool: Option<usize>,
 }
 
 #[derive(PartialEq)]
@@ -69,6 +77,9 @@ pub struct Activity {
     pub status: ToolStatus,
     pub started: Instant,
     pub took: Option<Duration>,
+    /// La entrada completa (el comando, el archivo y el cambio…) y lo que devolvió.
+    pub input: serde_json::Value,
+    pub output: String,
 }
 
 #[derive(PartialEq)]
@@ -152,6 +163,18 @@ pub struct App {
     md_cache: std::cell::RefCell<Vec<Option<(usize, usize, Vec<md::Row>)>>>,
     /// Imágenes pegadas que se van con el próximo mensaje.
     pub images: Vec<clip::Image>,
+    /// Dónde está el cursor en la orden (en caracteres), y lo que ya enviaste.
+    pub cur: usize,
+    historial: entrada::Historial,
+    /// Modo flotante (`--flotante`): aparece con un atajo, escucha sola y se esconde al terminar.
+    pub flotante: bool,
+    /// La ventana tiene el foco (la terminal avisa al ganarlo y perderlo).
+    pub focused: bool,
+    /// Escuchando sin espacio (flotante): se envía solo al callarte. `heard`: ya dijiste algo.
+    hands_free: Option<Instant>,
+    heard: bool,
+    /// Cuándo esconderse, si no pasa nada antes.
+    hide_at: Option<Instant>,
     /// La voz de JARVIS (Kokoro) y el que arma las frases de la respuesta para decirlas.
     habla: habla::Habla,
     lector: habla::Lector,
@@ -166,6 +189,10 @@ pub struct App {
     pub estilo: estilo::Estilo,
     /// Cine: la respuesta abierta entera en el centro (lo decide el dibujo, que sabe si cabe).
     pub reading: std::cell::Cell<bool>,
+    /// Cine: la conversación entera desplegada como una cortina (^T).
+    pub transcript: bool,
+    /// Ctrl+G: el visor de herramientas abierto (cuál está elegida y cuánto se bajó su detalle).
+    pub tools_view: Option<(usize, usize)>,
     /// ^O fuerza leer o volver al núcleo; un mensaje nuevo devuelve la decisión al dibujo.
     pub read_override: Option<bool>,
     /// Primera fila visible de la respuesta abierta, y qué mensaje era (al cambiar, vuelve arriba).
@@ -175,6 +202,12 @@ pub struct App {
     /// Sixel (foot); `None` es braille. Dónde va este cuadro, y dónde quedó la última imagen.
     pub sixel_cell: Option<(u16, u16)>,
     pub core_rect: std::cell::Cell<Option<ratatui::layout::Rect>>,
+    /// Miniaturas del chat: dónde va cada una en este cuadro (lo llena el dibujo del chat) y
+    /// cuáles quedaron dibujadas (posición e identidad), para redibujar solo si se movieron.
+    pub thumb_slots: std::cell::RefCell<Vec<(usize, u16, u16, u16, std::rc::Rc<miniatura::Thumb>)>>,
+    /// (dónde, cuál, (desde, hasta, alto total) en filas de celda: el recorte visible).
+    pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<miniatura::Thumb>, (u16, u16, u16))>>,
+    thumbs_shown: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))>,
     sixel_shown: Option<ratatui::layout::Rect>,
     /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
     pub turn_from: usize,
@@ -247,7 +280,7 @@ impl App {
 
     fn push(&mut self, role: Role, text: impl Into<String>) {
         self.assistant_open = false;
-        self.messages.push(Msg { role, text: text.into(), waiting: None });
+        self.messages.push(Msg { role, text: text.into(), waiting: None, images: vec![], tool: None });
         self.scroll = 0;
     }
 
@@ -297,10 +330,16 @@ impl App {
                     status: ToolStatus::Running,
                     started: Instant::now(),
                     took: None,
+                    input,
+                    output: String::new(),
                 });
+                // En el chat, en su lugar de la conversación.
+                let idx = self.activity.len() - 1;
+                self.messages.push(Msg { role: Role::Tool, text: String::new(), waiting: None, images: vec![], tool: Some(idx) });
             }
-            ClaudeEvent::ToolResult { id, is_error } => {
+            ClaudeEvent::ToolResult { id, is_error, output } => {
                 if let Some(a) = self.activity.iter_mut().rev().find(|a| a.id == id) {
+                    a.output = output;
                     a.status = if is_error { ToolStatus::Err } else { ToolStatus::Ok };
                     a.took = Some(a.started.elapsed());
                     let kind = nucleo::tool_state(&a.name, &a.detail);
@@ -315,6 +354,21 @@ impl App {
                 self.thinking = true;
             }
             ClaudeEvent::Done { cost, secs, is_error, window } => {
+                if self.flotante {
+                    self.hide_at = Some(Instant::now() + Duration::from_secs(4));
+                } else if !self.focused && !self.interrupted {
+                    // En otra ventana: que se entere de que terminó.
+                    let first = self
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == Role::Assistant)
+                        .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
+                        .unwrap_or("")
+                        .replace(['*', '`', '#'], "");
+                    let title = if is_error { "JARVIS: el turno terminó con error" } else { "JARVIS terminó" };
+                    notify(title, &first);
+                }
                 if std::mem::take(&mut self.speak_turn) {
                     for frase in self.lector.finish() {
                         self.habla.say(&frase);
@@ -342,6 +396,9 @@ impl App {
                 }
             }
             ClaudeEvent::Ask { request_id, tool, input } => {
+                if !self.focused && !self.flotante {
+                    notify("JARVIS te pregunta algo", "Necesita tu respuesta para seguir.");
+                }
                 self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input)));
             }
             ClaudeEvent::Taken(id) => {
@@ -377,17 +434,25 @@ impl App {
 
 fn main() -> Result<()> {
     voice::prefer_discrete_gpu();
-    let extra: Vec<String> = std::env::args().skip(1).collect();
+    let mut extra: Vec<String> = std::env::args().skip(1).collect();
     if extra.first().map(String::as_str) == Some("--transcribe") {
         return voice::transcribe_file(extra.get(1).map_or("", String::as_str));
+    }
+    // --flotante: la ventana que se llama con un atajo, te escucha sola, ejecuta y se esconde.
+    let flotante = extra.iter().any(|a| a == "--flotante");
+    extra.retain(|a| a != "--flotante");
+    if flotante {
+        extra.extend(["--append-system-prompt".into(), FLOTANTE_PROMPT.into()]);
     }
     let (tx, rx) = mpsc::channel();
 
     let mut claude = Some(Claude::spawn(&extra, tx.clone())?);
     let (voice_tx, level) = voice::spawn(tx.clone());
 
+    // `jarvis --resume <id>`: además de pasárselo al motor, se muestra la conversación.
+    let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::history(id));
     let mut app = App {
-        messages: vec![],
+        messages: resumed.unwrap_or_default(),
         activity: vec![],
         input: String::new(),
         scroll: 0,
@@ -429,9 +494,17 @@ fn main() -> Result<()> {
         calm: std::env::var_os("JARVIS_CALM").is_some(),
         md_cache: Default::default(),
         images: vec![],
+        cur: 0,
+        historial: entrada::Historial::load(),
+        flotante,
+        focused: true,
+        hands_free: None,
+        heard: false,
+        hide_at: None,
         habla: habla::Habla::new(tx.clone()),
         lector: habla::Lector::new(),
         voz_modo: match std::env::var("JARVIS_HABLA").as_deref() {
+            _ if flotante => VozModo::Siempre,
             Ok("siempre") => VozModo::Siempre,
             Ok("nunca") | Ok("0") => VozModo::Nunca,
             _ => VozModo::Auto,
@@ -442,11 +515,16 @@ fn main() -> Result<()> {
         tts_level: 0.0,
         estilo: estilo::cargar(),
         reading: Default::default(),
+        transcript: false,
+        tools_view: None,
         read_override: None,
         read_top: Default::default(),
         read_msg: std::cell::Cell::new(usize::MAX),
         sixel_cell: sixel_cell(),
         core_rect: Default::default(),
+        thumb_slots: Default::default(),
+        thumb_targets: Default::default(),
+        thumbs_shown: vec![],
         sixel_shown: None,
         turn_from: 0,
     };
@@ -466,12 +544,16 @@ fn main() -> Result<()> {
     // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
     // primer salto, y una ruta de imagen arrastrada a la terminal se puede adjuntar.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    // Saber si la ventana tiene el foco: para avisar con una notificación y, en el modo
+    // flotante, para empezar a escuchar al aparecer.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
     if app.key_release {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
     }
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();
     res
 }
@@ -507,6 +589,7 @@ fn run(
         if app.voice == VoiceState::Listening {
             hear(app, lvl);
         }
+        flotante_tick(app, voice_tx);
 
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
@@ -519,14 +602,34 @@ fn run(
         }
 
         app.core_rect.set(None);
-        term.draw(|f| ui::draw(f, app))?;
-        sixel_frame(term, app, &mut frames)?;
+        app.thumb_slots.borrow_mut().clear();
+        app.thumb_targets.borrow_mut().clear();
+        // Lo que se dibujó en este cuadro: hace falta para reescribir el texto que tapaba una
+        // miniatura que se movió.
+        let snap = term.draw(|f| ui::draw(f, app))?.buffer.clone();
+        if sixel_frame(term, app, &mut frames)? {
+            app.thumbs_shown.clear(); // la pantalla se limpió: hay que volver a dibujarlas
+        }
+        thumbs_frame(term, app, &snap)?;
         follow_drag(app);
 
         if event::poll(tick)? {
             let ev = event::read()?;
             if let Event::Mouse(m) = ev {
                 on_mouse(app, m);
+            }
+            match ev {
+                Event::FocusGained => {
+                    app.focused = true;
+                    app.hide_at = None;
+                    if app.flotante && app.voice == VoiceState::Ready && !app.busy && !app.talking {
+                        let _ = voice_tx.send(VoiceCmd::Start);
+                        app.hands_free = Some(Instant::now());
+                        app.heard = false;
+                    }
+                }
+                Event::FocusLost => app.focused = false,
+                _ => {}
             }
             if let Event::Paste(text) = &ev {
                 app.last_activity = Instant::now();
@@ -613,6 +716,9 @@ fn run(
                     habla::HablaEvent::Idle => {
                         app.talking = false;
                         app.tts_level = 0.0;
+                        if app.flotante && !app.busy {
+                            app.hide_at = Some(Instant::now() + Duration::from_secs(3));
+                        }
                     }
                     habla::HablaEvent::Unavailable(why) => {
                         app.push(Role::Error, format!("sin voz: {why}"));
@@ -643,6 +749,33 @@ fn handle_key(
     app.sel = None;
     app.last_activity = Instant::now();
 
+    // Ctrl+G: qué hizo cada herramienta, entera. Mientras está abierto se lleva las flechas.
+    if ctrl && k.code == KeyCode::Char('g') {
+        app.tools_view = match app.tools_view {
+            Some(_) => None,
+            None if app.activity.is_empty() => {
+                app.flash = Some(("todavía no usé ninguna herramienta".into(), Instant::now()));
+                None
+            }
+            None => Some((app.activity.len() - 1, 0)),
+        };
+        return Flow::Go;
+    }
+    if let Some((sel, scroll)) = app.tools_view.as_mut() {
+        let n = app.activity.len().max(1);
+        match k.code {
+            KeyCode::Up => (*sel, *scroll) = (sel.saturating_sub(1), 0),
+            KeyCode::Down => (*sel, *scroll) = ((*sel + 1).min(n - 1), 0),
+            KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+            KeyCode::PageDown => *scroll += 10,
+            KeyCode::Home => *scroll = 0,
+            KeyCode::End => *scroll = usize::MAX,
+            KeyCode::Esc => app.tools_view = None,
+            _ => {}
+        }
+        return Flow::Go;
+    }
+
     if !ctrl {
         if let Some(flow) = modal_key(app, k, claude) {
             return flow;
@@ -666,11 +799,13 @@ fn handle_key(
             }
             KeyCode::Tab => {
                 app.input = pick(app) + " ";
+                app.cur = app.input.chars().count();
                 return Flow::Go;
             }
             KeyCode::Enter => app.input = pick(app),
             KeyCode::Esc => {
                 app.input.clear();
+                app.cur = 0;
                 return Flow::Go;
             }
             _ => {}
@@ -681,9 +816,38 @@ fn handle_key(
         KeyCode::Char('c') | KeyCode::Char('d') if ctrl => return Flow::Quit,
         KeyCode::Char('r') if ctrl => return Flow::Restart,
         KeyCode::Char('l') if ctrl => return clear(app),
-        KeyCode::Char('u') if ctrl => app.input.clear(),
+        KeyCode::Char('u') if ctrl => {
+            app.input.clear();
+            app.cur = 0;
+        }
+        // Edición de la orden, como en un shell.
+        KeyCode::Char('a') if ctrl => app.cur = 0,
+        KeyCode::Char('e') if ctrl => app.cur = app.input.chars().count(),
+        KeyCode::Char('w') if ctrl => entrada::kill_word(&mut app.input, &mut app.cur),
+        KeyCode::Char('k') if ctrl => entrada::kill_to_end(&mut app.input, &mut app.cur),
+        KeyCode::Left if ctrl => entrada::word_left(&app.input, &mut app.cur),
+        KeyCode::Right if ctrl => entrada::word_right(&app.input, &mut app.cur),
+        KeyCode::Left => entrada::left(&app.input, &mut app.cur),
+        KeyCode::Right => entrada::right(&app.input, &mut app.cur),
+        KeyCode::Delete => entrada::delete(&mut app.input, &mut app.cur),
+        KeyCode::Home if !app.input.is_empty() => app.cur = 0,
+        KeyCode::End if !app.input.is_empty() => app.cur = app.input.chars().count(),
+        // Shift+Enter (o Alt+Enter): otra línea sin enviar.
+        KeyCode::Enter if k.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) => {
+            entrada::insert(&mut app.input, &mut app.cur, "\n");
+            app.last_key = Instant::now();
+        }
         KeyCode::Char('v') if ctrl => paste(app),
         KeyCode::Char('o') if ctrl => app.read_override = Some(!app.reading.get()),
+        KeyCode::Char('t') if ctrl => {
+            app.transcript = !app.transcript;
+            app.scroll = 0;
+        }
+        // Con la conversación desplegada, Esc solo la cierra.
+        KeyCode::Esc if app.transcript => {
+            app.transcript = false;
+            app.scroll = 0;
+        }
 
         // Espacio con la entrada vacía: empezar/terminar de escuchar.
         KeyCode::Char(' ') if app.input.is_empty() && space_repeat(app) => {}
@@ -700,6 +864,8 @@ fn handle_key(
             VoiceState::Loading => app.push(Role::System, "el modelo de voz todavía está cargando…"),
             _ => {}
         },
+        // En el flotante, sin nada en curso, Esc lo esconde.
+        KeyCode::Esc if app.flotante && !app.busy && !app.talking && app.voice == VoiceState::Ready => hide_flotante(),
         KeyCode::Esc => {
             // Esc siempre lo calla; si además está trabajando, lo interrumpe.
             app.habla.stop();
@@ -718,6 +884,8 @@ fn handle_key(
         KeyCode::Enter => {
             let text = app.input.trim().to_string();
             app.input.clear();
+            app.cur = 0;
+            app.historial.push(&text);
             let (cmd, arg) = text.split_once(' ').unwrap_or((&text, ""));
             match cmd {
                 "/resume" => return resume(app, arg.trim()),
@@ -761,7 +929,7 @@ fn handle_key(
                     app.flash = Some((msg.into(), Instant::now()));
                     return Flow::Go;
                 }
-                "/theme" => {
+                "/theme" | "/themes" | "/tema" | "/estilo" => {
                     theme(app, arg.trim());
                     return Flow::Go;
                 }
@@ -774,24 +942,38 @@ fn handle_key(
             app.images.pop();
         }
         KeyCode::Backspace => {
-            app.input.pop();
+            entrada::backspace(&mut app.input, &mut app.cur);
             app.menu = 0;
         }
         KeyCode::Char(c) => {
             // Con el protocolo de kitty Shift+n puede llegar como «n» más el modificador.
-            if k.modifiers.contains(KeyModifiers::SHIFT) && c.is_lowercase() {
-                app.input.extend(c.to_uppercase());
+            let typed: String = if k.modifiers.contains(KeyModifiers::SHIFT) && c.is_lowercase() {
+                c.to_uppercase().collect()
             } else {
-                app.input.push(c);
-            }
+                c.to_string()
+            };
+            entrada::insert(&mut app.input, &mut app.cur, &typed);
             app.menu = 0;
             app.last_key = Instant::now();
             app.nucleo.fire(Gesto::Key);
         }
         KeyCode::PageUp => scroll(app, true, 10),
         KeyCode::PageDown => scroll(app, false, 10),
-        KeyCode::Up if app.input.is_empty() => scroll(app, true, 1),
-        KeyCode::Down if app.input.is_empty() => scroll(app, false, 1),
+        // ↑ ↓ recorren lo que enviaste; leyendo en Cine, mueven el texto abierto.
+        KeyCode::Up if app.reading.get() && !app.historial.browsing() => scroll(app, true, 1),
+        KeyCode::Down if app.reading.get() && !app.historial.browsing() => scroll(app, false, 1),
+        KeyCode::Up => {
+            if let Some(t) = app.historial.prev(&app.input) {
+                app.cur = t.chars().count();
+                app.input = t;
+            }
+        }
+        KeyCode::Down => {
+            if let Some(t) = app.historial.next() {
+                app.cur = t.chars().count();
+                app.input = t;
+            }
+        }
         KeyCode::Home if app.reading.get() => app.read_top.set(0),
         KeyCode::End if app.reading.get() => app.read_top.set(usize::MAX),
         KeyCode::End => app.scroll = 0,
@@ -976,6 +1158,7 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
                 KeyCode::Char(' ') if a.current().multi && app.input.is_empty() => a.toggle(),
                 KeyCode::Enter => {
                     let typed = std::mem::take(&mut app.input);
+                    app.cur = 0;
                     answer(app, claude, &typed);
                 }
                 KeyCode::Esc => {
@@ -1131,6 +1314,7 @@ fn submit(app: &mut App, claude: &mut Option<Claude>, text: String) {
         }
     };
     app.push(Role::User, shown);
+    app.messages.last_mut().unwrap().images = images.iter().filter_map(|i| miniatura::from_bytes(&i.raw)).collect();
     match c.send(&text, &images) {
         Ok(uuid) => {
             // Con el motor libre lo toma al instante; solo a mitad de turno queda esperando.
@@ -1197,7 +1381,57 @@ fn hear(app: &mut App, lvl: f32) {
     *floor = if *floor == 0.0 || lvl < *floor { lvl } else { *floor + (lvl - *floor) * 0.002 };
     if lvl > (*floor * 1.8).max(*floor + 0.01) {
         app.last_voice = Instant::now();
+        app.heard = true;
     }
+}
+
+const FLOTANTE_PROMPT: &str = "Modo flotante: Kevin te llamó con un atajo desde el escritorio y te habla por voz; \
+tu respuesta se lee en voz alta. Si pide una acción del sistema (volumen, brillo, tema, abrir o cerrar apps, \
+música, capturas, recordatorios), hazla directo con los comandos de Omarchy, Hyprland o wpctl, sin pedir \
+confirmación salvo que sea destructiva, y contesta en UNA frase corta en español, sin markdown. Para preguntas, \
+contesta breve.";
+
+/// Modo flotante: corta la escucha cuando te callas (o si no dijiste nada) y se esconde un
+/// rato después de terminar de contestar.
+fn flotante_tick(app: &mut App, voice_tx: &Sender<VoiceCmd>) {
+    if !app.flotante {
+        return;
+    }
+    if let Some(start) = app.hands_free {
+        if app.voice != VoiceState::Listening {
+            if start.elapsed() > Duration::from_secs(3) {
+                app.hands_free = None; // ya terminó por otro lado
+            }
+        } else if app.heard && app.last_voice.elapsed() > Duration::from_millis(1300) {
+            let _ = voice_tx.send(VoiceCmd::Stop);
+            app.hands_free = None;
+        } else if !app.heard && start.elapsed() > Duration::from_secs(7) {
+            let _ = voice_tx.send(VoiceCmd::Cancel);
+            app.hands_free = None;
+            app.hide_at = Some(Instant::now());
+        } else if start.elapsed() > Duration::from_secs(20) {
+            let _ = voice_tx.send(VoiceCmd::Stop);
+            app.hands_free = None;
+        }
+    }
+    let quiet = !app.busy && !app.talking && app.voice != VoiceState::Listening && app.voice != VoiceState::Transcribing;
+    if let Some(at) = app.hide_at {
+        if quiet && app.focused && Instant::now() >= at {
+            app.hide_at = None;
+            hide_flotante();
+        } else if !quiet {
+            app.hide_at = None;
+        }
+    }
+}
+
+fn hide_flotante() {
+    let _ = std::process::Command::new("hyprctl")
+        // Con la config en Lua, «dispatch» recibe una llamada de hl.dsp (la sintaxis vieja falla).
+        .args(["dispatch", "hl.dsp.workspace.toggle_special(\"jarvis\")"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 /// Ctrl+V: una imagen del portapapeles se adjunta; texto, se pega en la entrada.
@@ -1221,7 +1455,7 @@ fn pasted(app: &mut App, text: &str) {
         }
         return;
     }
-    app.input.push_str(&text.replace("\r\n", "\n").replace('\r', "\n"));
+    entrada::insert(&mut app.input, &mut app.cur, &text.replace("\r\n", "\n").replace('\r', "\n"));
     app.menu = 0;
     app.last_key = Instant::now();
 }
@@ -1263,23 +1497,28 @@ fn cell_px() -> Option<(u16, u16)> {
 
 /// Manda la imagen del núcleo a 30 fps (uno de cada dos cuadros). Si el panel se movió o el
 /// núcleo volvió a braille (menú abierto), limpia la pantalla: la imagen vieja no se borra sola.
-fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut u64) -> Result<()> {
+/// Devuelve si limpió la pantalla.
+fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut u64) -> Result<bool> {
     use std::io::Write;
     let target = app.core_rect.get();
+    let mut cleared = false;
     if app.sixel_shown.is_some() && app.sixel_shown != target {
         app.sixel_shown = None;
         term.clear()?;
+        cleared = true;
         if target.is_none() {
+            app.thumb_slots.borrow_mut().clear();
+            app.thumb_targets.borrow_mut().clear();
             term.draw(|f| ui::draw(f, app))?;
         }
     }
-    let Some(r) = target else { return Ok(()) };
+    let Some(r) = target else { return Ok(cleared) };
     *frames += 1;
     if app.sixel_shown == Some(r) && *frames % 2 == 1 {
-        return Ok(());
+        return Ok(cleared);
     }
     // El tamaño de la celda cambia con el zoom de la fuente; se vuelve a medir.
-    let Some((cw, ch)) = cell_px().or(app.sixel_cell) else { return Ok(()) };
+    let Some((cw, ch)) = cell_px().or(app.sixel_cell) else { return Ok(cleared) };
     app.sixel_cell = Some((cw, ch));
     let sp = std::env::var("JARVIS_DOT").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
     let img = app.nucleo.sixel(r.width as usize * cw as usize, r.height as usize * ch as usize, sp);
@@ -1298,5 +1537,56 @@ fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut 
     out.write_all(seq.as_bytes())?;
     out.flush()?;
     app.sixel_shown = Some(r);
+    Ok(cleared)
+}
+
+/// Las miniaturas del chat: se dibujan solo cuando cambian de lugar (desplazar, texto nuevo).
+/// Donde estaban, se reescribe el texto de ese cuadro: escribir encima borra la imagen vieja
+/// (foot no la borra solo) y deja el texto correcto. Borrar las celdas en blanco se comía el
+/// texto que había ahí, y ratatui no lo volvía a escribir porque lo creía dibujado.
+fn thumbs_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, snap: &ratatui::buffer::Buffer) -> Result<()> {
+    use std::io::Write;
+    let targets = std::mem::take(&mut *app.thumb_targets.borrow_mut());
+    let now: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))> =
+        targets.iter().map(|(r, t, c)| (*r, std::rc::Rc::as_ptr(t) as usize, *c)).collect();
+    if now == app.thumbs_shown {
+        return Ok(());
+    }
+    let Some(cell) = app.sixel_cell else { return Ok(()) };
+    {
+        use ratatui::backend::Backend;
+        let area = snap.area;
+        let mut cells = vec![];
+        for (r, _, _) in &app.thumbs_shown {
+            for y in r.y..r.bottom().min(area.bottom()) {
+                for x in r.x..r.right().min(area.right()) {
+                    cells.push((x, y, &snap[(x, y)]));
+                }
+            }
+        }
+        let b = term.backend_mut();
+        b.draw(cells.into_iter())?;
+        Backend::flush(b)?;
+    }
+    let mut seq = String::from("\x1b[?2026h\x1b7");
+    for (r, t, (from, to, total)) in &targets {
+        seq.push_str(&format!("\x1b[{};{}H", r.y + 1, r.x + 1));
+        seq.push_str(&t.sixel(cell, r.width, *total, *from, *to));
+    }
+    seq.push_str("\x1b8\x1b[?2026l");
+    let mut out = std::io::stdout().lock();
+    out.write_all(seq.as_bytes())?;
+    out.flush()?;
+    app.thumbs_shown = now;
     Ok(())
+}
+
+/// Una notificación del escritorio (notify-send); si no está, no pasa nada.
+fn notify(title: &str, body: &str) {
+    let body: String = body.chars().take(140).collect();
+    let _ = std::process::Command::new("notify-send")
+        .args(["-a", "JARVIS", title, &body])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }

@@ -67,14 +67,14 @@ pub fn find(current: &str, arg: &str) -> Option<String> {
 pub fn history(id: &str) -> Vec<Msg> {
     let Some(path) = project_dir().map(|d| d.join(format!("{id}.jsonl"))) else { return vec![] };
     let mut out: Vec<Msg> = vec![];
-    for (role, text) in lines(&path).filter_map(|v| turn(&v)) {
+    for (role, text, images) in lines(&path).filter_map(|v| turn(&v).map(|(r, t)| (r, t, images(&v)))) {
         // Una respuesta con herramientas de por medio llega en varios mensajes; se juntan.
         match out.last_mut() {
             Some(last) if last.role == Role::Assistant && role == Role::Assistant => {
                 last.text.push_str("\n\n");
                 last.text.push_str(&text);
             }
-            _ => out.push(Msg { role, text, waiting: None }),
+            _ => out.push(Msg { role, text, waiting: None, images, tool: None }),
         }
     }
     out
@@ -97,6 +97,18 @@ fn first_prompt(path: &PathBuf) -> Option<String> {
 
 /// Solo texto escrito por una persona o por Claude en el hilo principal: fuera resultados de
 /// herramientas, subagentes, mensajes meta y las salidas de comandos locales (`<local-command…>`).
+/// Las imágenes que mandaste en ese mensaje, como miniaturas para el chat.
+fn images(v: &Value) -> Vec<std::rc::Rc<crate::miniatura::Thumb>> {
+    v["message"]["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == "image")
+        .filter_map(|b| b["source"]["data"].as_str())
+        .filter_map(crate::miniatura::from_base64)
+        .collect()
+}
+
 fn turn(v: &Value) -> Option<(Role, String)> {
     if v["isSidechain"] == true || v["isMeta"] == true {
         return None;
