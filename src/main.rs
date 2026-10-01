@@ -1,6 +1,7 @@
 mod ask;
 mod claude;
 mod commands;
+mod select;
 mod sessions;
 mod ui;
 mod voice;
@@ -9,7 +10,7 @@ use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
 use ask::{Ask, Outcome};
 use claude::{Claude, ClaudeEvent};
@@ -102,6 +103,11 @@ pub struct App {
     released: Option<Instant>,
     /// Cuándo empezó a escuchar el espacio en curso; al soltarlo tras un rato, envía.
     pub ptt: Option<Instant>,
+    /// Lo último que se dibujó del chat; con eso el mouse sabe qué texto hay debajo.
+    pub view: std::cell::RefCell<select::View>,
+    pub sel: Option<select::Selection>,
+    /// Aviso breve en la barra de abajo («copiado…»).
+    pub flash: Option<(String, Instant)>,
 }
 
 impl App {
@@ -257,6 +263,9 @@ fn main() -> Result<()> {
         last_space: Instant::now(),
         released: None,
         ptt: None,
+        view: Default::default(),
+        sel: None,
+        flash: None,
     };
 
     let mut term = ratatui::init();
@@ -268,10 +277,14 @@ fn main() -> Result<()> {
         let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
         app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
     }
+    // Con el mouse en manos de Jarvis, arrastrar copia solo texto del chat; Shift+arrastrar
+    // sigue siendo la selección de la terminal.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
     if app.key_release {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
     }
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
     res
 }
@@ -295,7 +308,11 @@ fn run(
         term.draw(|f| ui::draw(f, app))?;
 
         if event::poll(tick)? {
-            if let Event::Key(k) = event::read()? {
+            let ev = event::read()?;
+            if let Event::Mouse(m) = ev {
+                on_mouse(app, m);
+            }
+            if let Event::Key(k) = ev {
                 let space = k.code == KeyCode::Char(' ');
                 if k.kind == KeyEventKind::Release && space {
                     app.space_down = false;
@@ -365,6 +382,7 @@ fn handle_key(
     voice_tx: &Sender<VoiceCmd>,
 ) -> Flow {
     let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+    app.sel = None;
 
     if !ctrl {
         if let Some(flow) = modal_key(app, k, claude) {
@@ -438,6 +456,10 @@ fn handle_key(
             match cmd {
                 "/resume" => return resume(app, arg.trim()),
                 "/clear" => return clear(app),
+                "/copy" => {
+                    copy_last(app);
+                    return Flow::Go;
+                }
                 "/model" => {
                     model(app, claude, arg.trim());
                     return Flow::Go;
@@ -494,6 +516,58 @@ fn space_up(app: &mut App, voice_tx: &Sender<VoiceCmd>) {
     } else if app.voice == VoiceState::Listening {
         let _ = voice_tx.send(VoiceCmd::Stop);
     }
+}
+
+fn on_mouse(app: &mut App, m: crossterm::event::MouseEvent) {
+    let at = (m.column, m.row);
+    let area = app.view.borrow().area;
+    let inside = area.contains(ratatui::layout::Position::new(m.column, m.row));
+    match m.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.sel = inside.then_some(select::Selection { anchor: at, head: at });
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if let Some(s) = &mut app.sel {
+                s.head = at;
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let Some(s) = app.sel.take() else { return };
+            if s.is_empty() {
+                return;
+            }
+            let text = s.text(&app.view.borrow());
+            // Queda resaltado hasta el próximo clic, para ver qué se copió.
+            app.sel = Some(s);
+            copied(app, &text);
+        }
+        MouseEventKind::ScrollUp if inside => app.scroll += 3,
+        MouseEventKind::ScrollDown if inside => app.scroll = app.scroll.saturating_sub(3),
+        _ => {}
+    }
+}
+
+/// `/copy`: la última respuesta entera, con su markdown.
+fn copy_last(app: &mut App) {
+    match app.messages.iter().rev().find(|m| m.role == Role::Assistant) {
+        Some(m) => {
+            let text = m.text.clone();
+            copied(app, &text);
+        }
+        None => app.flash = Some(("todavía no hay respuesta que copiar".into(), Instant::now())),
+    }
+}
+
+fn copied(app: &mut App, text: &str) {
+    let n = text.chars().count();
+    let msg = if text.is_empty() {
+        "nada que copiar ahí".to_string()
+    } else if select::copy(text) {
+        format!("copiado · {n} caracteres")
+    } else {
+        "no pude copiar al portapapeles".to_string()
+    };
+    app.flash = Some((msg, Instant::now()));
 }
 
 fn clear(app: &mut App) -> Flow {

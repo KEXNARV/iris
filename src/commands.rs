@@ -13,6 +13,7 @@ pub struct Command {
 const LOCAL: &[(&str, &str)] = &[
     ("resume", "retomar una sesión anterior · /resume N"),
     ("model", "cambiar de modelo · /model sonnet"),
+    ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
     ("clear", "limpiar la conversación en pantalla (^L)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
     ("quit", "salir de Jarvis (^C)"),

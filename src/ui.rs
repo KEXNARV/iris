@@ -260,59 +260,83 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
     let width = inner.width.saturating_sub(4).max(10) as usize;
 
-    let mut lines: Vec<Line> = Vec::new();
+    // Cada fila lleva cuántas columnas de decoración tiene al inicio y si sigue a la anterior
+    // por el ajuste de línea: al copiar se quita lo primero y se vuelven a unir los párrafos.
+    let mut rows: Vec<(Line<'static>, usize, bool)> = Vec::new();
+    let blank = || (Line::default(), 0, false);
     if app.messages.is_empty() {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            format!("  {}. ¿En qué trabajamos?", greeting()),
-            Style::new().fg(TEXT).bold(),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  Escribe, o presiona espacio y háblame.",
-            Style::new().fg(FAINT),
-        )));
+        rows.push(blank());
+        rows.push((
+            Line::from(Span::styled(format!("  {}. ¿En qué trabajamos?", greeting()), Style::new().fg(TEXT).bold())),
+            2,
+            false,
+        ));
+        rows.push((
+            Line::from(Span::styled("  Escribe, o mantén espacio y háblame.", Style::new().fg(FAINT))),
+            2,
+            false,
+        ));
     }
 
     for m in &app.messages {
         match m.role {
             Role::User => {
-                lines.push(Line::default());
+                rows.push(blank());
                 let mut head = vec![Span::styled("  TÚ", Style::new().fg(WARM).bold())];
                 if m.waiting.is_some() {
                     head.push(Span::styled("  ◷ en espera", Style::new().fg(FAINT)));
                     head.push(Span::styled(" — Claude lo lee al terminar lo que está haciendo", Style::new().fg(DIM)));
                 }
-                lines.push(Line::from(head));
+                rows.push((Line::from(head), 2, false));
                 let fg = if m.waiting.is_some() { FAINT } else { TEXT };
-                for l in wrap(&m.text, width) {
-                    lines.push(Line::from(Span::styled(format!("  {l}"), Style::new().fg(fg))));
+                for (l, cont) in wrap_cont(&m.text, width) {
+                    rows.push((Line::from(Span::styled(format!("  {l}"), Style::new().fg(fg))), 2, cont));
                 }
             }
             Role::Assistant => {
-                lines.push(Line::default());
-                lines.push(Line::from(Span::styled("  JARVIS", Style::new().fg(ACCENT).bold())));
-                lines.extend(markdown(&m.text, width));
+                rows.push(blank());
+                rows.push((Line::from(Span::styled("  JARVIS", Style::new().fg(ACCENT).bold())), 2, false));
+                rows.extend(markdown(&m.text, width));
             }
             Role::System => {
-                for (i, l) in m.text.lines().flat_map(|l| wrap(l, width)).enumerate() {
+                for (i, (l, cont)) in wrap_cont(&m.text, width).into_iter().enumerate() {
                     let mark = if i == 0 { "·" } else { " " };
-                    lines.push(Line::from(Span::styled(format!("  {mark} {l}"), Style::new().fg(FAINT))));
+                    rows.push((Line::from(Span::styled(format!("  {mark} {l}"), Style::new().fg(FAINT))), 4, cont));
                 }
             }
             Role::Error => {
-                for l in wrap(&m.text, width) {
-                    lines.push(Line::from(Span::styled(format!("  ! {l}"), Style::new().fg(RED))));
+                for (l, cont) in wrap_cont(&m.text, width) {
+                    rows.push((Line::from(Span::styled(format!("  ! {l}"), Style::new().fg(RED))), 4, cont));
                 }
             }
         }
     }
 
     let h = inner.height as usize;
-    let max_scroll = lines.len().saturating_sub(h);
+    let max_scroll = rows.len().saturating_sub(h);
     let scroll = app.scroll.min(max_scroll);
-    let start = lines.len().saturating_sub(h + scroll);
-    let visible: Vec<Line> = lines.into_iter().skip(start).take(h).collect();
-    f.render_widget(Paragraph::new(visible), inner);
+    let start = rows.len().saturating_sub(h + scroll);
+    let visible: Vec<_> = rows.into_iter().skip(start).take(h).collect();
+
+    *app.view.borrow_mut() = crate::select::View {
+        area: inner,
+        rows: visible
+            .iter()
+            .map(|(l, skip, cont)| crate::select::Row {
+                text: l.spans.iter().map(|s| s.content.as_ref()).collect(),
+                skip: *skip,
+                cont: *cont,
+            })
+            .collect(),
+    };
+    f.render_widget(Paragraph::new(visible.into_iter().map(|r| r.0).collect::<Vec<_>>()), inner);
+
+    if let Some(sel) = &app.sel {
+        let buf = f.buffer_mut();
+        for (x, y) in sel.cells(inner) {
+            buf[(x, y)].set_bg(Color::Rgb(20, 70, 100)).set_fg(Color::White);
+        }
+    }
 
     if scroll > 0 {
         let tag = Span::styled(format!(" ↑ {scroll} líneas · End para volver "), Style::new().fg(Color::Black).bg(DIM));
@@ -322,7 +346,7 @@ fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Markdown mínimo: bloques de código, títulos, viñetas, **negrita** y `código`.
-fn markdown(text: &str, width: usize) -> Vec<Line<'static>> {
+fn markdown(text: &str, width: usize) -> Vec<(Line<'static>, usize, bool)> {
     let mut out = Vec::new();
     let mut in_code = false;
     for raw in text.lines() {
@@ -331,15 +355,19 @@ fn markdown(text: &str, width: usize) -> Vec<Line<'static>> {
             continue;
         }
         if in_code {
-            out.push(Line::from(vec![
-                Span::styled("  │ ", Style::new().fg(DIM)),
-                Span::styled(truncate(raw, width.saturating_sub(2)), Style::new().fg(GREEN)),
-            ]));
+            out.push((
+                Line::from(vec![
+                    Span::styled("  │ ", Style::new().fg(DIM)),
+                    Span::styled(truncate(raw, width.saturating_sub(2)), Style::new().fg(GREEN)),
+                ]),
+                4,
+                false,
+            ));
             continue;
         }
         let t = raw.trim_start();
         if let Some(h) = t.strip_prefix("### ").or(t.strip_prefix("## ")).or(t.strip_prefix("# ")) {
-            out.push(Line::from(Span::styled(format!("  {h}"), Style::new().fg(ACCENT).bold())));
+            out.push((Line::from(Span::styled(format!("  {h}"), Style::new().fg(ACCENT).bold())), 2, false));
             continue;
         }
         let (bullet, body) = match t.strip_prefix("- ").or(t.strip_prefix("* ")) {
@@ -351,9 +379,11 @@ fn markdown(text: &str, width: usize) -> Vec<Line<'static>> {
         let mut code = false;
         for (i, piece) in wrap(body, width.saturating_sub(bullet.len())).into_iter().enumerate() {
             let prefix = if i == 0 && !bullet.is_empty() { format!("  {bullet}") } else { indent.to_string() };
+            // La viñeta se copia; la sangría de las líneas que la siguen, no.
+            let skip = if i == 0 { 2 } else { prefix.len() };
             let mut spans = vec![Span::styled(prefix, Style::new().fg(ACCENT))];
             spans.extend(inline(&piece, &mut bold, &mut code));
-            out.push(Line::from(spans));
+            out.push((Line::from(spans), skip, i > 0));
         }
     }
     out
@@ -601,6 +631,12 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         k("^R"), d(" reiniciar  "),
         k("^C"), d(" salir"),
     ]);
+    let hints = match &app.flash {
+        Some((msg, at)) if at.elapsed().as_secs_f64() < 2.5 => {
+            Line::from(Span::styled(format!(" ✓ {msg}"), Style::new().fg(GREEN).bold()))
+        }
+        _ => hints,
+    };
     let voice = match app.voice {
         VoiceState::Off => "voz off".to_string(),
         VoiceState::Loading => "voz cargando".to_string(),
@@ -619,6 +655,13 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let [left, right] = Layout::horizontal([Constraint::Min(0), Constraint::Length(sw)]).areas(area);
     f.render_widget(Paragraph::new(hints), left);
     f.render_widget(Paragraph::new(Span::styled(stats, Style::new().fg(DIM))), right);
+}
+
+/// Como `wrap`, marcando las piezas que continúan la línea anterior del texto original.
+fn wrap_cont(s: &str, width: usize) -> Vec<(String, bool)> {
+    s.lines()
+        .flat_map(|l| wrap(l, width).into_iter().enumerate().map(|(i, p)| (p, i > 0)))
+        .collect()
 }
 
 fn wrap(s: &str, width: usize) -> Vec<String> {
