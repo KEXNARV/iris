@@ -29,6 +29,14 @@ pub enum ClaudeEvent {
     Taken(String),
     /// `/compact` terminó: tokens de contexto antes y después.
     Compacted { pre: u64, post: u64 },
+    /// Nació un subagente (`task_started` de tipo agente). `tool` es el id de la llamada a
+    /// `Agent` que lo lanzó: con eso se le atribuyen sus mensajes (`parent_tool_use_id`).
+    AgentStarted { tool: String, description: String, kind: String },
+    /// Un subagente pidió una herramienta, o recibió su resultado.
+    AgentTool { tool: String, name: String, detail: String },
+    AgentToolResult { tool: String, is_error: bool },
+    /// Terminó un subagente: `ok` si completó, no si falló o lo mataron.
+    AgentDone { tool: String, ok: bool },
     Stderr(String),
     Exited,
 }
@@ -199,9 +207,35 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
                 _ => vec![],
             }
         }
+        Some("system") if v["subtype"] == "task_started" && v["task_type"] == "local_agent" => {
+            vec![ClaudeEvent::AgentStarted {
+                tool: s(v, "tool_use_id"),
+                description: s(v, "description"),
+                kind: s(v, "subagent_type"),
+            }]
+        }
+        // El final llega dos veces (`task_updated` con el estado y `task_notification` con el
+        // resumen) y no siempre en ese orden: la app lo toma una vez.
+        Some("system") if v["subtype"] == "task_notification" && !v["tool_use_id"].is_null() => {
+            vec![ClaudeEvent::AgentDone { tool: s(v, "tool_use_id"), ok: v["status"] == "completed" }]
+        }
+        // Lo de un subagente llega con el id de la llamada que lo lanzó. Solo interesan sus
+        // herramientas: es lo que el núcleo muestra en el hijo.
+        Some("assistant") if !v["parent_tool_use_id"].is_null() => blocks(v, "tool_use")
+            .map(|b| ClaudeEvent::AgentTool {
+                tool: s(v, "parent_tool_use_id"),
+                name: s(b, "name"),
+                detail: tool_detail(&b["input"]),
+            })
+            .collect(),
+        Some("user") if !v["parent_tool_use_id"].is_null() => blocks(v, "tool_result")
+            .map(|b| ClaudeEvent::AgentToolResult {
+                tool: s(v, "parent_tool_use_id"),
+                is_error: b["is_error"].as_bool().unwrap_or(false),
+            })
+            .collect(),
         // El texto ya llegó por deltas; de los mensajes completos solo interesan las herramientas.
-        // Los de subagentes (parent_tool_use_id) se ignoran para no ensuciar el panel.
-        Some("assistant") if v["parent_tool_use_id"].is_null() => {
+        Some("assistant") => {
             let mut out: Vec<ClaudeEvent> = v["message"]["content"]
                 .as_array()
                 .into_iter()
@@ -252,6 +286,11 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
         }],
         _ => vec![],
     }
+}
+
+/// Los bloques de contenido de un mensaje que son de tipo `kind`.
+fn blocks<'a>(v: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a Value> {
+    v["message"]["content"].as_array().into_iter().flatten().filter(move |b| b["type"] == kind)
 }
 
 /// UUID v4 de /dev/urandom; el motor lo guarda tal cual en el transcript.
@@ -308,5 +347,30 @@ fn tool_output(c: &Value) -> String {
         format!("{cut}\n… (cortado)")
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Eventos reales de `claude -p` con un subagente (recortados): nace, pide un Bash, recibe
+    /// su resultado y termina.
+    #[test]
+    fn sigue_a_un_subagente() {
+        let lines = [
+            r#"{"type":"system","subtype":"task_started","task_id":"a9","tool_use_id":"toolu_A","description":"Ejecutar ls","subagent_type":"general-purpose","is_backgrounded":false,"task_type":"local_agent"}"#,
+            r#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_B","description":"Loop","is_backgrounded":true,"task_type":"local_bash"}"#,
+            r#"{"type":"assistant","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"tool_use","id":"toolu_C","name":"Bash","input":{"command":"ls /tmp | head -3"}}]}}"#,
+            r#"{"type":"user","parent_tool_use_id":"toolu_A","message":{"content":[{"tool_use_id":"toolu_C","type":"tool_result","content":"x","is_error":false}]}}"#,
+            r#"{"type":"system","subtype":"task_notification","task_id":"a9","tool_use_id":"toolu_A","status":"completed"}"#,
+        ];
+        let evs: Vec<ClaudeEvent> = lines.iter().flat_map(|l| parse(&serde_json::from_str(l).unwrap())).collect();
+        assert!(matches!(&evs[0], ClaudeEvent::AgentStarted { tool, kind, .. } if tool == "toolu_A" && kind == "general-purpose"));
+        // El bash de fondo no es un hijo.
+        assert!(matches!(&evs[1], ClaudeEvent::AgentTool { tool, name, .. } if tool == "toolu_A" && name == "Bash"));
+        assert!(matches!(&evs[2], ClaudeEvent::AgentToolResult { tool, is_error: false } if tool == "toolu_A"));
+        assert!(matches!(&evs[3], ClaudeEvent::AgentDone { tool, ok: true } if tool == "toolu_A"));
+        assert_eq!(evs.len(), 4);
     }
 }

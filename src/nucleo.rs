@@ -69,6 +69,8 @@ pub struct Signals {
     pub queue: usize,
     /// Tareas de TodoWrite: (total, completadas).
     pub todos: (usize, usize),
+    /// Subagentes vivos: (id, lo que están haciendo). Cada uno es un hijo del núcleo.
+    pub kids: Vec<(u64, State)>,
     /// Segundos sin actividad.
     pub idle: f64,
     /// Menos movimiento (`/calma`).
@@ -113,25 +115,36 @@ impl State {
         }
     }
 
-    /// Por familias: presencia en el acento del tema, «tu turno» en ámbar, la mente en azules y
-    /// violetas, las herramientas del verde al rosa. Dentro de cada familia el movimiento
-    /// es lo que distingue.
-    /// Los mismos colores que el teclado (ghubd): escuchar en amarillo, transcribir en morado,
-    /// y todo lo demás en el primario del tema, más claro o más oscuro. Los estados se
-    /// distinguen por el movimiento, no por el color.
+    /// Por familias: presencia en el acento del tema, la mente en azules y violetas, las
+    /// herramientas del verde al rosa. Escuchar y transcribir, en el amarillo y el morado del
+    /// teclado (ghubd). Lo de alrededor (escala, arcos, motas) va siempre en el acento: el
+    /// color del cuerpo es el que dice el estado.
     fn rgb(self) -> [f64; 3] {
         use State::*;
         use crate::theme::{accent_darker, accent_rgb, accent_toward_white};
-        match self {
-            Listening => YELLOW,
-            NoVoice => mix(YELLOW, [0.0; 3], 0.35),
-            Transcribing => PURPLE,
-            Sleeping => accent_darker(0.43),
-            Typing => accent_toward_white(0.35),
-            Speaking => accent_toward_white(0.5),
-            Offline => [90.0, 110.0, 125.0],
-            _ => accent_rgb(),
-        }
+        let c = match self {
+            Booting | Idle => return accent_rgb(),
+            Sleeping => return accent_darker(0.43),
+            Typing => return accent_toward_white(0.35),
+            Speaking => return accent_toward_white(0.6),
+            Listening => return YELLOW,
+            NoVoice => return mix(YELLOW, [0.0; 3], 0.35),
+            Transcribing => return PURPLE,
+            Asking => [255.0, 205.0, 60.0],
+            Thinking => [90.0, 150.0, 255.0],
+            Planning => [125.0, 125.0, 255.0],
+            Delegating => [175.0, 140.0, 255.0],
+            Compacting => [160.0, 165.0, 205.0],
+            Searching => [60.0, 215.0, 165.0],
+            Reading => [70.0, 220.0, 215.0],
+            Editing => [175.0, 235.0, 80.0],
+            Testing => [120.0, 235.0, 120.0],
+            Running => [235.0, 225.0, 90.0],
+            Git => [255.0, 130.0, 70.0],
+            Web => [255.0, 110.0, 170.0],
+            Offline => return [90.0, 110.0, 125.0],
+        };
+        apart(c, accent_rgb())
     }
 
     pub fn color(self) -> Color {
@@ -308,6 +321,30 @@ impl Params {
     }
 }
 
+/// Un subagente: un ojito que orbita al principal, unido a él por una línea por la que
+/// suben partículas. Nace del cuerpo, hace lo suyo con la pupila y vuelve a fundirse.
+struct Kid {
+    id: u64,
+    /// Ángulo en la órbita; se reparte con los demás hijos vivos.
+    a: f64,
+    born: f64,
+    /// Cuándo terminó y si salió bien: bien vuelve y se funde, mal se apaga en rojo donde está.
+    end: Option<(f64, bool)>,
+    merged: bool,
+    /// El hijo es un núcleo entero en miniatura: los mismos estados, colores y detalles que el
+    /// principal, sin lo de alrededor (escala, arcos, motas).
+    core: Box<Core>,
+    /// Partículas que suben por la línea: cuándo salieron y si llevan un error.
+    pulses: Vec<(f64, bool)>,
+}
+
+/// Radio de la órbita de los hijos: entre el cuerpo y la escala.
+const KID_ORBIT: f64 = 0.70;
+/// Lo que tarda un hijo en salir del cuerpo y en volver a él.
+const KID_TRAVEL: f64 = 0.8;
+/// Lo que tarda una partícula en subir del hijo al principal.
+const PULSE_TRAVEL: f64 = 0.65;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Gesture {
     Stretch,
@@ -354,10 +391,18 @@ pub struct Core {
     gesture: Option<(Gesture, f64)>,
     next_gesture: f64,
     motes: Vec<Mote>,
+    kids: Vec<Kid>,
+    /// Hacia dónde mira el principal cuando un hijo le manda algo: (cuándo, ángulo).
+    heard_kid: Option<(f64, f64)>,
     level: f64,
     sig: Signals,
     rng: u64,
     fired: Vec<Event>,
+    /// Es un hijo: sin escala, arcos ni motas, que en miniatura solo ensucian.
+    mini: bool,
+    /// Si está puesto, la pupila mira hacia ahí (−1..1) en vez de lo que diga el estado: el
+    /// hijo mira al principal cuando le manda algo.
+    look: Option<[f64; 2]>,
 }
 
 impl Core {
@@ -388,10 +433,14 @@ impl Core {
             gesture: None,
             next_gesture: 20.0,
             motes: vec![],
+            kids: vec![],
+            heard_kid: None,
             level: 0.0,
             sig: Signals::default(),
             rng: 0x9E37_79B9_7F4A_7C15,
             fired: vec![],
+            mini: false,
+            look: None,
         };
         c.motes = (0..MOTES)
             .map(|k| {
@@ -400,6 +449,21 @@ impl Core {
                 Mote { a: k as f64 * TAU / MOTES as f64 + c.rand(), r: lo + c.rand() * (hi - lo), s: c.rand() - 0.5, z }
             })
             .collect();
+        c
+    }
+
+    /// Un hijo: ya despierto en `state`, sin arranque ni motas.
+    fn mini(state: State, seed: u64) -> Self {
+        let mut c = Core::new();
+        c.mini = true;
+        c.motes.clear();
+        c.shown = state;
+        c.p = state.params();
+        c.col = state.rgb();
+        c.rng ^= seed.wrapping_mul(0x2545_F491_4F6C_DD1D) | 1;
+        // Cada hijo con su fase, para que no respiren ni parpadeen todos a la vez.
+        c.t = 3.7 * seed as f64;
+        c.since = c.t;
         c
     }
 
@@ -415,7 +479,57 @@ impl Core {
 
     /// Reinicia la animación de arranque (al relanzar el motor).
     pub fn reboot(&mut self) {
+        self.kids_clear();
         self.switch(State::Booting);
+    }
+
+    /// Nace un subagente: brota del cuerpo hacia su lugar en la órbita.
+    pub fn kid_born(&mut self, id: u64) {
+        // Sale por donde va a quedar: el hueco que deja el reparto con uno más.
+        let alive = self.kids.iter().filter(|k| k.end.is_none()).count();
+        let a = kid_slot(self.t, alive, alive + 1, self.calm());
+        let t = self.t;
+        self.kids.push(Kid {
+            id,
+            a,
+            born: t,
+            end: None,
+            merged: false,
+            core: Box::new(Core::mini(State::Thinking, id)),
+            pulses: vec![],
+        });
+        self.kick(1.6);
+    }
+
+    /// El hijo hizo algo (pidió una herramienta o le llegó su resultado): una partícula sube.
+    pub fn kid_pulse(&mut self, id: u64, error: bool) {
+        let t = self.t;
+        if let Some(k) = self.kids.iter_mut().find(|k| k.id == id) {
+            k.pulses.push((t, error));
+            k.core.fire(if error { Event::Error } else { Event::Key });
+        }
+    }
+
+    /// Terminó el subagente: si salió bien vuelve al cuerpo; si no, se apaga en rojo.
+    pub fn kid_end(&mut self, id: u64, ok: bool) {
+        let t = self.t;
+        if let Some(k) = self.kids.iter_mut().find(|k| k.id == id && k.end.is_none()) {
+            k.end = Some((t, ok));
+            if !ok {
+                k.core.fire(Event::Error);
+            }
+        }
+    }
+
+    /// El motor se fue: los hijos se van con él, sin ceremonia.
+    pub fn kids_clear(&mut self) {
+        self.kids.clear();
+        self.heard_kid = None;
+    }
+
+    /// Cuántos hijos hay (vivos o despidiéndose).
+    pub fn kid_count(&self) -> usize {
+        self.kids.len()
     }
 
     fn rand(&mut self) -> f64 {
@@ -509,7 +623,14 @@ impl Core {
         let calm = self.calm();
 
         let k = 1.0 - (-dt / 0.35).exp();
-        let target = self.shown.params();
+        let mut target = self.shown.params();
+        // Con hijos, el principal se hace un poco a un lado para dejarles la órbita.
+        // y los arcos se apagan un poco para que la red se lea.
+        if self.kids.iter().any(|k| k.end.is_none()) {
+            target.blob_r *= 0.72;
+            target.arcs *= 0.45;
+            target.motes *= 0.5;
+        }
         self.p.approach(&target, k);
         let base = self.shown.rgb();
         let want_col = if self.red > 0.05 { mix(base, RED, (self.red * 1.4).min(1.0)) } else { base };
@@ -544,6 +665,7 @@ impl Core {
             self.blooms.push(t);
         }
         self.merges.retain(|m| t - m.0 < 1.0);
+        self.step_kids(dt);
 
         self.phase += dt * self.p.wob * calm;
         self.arc_phase += dt * self.p.arc_speed * calm;
@@ -616,6 +738,56 @@ impl Core {
         }
     }
 
+    /// Los hijos: su estado, su lugar en la órbita, su mirada y su despedida.
+    fn step_kids(&mut self, dt: f64) {
+        let t = self.t;
+        let calm = self.calm();
+        let alive: Vec<usize> = (0..self.kids.len()).filter(|&i| self.kids[i].end.is_none()).collect();
+        let n = alive.len();
+        for (slot, &i) in alive.iter().enumerate() {
+            let want = kid_slot(t, slot, n, calm);
+            let k = &mut self.kids[i];
+            let d = (want - k.a + PI).rem_euclid(TAU) - PI;
+            k.a += d * (dt * 2.5).min(1.0);
+        }
+        let child = Signals { calm: self.sig.calm, ..Default::default() };
+        let mut merged = vec![];
+        for k in &mut self.kids {
+            let want = match self.sig.kids.iter().find(|(id, _)| *id == k.id) {
+                Some(&(_, st)) if k.end.is_none() => st,
+                _ => k.core.state(),
+            };
+            k.pulses.retain(|p| t - p.0 < PULSE_TRAVEL);
+            // Justo al mandar algo, o al volver, mira al principal (que está hacia el centro).
+            let fresh = k.pulses.last().is_some_and(|p| t - p.0 < 0.3);
+            k.core.look = (fresh || k.end.is_some()).then(|| [-0.8 * k.a.cos(), -0.8 * k.a.sin()]);
+            k.core.step(dt, want, &child);
+            k.core.take_fired();
+            if let Some((t0, true)) = k.end {
+                if !k.merged && t - t0 >= KID_TRAVEL {
+                    k.merged = true;
+                    merged.push(k.a);
+                }
+            }
+        }
+        // Cada partícula que llega al principal le hace mirar hacia ese hijo.
+        for k in &self.kids {
+            if k.pulses.iter().any(|p| (t - p.0 - PULSE_TRAVEL).abs() < dt.max(0.02)) {
+                self.heard_kid = Some((t, k.a));
+            }
+        }
+        for a in merged {
+            self.kick(2.4);
+            self.blooms.push(t);
+            self.heard_kid = Some((t, a));
+        }
+        self.kids.retain(|k| match k.end {
+            Some((t0, true)) => t - t0 < KID_TRAVEL + 0.05,
+            Some((t0, false)) => t - t0 < 1.4,
+            None => true,
+        });
+    }
+
     /// La «cámara» se mece despacio y sigue un poco a la mirada.
     fn camera(&self) -> [f64; 2] {
         let c = self.calm();
@@ -636,12 +808,21 @@ impl Core {
         use State::*;
         let t = self.t;
         let lim = self.p.blob_r * 0.42;
+        if let Some([x, y]) = self.look {
+            return [lim * x, lim * y];
+        }
         if let Some((g, _)) = self.gesture {
             match g {
                 // El reloj está arriba a la derecha de la pantalla; el chat, a la izquierda.
                 Gesture::LookClock => return [lim * 0.8, lim * 0.85],
                 Gesture::LookChat => return [-lim * 0.9, 0.0],
                 _ => {}
+            }
+        }
+        // Un hijo le mandó algo: lo mira un momento, salvo que esté ocupado con vos.
+        if let Some((t0, a)) = self.heard_kid {
+            if t - t0 < 0.7 && matches!(self.shown, Idle | Thinking | Delegating | Speaking | Reading | Searching) {
+                return [lim * 0.9 * a.cos(), lim * 0.9 * a.sin()];
             }
         }
         match self.shown {
@@ -722,16 +903,27 @@ impl Core {
         }
     }
 
-    /// Colores por tinta (normal, verde, rojo, ámbar) y tono (1 apagado … 3 pleno).
-    fn palette(&self) -> [[[f64; 3]; 4]; 4] {
+    /// Colores por tinta (estado, verde, rojo, ámbar, acento y uno por hijo) y tono
+    /// (1 apagado … 3 pleno).
+    fn palette(&self) -> Vec<[[f64; 3]; 4]> {
         let dim = crate::theme::dim_rgb();
-        [self.col, GREEN, RED, WARM].map(|c| [dim, dim, mix(c, dim, 0.38), c])
+        [self.col, GREEN, RED, WARM, crate::theme::accent_rgb()]
+            .into_iter()
+            .chain(self.kids.iter().take(MAX_KID_INKS).map(|k| k.core.col))
+            .map(|c| [dim, dim, mix(c, dim, 0.38), c])
+            .collect()
     }
 
     /// El núcleo como imagen Sixel de `w`×`h` píxeles, con puntos redondos cada `sp` píxeles y
     /// fondo transparente: la misma estética de puntos que el braille, más fina y con un color
     /// por punto en vez de uno por celda.
     pub fn sixel(&self, w: usize, h: usize, sp: usize) -> String {
+        let (img, colors) = self.pixels(w, h, sp);
+        crate::sixel::encode(&img, w, h, &colors)
+    }
+
+    /// La imagen de puntos sin codificar: un índice de color por píxel (0 = transparente).
+    fn pixels(&self, w: usize, h: usize, sp: usize) -> (Vec<u8>, Vec<[f64; 3]>) {
         let sp = sp.max(2);
         let (dw, dh) = ((w / sp).max(8), (h / sp).max(8));
         // Bloques de ~3×3 puntos: lo de atrás queda tapado igual que en braille.
@@ -762,8 +954,8 @@ impl Core {
                 }
             }
         }
-        let colors: Vec<[f64; 3]> = (0..4).flat_map(|ink| (1..4).map(move |tone| pal[ink][tone])).collect();
-        crate::sixel::encode(&img, w, h, &colors)
+        let colors: Vec<[f64; 3]> = pal.iter().flat_map(|ink| (1..4).map(move |tone| ink[tone])).collect();
+        (img, colors)
     }
 
     fn paint(&self, g: &mut Grid) {
@@ -772,8 +964,10 @@ impl Core {
         let t = self.t;
         let st = t - self.since;
         let lv = self.level;
-        let low = g.dh < 40; // panel chico: se apagan los detalles finos
+        let low = g.dh as f64 * g.k < 40.0; // panel (o hijo) chico: se apagan los detalles finos
         let err = if self.red > 0.35 { INK_RED } else { INK_MAIN };
+        // Lo de alrededor va en el acento; con un error, en rojo como todo.
+        let ring = if self.red > 0.35 { INK_RED } else { INK_ACCENT };
 
         // Centro del cuerpo: deriva suave + flotar (preguntando) + sacudida (error) − encorvado.
         let cx = 0.025 * (t * 0.37).sin() + 0.015 * (t * 0.91 + 1.0).sin() + self.shake * 0.05 * (t * 48.0).sin();
@@ -782,13 +976,13 @@ impl Core {
         let grow = if p.boot > 0.01 { ease_out_back((st / 2.0).min(1.0)) } else { 1.0 };
         let body = |r: f64, a: f64| (cx + r * a.cos(), cy + r * a.sin());
 
-        // Escala: 24 marcas, ancladas al marco.
-        for k in 0..24 {
+        // Escala: 24 marcas, ancladas al marco. Los hijos no tienen.
+        for k in 0..if self.mini { 0 } else { 24 } {
             if k as f64 / 24.0 > boot * 1.05 {
                 continue;
             }
             let a = PI / 2.0 - k as f64 * TAU / 24.0;
-            let (mut tone, mut ink) = (1, err);
+            let (mut tone, mut ink) = (1, ring);
             if p.vu > 0.01 && (k as f64 / 24.0) < lv * 1.15 * p.vu {
                 tone = 3;
             }
@@ -849,19 +1043,19 @@ impl Core {
         }
 
         // Arcos: tres por fuera, seis por dentro, en sentidos opuestos.
-        if p.arcs * boot > 0.05 {
+        if p.arcs * boot > 0.05 && !self.mini {
             let n1 = (60.0 * p.arc_len * p.arcs * (boot * 1.4 - 0.4).max(0.0)).round() as usize;
             for k in 0..3 {
                 for q in 0..n1 {
                     let a = self.arc_phase + k as f64 * TAU / 3.0 + (TAU / 5.0) * p.arc_len * q as f64 / n1.max(1) as f64;
-                    g.polar(0.80, a, 2, err);
+                    g.polar(0.80, a, 2, ring);
                 }
             }
             let n2 = (14.0 * p.arcs).round() as usize;
             for k in 0..6 {
                 for q in 0..n2 {
                     let a = -self.arc_phase * 1.6 + k as f64 * TAU / 6.0 + (TAU / 16.0) * q as f64 / 14.0;
-                    g.polar(0.70, a, 1, err);
+                    g.polar(0.70, a, 1, ring);
                 }
             }
         }
@@ -1192,9 +1386,11 @@ impl Core {
             }
         }
 
+        self.paint_kids(g, cx, cy, radius);
+
         // Motas lejanas y medias: al final y solo en celdas vacías, así el anillo, los arcos
         // y el cuerpo las tapan. Las cercanas van después, por encima de todo.
-        if p.motes > 0.05 && !low {
+        if p.motes > 0.05 && !low && !self.mini {
             let n = (MOTES as f64 * p.motes * boot).round() as usize;
             for m in self.motes.iter().take(n).filter(|m| m.z < 0.66) {
                 let (x, y) = self.mote_pos(m, cam, p.press, t);
@@ -1206,23 +1402,104 @@ impl Core {
         }
 
         // Motas cercanas: al frente de todo, al color pleno, más grandes y con estela.
-        if p.motes > 0.05 {
+        if p.motes > 0.05 && !self.mini {
             let n = (MOTES as f64 * p.motes * boot).round() as usize;
             let d = g.du;
             for m in self.motes.iter().take(n).filter(|m| m.z >= 0.66) {
                 let (x, y) = self.mote_pos(m, cam, p.press, t);
                 for (ox, oy) in [(0.0, 0.0), (d, 0.0), (0.0, d), (d, d)] {
-                    g.plot(x + ox, y + oy, 3, INK_MAIN);
+                    g.plot(x + ox, y + oy, 3, INK_ACCENT);
                 }
                 // Estela hacia atrás en su giro.
                 for k in 1..3 {
                     let back = Mote { a: m.a - k as f64 * 0.05, ..*m };
                     let (x, y) = self.mote_pos(&back, cam, p.press, t);
-                    g.plot(x, y, if k == 1 { 2 } else { 1 }, INK_MAIN);
+                    g.plot(x, y, if k == 1 { 2 } else { 1 }, INK_ACCENT);
                 }
             }
         }
     }
+}
+
+impl Core {
+    /// Los hijos, con su línea al principal y las partículas que suben por ella.
+    fn paint_kids(&self, g: &mut Grid, cx: f64, cy: f64, radius: f64) {
+        let t = self.t;
+        let alive = self.kids.iter().filter(|k| k.end.is_none()).count();
+        // Radio del cuerpo de un hijo: con muchos se achican; nunca por debajo de lo que se
+        // lee como un ojo.
+        let kr = (if alive > 4 { 0.10_f64 } else { 0.13 }).max(2.6 * g.du);
+        for (n, k) in self.kids.iter().enumerate() {
+            // Cuánto salió del cuerpo (0 adentro, 1 en la órbita) y qué tamaño tiene.
+            let (out, size) = match k.end {
+                None => {
+                    let u = ((t - k.born) / KID_TRAVEL).min(1.0);
+                    (ease_out_back(u).min(1.08), 0.35 + 0.65 * ease_out_back(u))
+                }
+                Some((t0, true)) => {
+                    let u = ((t - t0) / KID_TRAVEL).min(1.0);
+                    let back = 1.0 - u * u;
+                    (back, 0.4 + 0.6 * back)
+                }
+                Some((t0, false)) => (1.0, 1.0 - 0.8 * ((t - t0) / 1.4).min(1.0)),
+            };
+            let red = k.core.red > 0.35;
+            let ink = INK_KID + n.min(MAX_KID_INKS - 1) as u8;
+            let bob = 0.012 * (t * 1.7 + k.id as f64).sin();
+            let orbit = radius + (KID_ORBIT - radius) * out;
+            let (kx, ky) = (orbit * k.a.cos(), orbit * k.a.sin() + bob);
+            let r = kr * size;
+
+            // La línea: del borde del principal al del hijo, en el acento. Puntos que fluyen
+            // hacia adentro.
+            let (ax, ay) = (cx + (radius + 0.05) * k.a.cos(), cy + (radius + 0.05) * k.a.sin());
+            let (bx, by) = (kx - (r + 0.05) * k.a.cos(), ky - (r + 0.05) * k.a.sin());
+            let len = (bx - ax).hypot(by - ay);
+            if len > 0.02 {
+                let line = if red { INK_RED } else { INK_ACCENT };
+                let step = 2.2 * g.du;
+                let steps = (len / step).floor() as usize;
+                let flow = if k.end.is_none() { t * 1.6 } else { 0.0 };
+                for q in 0..=steps {
+                    let u = q as f64 / steps.max(1) as f64;
+                    // Una cresta que viaja del hijo al principal: la línea «respira» hacia el centro.
+                    let tone = if (u * 3.0 + flow).fract() < 0.18 { 3 } else { 2 };
+                    g.plot(bx + (ax - bx) * u, by + (ay - by) * u, tone, line);
+                }
+                // Partículas: una por cada cosa que hizo el hijo, en su color, del hijo al principal.
+                let d = g.du;
+                for &(p0, err) in &k.pulses {
+                    let u = ((t - p0) / PULSE_TRAVEL).clamp(0.0, 1.0);
+                    let e = u * u * (3.0 - 2.0 * u);
+                    let (px, py) = (bx + (ax - bx) * e, by + (ay - by) * e);
+                    let pink = if err { INK_RED } else { ink };
+                    for oy in [-d, 0.0, d] {
+                        for ox in [-d, 0.0, d] {
+                            g.plot(px + ox, py + oy, 3, pink);
+                        }
+                    }
+                    // Estela hacia el hijo.
+                    for (q, back) in [(3, 0.07), (2, 0.13)] {
+                        let e2 = (e - back).max(0.0);
+                        let (qx, qy) = (bx + (ax - bx) * e2, by + (ay - by) * e2);
+                        g.plot(qx, qy, q, pink);
+                        g.plot(qx + d, qy, q, pink);
+                    }
+                }
+            }
+
+            // El hijo: su propio núcleo, a escala y en su lugar, pintado con su tinta.
+            g.view(kx, ky, r / BASE.blob_r, ink);
+            k.core.paint(g);
+            g.unview();
+        }
+    }
+}
+
+/// Dónde va el hijo número `slot` de `n` en este momento: repartidos parejo, girando
+/// despacio, el primero arriba a la izquierda (el reloj ocupa la esquina de la derecha).
+fn kid_slot(t: f64, slot: usize, n: usize, calm: f64) -> f64 {
+    PI * 0.75 + t * 0.06 * calm + slot as f64 * TAU / n.max(1) as f64
 }
 
 impl Default for Core {
@@ -1235,6 +1512,11 @@ const INK_MAIN: u8 = 0;
 const INK_GREEN: u8 = 1;
 const INK_RED: u8 = 2;
 const INK_WARM: u8 = 3;
+/// El acento del tema (Aether): lo de alrededor, que no cambia con el estado.
+const INK_ACCENT: u8 = 4;
+/// Desde acá, una tinta por hijo: cada uno con el color de lo que está haciendo.
+const INK_KID: u8 = 5;
+const MAX_KID_INKS: usize = 40;
 
 /// Rejilla de puntos. Coordenadas del mundo: y ∈ [-1, 1] (x proporcional); si el panel es
 /// más alto que ancho, se encoge todo para que el anillo entre.
@@ -1256,6 +1538,13 @@ struct Grid {
     bw: usize,
     bh: usize,
     used: Vec<bool>,
+    /// Vista para pintar un hijo: el mundo se corre a (`ox`, `oy`) y se escala por `k`, y la
+    /// tinta del estado se pinta con la del hijo (`ink`). Sin hijo: 0, 0, 1 y ninguna.
+    ox: f64,
+    oy: f64,
+    k: f64,
+    ink: Option<u8>,
+    du0: f64,
 }
 
 impl Grid {
@@ -1268,10 +1557,22 @@ impl Grid {
         let asp = dw as f64 / dh as f64;
         let s = asp.min(1.0);
         let (bx, by) = (dw.div_ceil(bw), dh.div_ceil(bh));
-        Grid { dw, dh, asp, s, du: 2.0 / (s * dh as f64), dots: vec![0; dw * dh], bw, bh, used: vec![false; bx * by] }
+        let du = 2.0 / (s * dh as f64);
+        Grid { dw, dh, asp, s, du, dots: vec![0; dw * dh], bw, bh, used: vec![false; bx * by], ox: 0.0, oy: 0.0, k: 1.0, ink: None, du0: du }
+    }
+
+    fn view(&mut self, ox: f64, oy: f64, k: f64, ink: u8) {
+        (self.ox, self.oy, self.k, self.ink) = (ox, oy, k, Some(ink));
+        self.du = self.du0 / k;
+    }
+
+    fn unview(&mut self) {
+        (self.ox, self.oy, self.k, self.ink) = (0.0, 0.0, 1.0, None);
+        self.du = self.du0;
     }
 
     fn index(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        let (x, y) = (self.ox + x * self.k, self.oy + y * self.k);
         let i = ((x * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
         let j = ((1.0 - (y * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
         (i >= 0.0 && j >= 0.0 && i < self.dw as f64 && j < self.dh as f64).then_some((i as usize, j as usize))
@@ -1283,11 +1584,12 @@ impl Grid {
         }
     }
 
-    /// Como `plot`, pero solo si su bloque está vacío: para lo que queda detrás.
+    /// Como `plot`, pero solo si su bloque está vacío: para lo que queda detrás (las motas,
+    /// en el acento).
     fn plot_under(&mut self, x: f64, y: f64, tone: u8) {
         if let Some((i, j)) = self.index(x, y) {
             if !self.used[self.block(i, j)] {
-                self.dot(i, j, tone, INK_MAIN);
+                self.dot(i, j, tone, INK_ACCENT);
             }
         }
     }
@@ -1301,6 +1603,10 @@ impl Grid {
     }
 
     fn dot(&mut self, i: usize, j: usize, tone: u8, ink: u8) {
+        let ink = match self.ink {
+            Some(kid) if ink == INK_MAIN || ink == INK_ACCENT => kid,
+            _ => ink,
+        };
         let k = j * self.dw + i;
         let old = self.dots[k];
         let (ot, oi) = (old & 3, old >> 2);
@@ -1314,7 +1620,7 @@ impl Grid {
     fn center(&self, i: usize, j: usize) -> (f64, f64) {
         let x = (i as f64 / (self.dw - 1) as f64 * 2.0 - 1.0) * self.asp / self.s;
         let y = (1.0 - j as f64 / (self.dh - 1) as f64 * 2.0) / self.s;
-        (x, y)
+        ((x - self.ox) / self.k, (y - self.oy) / self.k)
     }
 }
 
@@ -1333,6 +1639,53 @@ fn mote_band(z: f64, blob_r: f64) -> (f64, f64) {
 /// Velocidad relativa de una mota: las cercanas van ~10× más rápido.
 fn mote_speed(z: f64) -> f64 {
     0.25 + 2.4 * z * z
+}
+
+/// Si un color fijo cae demasiado cerca del acento del tema (Pensando azul con un tema azul),
+/// se gira su tono hasta separarlo: cada estado tiene que seguir leyéndose distinto de En espera.
+fn apart(c: [f64; 3], accent: [f64; 3]) -> [f64; 3] {
+    let (h, s, v) = hsv(c);
+    let (ha, sa, _) = hsv(accent);
+    if s < 0.15 || sa < 0.15 {
+        return c; // grises: no hay tono que comparar
+    }
+    let d = (h - ha + 540.0) % 360.0 - 180.0; // diferencia con signo, en grados
+    if d.abs() >= 40.0 {
+        return c;
+    }
+    let h = ha + if d >= 0.0 { 40.0 } else { -40.0 };
+    from_hsv(h.rem_euclid(360.0), s, v)
+}
+
+fn hsv(c: [f64; 3]) -> (f64, f64, f64) {
+    let [r, g, b] = c.map(|x| x / 255.0);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    let h = if d == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h, if max == 0.0 { 0.0 } else { d / max }, max)
+}
+
+fn from_hsv(h: f64, s: f64, v: f64) -> [f64; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [(r + m) * 255.0, (g + m) * 255.0, (b + m) * 255.0]
 }
 
 fn mix(a: [f64; 3], b: [f64; 3], f: f64) -> [f64; 3] {
@@ -1416,6 +1769,18 @@ mod tests {
     }
 
     #[test]
+    fn los_estados_se_separan_del_acento() {
+        let azul = [69.0, 123.0, 255.0];
+        let pensando = [90.0, 150.0, 255.0];
+        let (h, _, _) = hsv(apart(pensando, azul));
+        let (ha, _, _) = hsv(azul);
+        assert!(((h - ha + 540.0) % 360.0 - 180.0).abs() >= 39.9);
+        // Lo que ya está lejos no se toca.
+        let verde = [120.0, 235.0, 120.0];
+        assert_eq!(apart(verde, azul), verde);
+    }
+
+    #[test]
     fn es_determinista() {
         let sig = Signals::default();
         let shape = |b: Buffer| b.content().iter().map(|c| c.symbol().to_string()).collect::<String>();
@@ -1454,6 +1819,40 @@ mod tests {
                 render(&c, 36, 15);
             }
         }
+    }
+
+    #[test]
+    fn hijos_nacen_trabajan_y_vuelven() {
+        let mut sig = Signals::default();
+        let mut c = run(State::Idle, 1.0, &sig);
+        for id in 0..3 {
+            c.kid_born(id);
+        }
+        sig.kids = vec![(0, State::Reading), (1, State::Editing), (2, State::Running)];
+        for _ in 0..30 {
+            c.step(0.04, State::Delegating, &sig);
+        }
+        c.kid_pulse(0, false);
+        c.kid_pulse(2, true);
+        for (w, h) in [(36, 15), (24, 9), (60, 22), (6, 3)] {
+            render(&c, w, h);
+        }
+        c.kid_end(0, true);
+        c.kid_end(1, false);
+        sig.kids.retain(|k| k.0 == 2);
+        let mut bloomed = false;
+        for _ in 0..50 {
+            let before = c.blooms.len();
+            c.step(0.04, State::Idle, &sig);
+            bloomed |= c.blooms.len() > before;
+            render(&c, 36, 15);
+        }
+        // El que salió bien volvió y se fundió (con su destello); el que falló se apagó.
+        assert_eq!(c.kid_count(), 1);
+        assert!(bloomed);
+        // Reiniciar el motor se los lleva.
+        c.reboot();
+        assert_eq!(c.kid_count(), 0);
     }
 
     /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
@@ -1525,5 +1924,106 @@ mod tests {
             frames.join(",")
         );
         std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/target/nucleo-anim.html"), anim).unwrap();
+
+        // Hijos: nacen tres, trabajan en cosas distintas, mandan partículas y se van.
+        let mut c = run(State::Idle, 2.6, &Signals::default());
+        let mut sig = Signals { ctx: 0.3, ..Default::default() };
+        let mut frames = Vec::new();
+        let mut t = 0.0;
+        let mut next = 0;
+        let script: [(f64, &dyn Fn(&mut Core, &mut Signals)); 9] = [
+            (0.3, &|c, s| { c.kid_born(0); s.kids.push((0, State::Thinking)); }),
+            (1.0, &|c, s| { c.kid_born(1); s.kids.push((1, State::Thinking)); }),
+            (1.6, &|c, s| { c.kid_born(2); s.kids.push((2, State::Searching)); }),
+            (2.6, &|c, s| { c.kid_pulse(0, false); s.kids[0].1 = State::Reading; }),
+            (3.4, &|c, s| { c.kid_pulse(1, false); s.kids[1].1 = State::Editing; }),
+            (4.6, &|c, s| { c.kid_pulse(2, false); s.kids[2].1 = State::Running; }),
+            (6.5, &|c, _| c.kid_pulse(2, true)),
+            (8.0, &|c, s| { c.kid_end(0, true); s.kids.retain(|k| k.0 != 0); }),
+            (9.5, &|c, s| { c.kid_end(1, false); s.kids.retain(|k| k.0 != 1); }),
+        ];
+        while t < 12.0 {
+            while next < script.len() && t >= script[next].0 {
+                (script[next].1)(&mut c, &mut sig);
+                next += 1;
+            }
+            if t > 6.0 && t < 6.04 {
+                // Una pulsación por segundo, como un agente que trabaja.
+                c.kid_pulse(2, false);
+            }
+            c.step(0.04, State::Idle, &sig);
+            t += 0.04;
+            let (w, h) = (48u16, 20u16);
+            let buf = render(&c, w, h);
+            let mut f = String::new();
+            for y in 0..h {
+                for x in 0..w {
+                    let cell = &buf[(x, y)];
+                    match cell.fg {
+                        Color::Rgb(r, g, b) => f.push_str(&format!("<span style=color:rgb({r},{g},{b})>{}</span>", cell.symbol())),
+                        _ => f.push(' '),
+                    }
+                }
+                f.push('\n');
+            }
+            let label = sig.kids.iter().map(|k| k.1.label()).collect::<Vec<_>>().join(" · ");
+            frames.push(format!("[{:?},{:?}]", f, label));
+        }
+        let anim = format!(
+            "<!doctype html><meta charset=utf-8><body style='background:#05090d;color:#ccc;font:14px monospace;padding:20px'>\
+             <pre id=f style='font-family:\"JetBrainsMono Nerd Font\",monospace;font-size:22px;line-height:1.12;margin:0'></pre>\
+             <div id=l style='font-size:16px;margin-top:8px'></div><script>const F=[{}];let i=0;\
+             setInterval(()=>{{const[x,l]=F[i++%F.length];f.innerHTML=x;document.getElementById('l').textContent=l;}},40)</script>",
+            frames.join(",")
+        );
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/target/nucleo-hijos.html"), anim).unwrap();
+
+        // Un hijo por estado, quieto en su órbita, para comparar las siluetas lado a lado.
+        let states = [State::Thinking, State::Reading, State::Searching, State::Editing, State::Running, State::Web];
+        for (n, st) in states.iter().enumerate() {
+            let mut c = run(State::Idle, 2.6, &Signals::default());
+            let sig = Signals { kids: vec![(0, *st)], ..Default::default() };
+            c.kid_born(0);
+            for _ in 0..60 {
+                c.step(0.04, State::Idle, &sig);
+            }
+            let (w, h) = (560, 560);
+            let (img, colors) = c.pixels(w, h, 4);
+            let mut ppm = format!("P6 {w} {h} 255\n").into_bytes();
+            for &i in &img {
+                let px = if i == 0 { [5.0, 9.0, 13.0] } else { colors[i as usize - 1] };
+                ppm.extend(px.map(|v| v.round() as u8));
+            }
+            std::fs::write(format!("{}/target/estado-{n}.ppm", env!("CARGO_MANIFEST_DIR")), ppm).unwrap();
+        }
+
+        // Y fotos en puntos de imagen, como se ve en foot: el mismo guion, cuadros sueltos.
+        let mut c = run(State::Idle, 2.6, &Signals::default());
+        let mut sig = Signals { ctx: 0.3, ..Default::default() };
+        let (mut t, mut next) = (0.0, 0);
+        let shots = [1.3, 2.75, 5.0, 6.62, 8.5, 9.9];
+        let mut shot = 0;
+        while shot < shots.len() {
+            while next < script.len() && t >= script[next].0 {
+                (script[next].1)(&mut c, &mut sig);
+                next += 1;
+            }
+            if t > 6.0 && t < 6.04 {
+                c.kid_pulse(2, false);
+            }
+            c.step(0.04, State::Idle, &sig);
+            t += 0.04;
+            if t >= shots[shot] {
+                let (w, h) = (480, 300);
+                let (img, colors) = c.pixels(w, h, 4);
+                let mut ppm = format!("P6 {w} {h} 255\n").into_bytes();
+                for &i in &img {
+                    let px = if i == 0 { [5.0, 9.0, 13.0] } else { colors[i as usize - 1] };
+                    ppm.extend(px.map(|v| v.round() as u8));
+                }
+                std::fs::write(format!("{}/target/hijo-{shot}.ppm", env!("CARGO_MANIFEST_DIR")), ppm).unwrap();
+                shot += 1;
+            }
+        }
     }
 }

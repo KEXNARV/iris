@@ -287,11 +287,40 @@ fn draw_activity(f: &mut Frame, area: Rect, app: &App, t: f64) {
     f.render_widget(block, area);
     let w = inner.width as usize;
 
-    let lines: Vec<Line> = app
+    // Arriba, los subagentes: qué es cada hijo del núcleo y qué está haciendo.
+    let mut lines: Vec<Line> = app
+        .agents
+        .iter()
+        .map(|g| {
+            let (icon, c) = match g.ended {
+                None => ("◉", app.nucleo.color()),
+                Some((_, true)) => ("✓", GREEN),
+                Some((_, false)) => ("✗", RED),
+            };
+            let tool = g.current.as_ref().map(|(n, d)| (n, d)).or(g.last.as_ref().map(|(n, d, _)| (n, d)).filter(|_| g.state() != State::Thinking));
+            let what = match (&g.ended, tool) {
+                (Some(_), _) => String::new(),
+                (None, Some((name, detail))) => format!("{} · {name} {detail}", g.state().label().to_lowercase()),
+                (None, None) => g.state().label().to_lowercase(),
+            };
+            let time = format!(" {:.0}s", g.ended.map_or(g.started.elapsed(), |(t, _)| t - g.started).as_secs_f64());
+            let desc = format!("{} ", truncate(&g.description, w.saturating_sub(time.len() + 6)));
+            let room = w.saturating_sub(desc.chars().count() + 2 + time.len());
+            Line::from(vec![
+                Span::styled(format!("{icon} "), Style::new().fg(c)),
+                Span::styled(desc, Style::new().fg(theme::text()).bold()),
+                Span::styled(format!("{:<room$}", truncate(&what, room)), Style::new().fg(theme::faint())),
+                Span::styled(time, Style::new().fg(theme::dim())),
+            ])
+        })
+        .collect();
+    let room = (inner.height as usize).saturating_sub(lines.len());
+
+    lines.extend(app
         .activity
         .iter()
         .rev()
-        .take(inner.height as usize)
+        .take(room)
         .map(|a| {
             let (icon, c) = act_icon(a, t);
             let time = format!(" {:.1}s", act_secs(a));
@@ -303,8 +332,7 @@ fn draw_activity(f: &mut Frame, area: Rect, app: &App, t: f64) {
                 Span::styled(format!("{:<room$}", truncate(&a.detail, room)), Style::new().fg(theme::faint())),
                 Span::styled(time, Style::new().fg(theme::dim())),
             ])
-        })
-        .collect();
+        }));
 
     if lines.is_empty() {
         let p = Paragraph::new(Span::styled("sin actividad todavía", Style::new().fg(theme::dim())));

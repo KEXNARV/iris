@@ -82,6 +82,35 @@ pub struct Activity {
     pub output: String,
 }
 
+/// Un subagente vivo (o recién terminado): un hijo del núcleo.
+pub struct Agent {
+    /// Id de la llamada a `Agent` que lo lanzó; sus mensajes llegan con este id.
+    pub tool: String,
+    /// Con este número lo conoce el núcleo.
+    pub kid: u64,
+    pub description: String,
+    pub kind: String,
+    pub started: Instant,
+    /// La herramienta que tiene en curso (nombre y detalle); sin ninguna, está pensando.
+    pub current: Option<(String, String)>,
+    /// La última que terminó y cuándo. Un Write dura 50 ms y el modelo tarda segundos en
+    /// pedir la siguiente: sin esto el hijo se ve siempre «pensando».
+    pub last: Option<(String, String, Instant)>,
+    pub tools: usize,
+    /// Cuándo terminó y si salió bien; se queda un momento para que se vea volver.
+    pub ended: Option<(Instant, bool)>,
+}
+
+impl Agent {
+    pub fn state(&self) -> State {
+        match (&self.current, &self.last) {
+            (Some((name, detail)), _) => nucleo::tool_state(name, detail),
+            (None, Some((name, detail, t))) if t.elapsed() < Duration::from_secs(3) => nucleo::tool_state(name, detail),
+            _ => State::Thinking,
+        }
+    }
+}
+
 #[derive(PartialEq)]
 pub enum VoiceState {
     Loading,
@@ -211,6 +240,9 @@ pub struct App {
     sixel_shown: Option<ratatui::layout::Rect>,
     /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
     pub turn_from: usize,
+    /// Subagentes, los hijos del núcleo.
+    pub agents: Vec<Agent>,
+    next_kid: u64,
 }
 
 impl App {
@@ -254,6 +286,7 @@ impl App {
             ctx: self.ctx_used as f64 / self.ctx_window.max(1) as f64,
             queue: self.messages.iter().filter(|m| m.waiting.is_some()).count(),
             todos: self.todos,
+            kids: self.agents.iter().filter(|a| a.ended.is_none()).map(|a| (a.kid, a.state())).collect(),
             idle: self.last_activity.elapsed().as_secs_f64(),
             calm: self.calm,
         }
@@ -347,7 +380,8 @@ impl App {
                         self.nucleo.fire(Gesto::Error);
                     } else if kind == State::Testing {
                         self.nucleo.fire(Gesto::Pass);
-                    } else if kind == State::Delegating {
+                    } else if kind == State::Delegating && !self.agents.iter().any(|g| g.tool == id) {
+                        // Sin hijo en el núcleo (un motor que no avisa de sus tareas): la gota de siempre.
                         self.nucleo.fire(Gesto::Merge);
                     }
                 }
@@ -420,8 +454,48 @@ impl App {
                 let k = |n: u64| format!("{:.1}k", n as f64 / 1000.0);
                 self.push(Role::System, format!("contexto compactado: {} → {} tokens", k(pre), k(post)));
             }
+            ClaudeEvent::AgentStarted { tool, description, kind } => {
+                let kid = self.next_kid;
+                self.next_kid += 1;
+                self.nucleo.kid_born(kid);
+                self.agents.push(Agent {
+                    tool,
+                    kid,
+                    description,
+                    kind,
+                    started: Instant::now(),
+                    current: None,
+                    last: None,
+                    tools: 0,
+                    ended: None,
+                });
+            }
+            ClaudeEvent::AgentTool { tool, name, detail } => {
+                if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    a.current = Some((name, detail));
+                    a.tools += 1;
+                    self.nucleo.kid_pulse(a.kid, false);
+                }
+            }
+            ClaudeEvent::AgentToolResult { tool, is_error } => {
+                if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    if let Some((name, detail)) = a.current.take() {
+                        a.last = Some((name, detail, Instant::now()));
+                    }
+                    self.nucleo.kid_pulse(a.kid, is_error);
+                }
+            }
+            ClaudeEvent::AgentDone { tool, ok } => {
+                if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    a.ended = Some((Instant::now(), ok));
+                    a.current = None;
+                    self.nucleo.kid_end(a.kid, ok);
+                }
+            }
             ClaudeEvent::Stderr(line) => self.push(Role::Error, line),
             ClaudeEvent::Exited => {
+                self.agents.clear();
+                self.nucleo.kids_clear();
                 self.modal = None;
                 self.drop_waiting();
                 self.alive = false;
@@ -527,6 +601,8 @@ fn main() -> Result<()> {
         thumbs_shown: vec![],
         sixel_shown: None,
         turn_from: 0,
+        agents: vec![],
+        next_kid: 0,
     };
 
     let mut term = ratatui::init();
@@ -593,6 +669,8 @@ fn run(
 
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
+        // Los que terminaron se quedan unos segundos en ACTIVIDAD y luego se van.
+        app.agents.retain(|a| a.ended.is_none_or(|(t, _)| t.elapsed() < Duration::from_secs(4)));
         let (want, sig) = (app.state(), app.signals());
         app.nucleo.step(dt, want, &sig);
         // El teclado acompaña al núcleo: su estado, la voz y los eventos.
@@ -655,6 +733,7 @@ fn run(
                             app.todos = (0, 0);
                             app.booted = Instant::now();
                             app.nucleo.reboot();
+                            app.agents.clear();
                             app.push(Role::System, "claude reiniciado — sesión nueva");
                         }
                         Flow::NewChat => {
@@ -671,6 +750,7 @@ fn run(
                             app.todos = (0, 0);
                             app.booted = Instant::now();
                             app.nucleo.reboot();
+                            app.agents.clear();
                             app.push(Role::System, "conversación nueva · la anterior se retoma con /resume");
                             term.clear()?;
                         }
@@ -686,6 +766,7 @@ fn run(
                             app.todos = (0, 0);
                             app.booted = Instant::now();
                             app.nucleo.reboot();
+                            app.agents.clear();
                             app.messages = sessions::history(&id);
                             app.md_cache.borrow_mut().clear();
                             app.push(Role::System, format!("sesión {} retomada", &id[..8]));
