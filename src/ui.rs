@@ -698,6 +698,7 @@ fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
+        Some(Modal::Update(info)) => draw_update(f, anchor, info),
         None => draw_menu(f, anchor, app),
     }
 }
@@ -803,6 +804,32 @@ fn draw_estilos(f: &mut Frame, anchor: Rect, sel: usize) {
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
     overlay(f, anchor, "ESTILO", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::update::Info) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let what = match info.commits.len() {
+        0 => format!("Hay una versión nueva en GitHub ({}).", info.commit),
+        1 => format!("Hay una versión nueva en GitHub ({}): 1 cambio.", info.commit),
+        n => format!("Hay una versión nueva en GitHub ({}): {n} cambios.", info.commit),
+    };
+    let mut head = vec![];
+    for l in wrap(&what, w.saturating_sub(2)) {
+        head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()).bold())));
+    }
+    for l in wrap("Se baja, se compila y Jarvis se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
+        head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::faint()))));
+    }
+    if !info.commits.is_empty() {
+        head.push(Line::default());
+    }
+    let items = info
+        .commits
+        .iter()
+        .map(|c| Line::from(Span::styled(format!("  · {}", truncate(c, w.saturating_sub(4))), Style::new().fg(theme::text()))))
+        .collect();
+    let hints = [("enter", "actualizar"), ("esc", "ahora no")];
+    overlay(f, anchor, "ACTUALIZACIÓN", theme::accent(), head, items, 0, 8, &hints);
 }
 
 fn draw_ask(f: &mut Frame, anchor: Rect, a: &crate::ask::Ask) {

@@ -15,6 +15,7 @@ mod sixel;
 mod teclado;
 mod theme;
 mod ui;
+mod update;
 mod voice;
 
 use std::sync::mpsc::{self, Sender};
@@ -33,6 +34,7 @@ pub enum AppEvent {
     Claude(u64, ClaudeEvent),
     Voice(VoiceEvent),
     Habla(habla::HablaEvent),
+    Update(update::UpdateEvent),
 }
 
 /// Cuándo contesta en voz alta: `Auto` cuando le hablaste (si escribiste, en silencio).
@@ -128,6 +130,8 @@ pub enum Modal {
     Model { sel: usize },
     /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
     Estilo { sel: usize, antes: estilo::Estilo },
+    /// Hay una versión nueva en GitHub: ¿actualizar?
+    Update(update::Info),
 }
 
 pub struct App {
@@ -171,6 +175,10 @@ pub struct App {
     pub flash: Option<(String, Instant)>,
     /// El primer Ctrl+C: si llega otro mientras se ve el aviso, se sale.
     quit_armed: Option<Instant>,
+    /// Versión nueva por ofrecer: se muestra cuando no estorbe.
+    update: Option<update::Info>,
+    /// Se instaló la versión nueva: al salir, Jarvis se vuelve a abrir con ella.
+    reexec: bool,
     /// El blob del panel NÚCLEO.
     pub nucleo: nucleo::Core,
     /// Tokens de contexto en uso y la ventana del modelo.
@@ -541,6 +549,7 @@ fn main() -> Result<()> {
 
     let mut claude = Some(Claude::spawn(&extra, tx.clone())?);
     let (voice_tx, level) = voice::spawn(tx.clone());
+    update::spawn(tx.clone());
 
     // `jarvis --resume <id>`: además de pasárselo al motor, se muestra la conversación.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::history(id));
@@ -581,6 +590,8 @@ fn main() -> Result<()> {
         compacting: false,
         last_activity: Instant::now(),
         quit_armed: None,
+        update: None,
+        reexec: false,
         last_key: Instant::now(),
         last_voice: Instant::now(),
         noise_floor: 0.0,
@@ -653,6 +664,26 @@ fn main() -> Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
     ratatui::restore();
+    if res.is_ok() && app.reexec {
+        // Se instaló la versión nueva: se reabre con ella y retoma esta misma sesión.
+        drop(claude);
+        let mut args: Vec<String> = vec![];
+        let mut old = std::env::args().skip(1);
+        while let Some(a) = old.next() {
+            if a == "--resume" {
+                old.next();
+            } else {
+                args.push(a);
+            }
+        }
+        if !app.session.is_empty() {
+            args.extend(["--resume".into(), app.session.clone()]);
+        }
+        drop(app);
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(update::exe()).args(args).exec();
+        return Err(err.into());
+    }
     res
 }
 
@@ -688,6 +719,17 @@ fn run(
             hear(app, lvl);
         }
         flotante_tick(app, voice_tx);
+        // La versión nueva se ofrece cuando no estorba: si apareciera mientras escribes, el
+        // Enter de tu mensaje la aceptaría.
+        if app.update.is_some()
+            && app.modal.is_none()
+            && app.tools_view.is_none()
+            && app.input.is_empty()
+            && !app.busy
+            && app.last_key.elapsed() > Duration::from_secs(3)
+        {
+            app.modal = app.update.take().map(Modal::Update);
+        }
 
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
@@ -795,6 +837,10 @@ fn run(
                             term.clear()?;
                         }
                         Flow::Redraw => term.clear()?,
+                        Flow::Update => {
+                            app.push(Role::System, "actualizando: bajando y compilando la versión nueva…");
+                            update::install(tx.clone());
+                        }
                         Flow::Go => {}
                     }
                 }
@@ -827,6 +873,16 @@ fn run(
                         app.push(Role::Error, format!("sin voz: {why}"));
                     }
                 },
+                AppEvent::Update(e) => match e {
+                    update::UpdateEvent::Available(info) => app.update = Some(info),
+                    update::UpdateEvent::Installed => {
+                        app.reexec = true;
+                        return Ok(());
+                    }
+                    update::UpdateEvent::Failed(why) => {
+                        app.push(Role::Error, format!("no se pudo actualizar: {why}"));
+                    }
+                },
             }
         }
     }
@@ -840,6 +896,8 @@ enum Flow {
     Quit,
     Restart,
     Resume(String),
+    /// Bajar e instalar la versión nueva.
+    Update,
 }
 
 fn handle_key(
@@ -1219,6 +1277,17 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
                     let id = list[*sel].id.clone();
                     app.modal = None;
                     return Some(Flow::Resume(id));
+                }
+                KeyCode::Esc => app.modal = None,
+                _ => {}
+            }
+            Some(Flow::Go)
+        }
+        Modal::Update(_) => {
+            match k.code {
+                KeyCode::Enter => {
+                    app.modal = None;
+                    return Some(Flow::Update);
                 }
                 KeyCode::Esc => app.modal = None,
                 _ => {}
