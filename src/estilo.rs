@@ -14,14 +14,32 @@ pub enum Estilo {
     Cabina,
     /// La voz primero: núcleo al centro, historial a la izquierda y lo que hace a la derecha.
     Cine,
+    /// Un CRT de un solo color: marco doble, retícula de osciloscopio y barrido.
+    Fosforo,
+    /// Un disco por sectores: cada herramienta aparece en el suyo.
+    Radar,
+    /// Un diario: el estado como titular, columna de datos, lectura y el núcleo como figura.
+    Editorial,
+    /// Casi nada: un punto que late, la conversación abajo y la línea de escritura.
+    Zen,
+    /// Todo como un registro: hora, tipo, contenido y duración, línea por línea.
+    Bitacora,
+    /// Mosaicos: núcleo, contexto, costo, herramientas y sesión.
+    Tablero,
 }
 
 /// (estilo, id, nombre, para qué)
-pub const TODOS: [(Estilo, &str, &str, &str); 4] = [
+pub const TODOS: [(Estilo, &str, &str, &str); 10] = [
     (Estilo::Clasico, "clasico", "Clásico", "paneles con borde, como siempre"),
     (Estilo::Propuesta, "propuesta", "Propuesta", "sin cajas, el núcleo al frente"),
     (Estilo::Cabina, "cabina", "Cabina", "HUD denso: registro con hora y línea del turno"),
     (Estilo::Cine, "cine", "Cine", "la voz primero: historial, núcleo y lo que hace"),
+    (Estilo::Fosforo, "fosforo", "Fósforo", "CRT de un solo color, con retícula y barrido"),
+    (Estilo::Radar, "radar", "Radar", "cada herramienta aparece en su sector"),
+    (Estilo::Editorial, "editorial", "Editorial", "titular grande, columna de lectura y figura"),
+    (Estilo::Zen, "zen", "Zen", "casi nada: un punto que late y la línea de escritura"),
+    (Estilo::Bitacora, "bitacora", "Bitácora", "todo en orden, línea por línea, con su hora"),
+    (Estilo::Tablero, "tablero", "Tablero", "mosaicos: contexto, costo, herramientas y sesión"),
 ];
 
 impl Estilo {
@@ -93,6 +111,9 @@ mod tests {
         assert_eq!(Estilo::buscar("clas"), Some(Estilo::Clasico));
         assert_eq!(Estilo::buscar(" CAB \n"), Some(Estilo::Cabina));
         assert_eq!(Estilo::buscar("pro"), Some(Estilo::Propuesta));
+        assert_eq!(Estilo::buscar("fósforo"), Some(Estilo::Fosforo));
+        assert_eq!(Estilo::buscar("Bitácora"), Some(Estilo::Bitacora));
+        assert_eq!(Estilo::buscar("ze"), Some(Estilo::Zen));
         assert_eq!(Estilo::buscar("x"), None);
         assert_eq!(Estilo::buscar(""), None);
     }

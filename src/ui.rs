@@ -25,6 +25,12 @@ pub fn draw(f: &mut Frame, app: &App) {
         Estilo::Propuesta if fits(60, 16) => propuesta(f, app),
         Estilo::Cabina if fits(70, 18) => cabina(f, app),
         Estilo::Cine if fits(64, 22) => cine(f, app),
+        Estilo::Fosforo if fits(70, 18) => fosforo(f, app),
+        Estilo::Radar if fits(70, 20) => radar(f, app),
+        Estilo::Editorial if fits(70, 20) => editorial(f, app),
+        Estilo::Zen if fits(40, 12) => zen(f, app),
+        Estilo::Bitacora if fits(60, 12) => bitacora(f, app),
+        Estilo::Tablero if fits(80, 24) => tablero(f, app),
         _ => clasico(f, app),
     }
     if app.tools_view.is_some() {
@@ -1864,4 +1870,906 @@ fn core_draw(app: &App, r: Rect, buf: &mut Buffer) {
 
 fn h_rows(r: Rect) -> usize {
     r.height as usize
+}
+
+// ── Piezas de los estilos de /theme que siguen ──────────────────────────────────────────
+
+fn rgb3(c: [f64; 3]) -> Color {
+    Color::Rgb(c[0].round() as u8, c[1].round() as u8, c[2].round() as u8)
+}
+
+/// La línea de escritura con su prompt, y lo que se despliega encima (preguntas, menús).
+/// `anchor` es la fila desde la que suben los menús.
+fn orden_line(f: &mut Frame, line: Rect, anchor: Rect, app: &App, state: State, t: f64, prompt: &str, col: Color) {
+    if line.width < 4 || line.height == 0 {
+        return;
+    }
+    let pw = prompt.width();
+    let mut spans = vec![Span::styled(prompt.to_string(), Style::new().fg(col).bold())];
+    spans.extend(input_spans(app, state, t, (line.width as usize).saturating_sub(pw + 1), col));
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect { height: 1, ..line });
+    draw_modal(f, anchor, app);
+}
+
+/// El aviso breve si hay uno; si no, los atajos.
+fn foot_keys(buf: &mut Buffer, r: Rect, app: &App, state: State, kc: Color, brackets: bool) {
+    match flash(app) {
+        Some(l) => {
+            buf.set_line(r.x, r.y, &l, r.width);
+        }
+        None => keys(buf, r.x, r.y, r.right(), &hints_for(app, state), kc, brackets),
+    }
+}
+
+/// Letras de bloque de 3 filas para titulares. Sin tildes; lo que no está, no se dibuja.
+fn big_glyph(c: char) -> Option<[&'static str; 3]> {
+    Some(match c {
+        'A' => ["█▀█", "█▀█", "▀ ▀"],
+        'B' => ["█▀▄", "█▀▄", "▀▀ "],
+        'C' => ["█▀▀", "█  ", "▀▀▀"],
+        'D' => ["█▀▄", "█ █", "▀▀ "],
+        'E' => ["█▀▀", "█▀ ", "▀▀▀"],
+        'F' => ["█▀▀", "█▀ ", "▀  "],
+        'G' => ["█▀▀", "█ █", "▀▀▀"],
+        'H' => ["█ █", "█▀█", "▀ ▀"],
+        'I' => ["▀█▀", " █ ", "▀▀▀"],
+        'J' => ["  █", "  █", "▀▀ "],
+        'K' => ["█ █", "█▀▄", "▀ ▀"],
+        'L' => ["█  ", "█  ", "▀▀▀"],
+        'M' => ["█▄ ▄█", "█ ▀ █", "▀   ▀"],
+        'N' => ["█▄ █", "█ ▀█", "▀  ▀"],
+        'O' => ["█▀█", "█ █", "▀▀▀"],
+        'P' => ["█▀█", "█▀▀", "▀  "],
+        'Q' => ["█▀█", "█ █", "▀▀▄"],
+        'R' => ["█▀▄", "█▀▄", "▀ ▀"],
+        'S' => ["█▀▀", "▀▀█", "▀▀▀"],
+        'T' => ["▀█▀", " █ ", " ▀ "],
+        'U' => ["█ █", "█ █", "▀▀▀"],
+        'V' => ["█ █", "█ █", " ▀ "],
+        'W' => ["█   █", "█ █ █", " ▀ ▀ "],
+        'X' => ["█ █", "▄▀▄", "▀ ▀"],
+        'Y' => ["█ █", "▀█▀", " ▀ "],
+        'Z' => ["▀▀█", "▄▀ ", "▀▀▀"],
+        '0' => ["█▀█", "█ █", "▀▀▀"],
+        '1' => ["▄█ ", " █ ", "▀▀▀"],
+        '2' => ["▀▀█", "█▀▀", "▀▀▀"],
+        '3' => ["▀▀█", " ▀█", "▀▀▀"],
+        '4' => ["█ █", "▀▀█", "  ▀"],
+        '5' => ["█▀▀", "▀▀█", "▀▀▀"],
+        '6' => ["█▀▀", "█▀█", "▀▀▀"],
+        '7' => ["▀▀█", "  █", "  ▀"],
+        '8' => ["█▀█", "█▀█", "▀▀▀"],
+        '9' => ["█▀█", "▀▀█", "▀▀▀"],
+        '%' => ["▀ █", " █ ", "█ ▄"],
+        '$' => ["▄█▀", "▀█▄", "▀▀ "],
+        '.' => [" ", " ", "▀"],
+        ' ' => ["  ", "  ", "  "],
+        _ => return None,
+    })
+}
+
+/// El texto en letras de bloque, o `None` si no entra en `max` columnas.
+fn big_text(s: &str, max: usize) -> Option<[String; 3]> {
+    let s: String = s
+        .trim_end_matches(['.', ' '])
+        .to_uppercase()
+        .chars()
+        .map(|c| match c {
+            'Á' => 'A',
+            'É' => 'E',
+            'Í' => 'I',
+            'Ó' => 'O',
+            'Ú' | 'Ü' => 'U',
+            'Ñ' => 'N',
+            c => c,
+        })
+        .collect();
+    let mut rows = [String::new(), String::new(), String::new()];
+    for (i, c) in s.chars().filter_map(big_glyph).enumerate() {
+        for k in 0..3 {
+            if i > 0 {
+                rows[k].push(' ');
+            }
+            rows[k].push_str(c[k]);
+        }
+    }
+    (rows[0].width() <= max && !rows[0].is_empty()).then_some(rows)
+}
+
+/// Fecha local: (año, mes, día, día de la semana con 0 = domingo).
+fn local_date() -> (i64, u32, u32, u32) {
+    let utc = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // El desfase sale de comparar la hora local con la UTC del día.
+    let (h, m, s) = local_hms();
+    let local_sod = (h * 3600 + m * 60 + s) as i64;
+    let mut off = local_sod - utc.rem_euclid(86_400);
+    if off > 43_200 {
+        off -= 86_400;
+    } else if off < -43_200 {
+        off += 86_400;
+    }
+    let days = (utc + off).div_euclid(86_400);
+    let wd = (days + 4).rem_euclid(7) as u32;
+    // Días desde 1970 → fecha civil (Howard Hinnant).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = yoe + era * 400 + (mo <= 2) as i64;
+    (y, mo, d, wd)
+}
+
+fn ses8(app: &App) -> String {
+    app.session.get(..8).unwrap_or("········").to_string()
+}
+
+fn model_short(app: &App) -> String {
+    app.model.trim_start_matches("claude-").to_string()
+}
+
+// ── Fósforo: un CRT de un solo color ────────────────────────────────────────────────────
+
+fn fosforo(f: &mut Frame, app: &App) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let ph = Style::new().fg(theme::accent());
+    {
+        let buf = f.buffer_mut();
+        let (x0, x1, y0, y1) = (area.x, area.right() - 1, area.y, area.bottom() - 1);
+        put(buf, x0, y0, "╔", ph, 1);
+        put(buf, x1, y0, "╗", ph, 1);
+        put(buf, x0, y1, "╚", ph, 1);
+        put(buf, x1, y1, "╝", ph, 1);
+        hline(buf, x0 + 1, x1 - 1, y0, "═", ph);
+        hline(buf, x0 + 1, x1 - 1, y1, "═", ph);
+        for y in y0 + 1..y1 {
+            put(buf, x0, y, "║", ph, 1);
+            put(buf, x1, y, "║", ph, 1);
+        }
+    }
+    let inner = Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4), height: area.height.saturating_sub(2) };
+    let input_h = if listening(state) { 3 } else { 1 };
+    let [head, rule, body, rule2, input, _, hints] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(6),
+        Constraint::Length(1),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    {
+        let buf = f.buffer_mut();
+        let hi = Style::new().fg(theme::text()).bold();
+        let lo = Style::new().fg(theme::faint());
+        let mut x = put(buf, head.x, head.y, "JARVIS-OS", hi, head.width);
+        for v in [model_short(app), cwd(), format!("SES {}", ses8(app))] {
+            x = put(buf, x + 3, head.y, &v.to_uppercase(), lo, head.right().saturating_sub(x + 12));
+        }
+        put_right(buf, head.right() - 1, head.y, &now_hhmmss(), hi);
+        hline(buf, rule.x, rule.right() - 1, rule.y, "─", Style::new().fg(theme::dim()));
+    }
+
+    let side_w = (body.width * 40 / 100).clamp(30, 60);
+    let narrow = body.width < 90;
+    let (chat, side) = if narrow {
+        (body, Rect::default())
+    } else {
+        let [c, _, s] = Layout::horizontal([Constraint::Min(30), Constraint::Length(3), Constraint::Length(side_w)]).areas(body);
+        (c, s)
+    };
+    let chat_in = Rect { y: chat.y + 1, height: chat.height.saturating_sub(1), ..chat };
+    render_chat(f, chat_in, app, chat_rows(app, chat_in.width as usize, Voz::Canal));
+
+    // El osciloscopio: retícula, el núcleo encima y las lecturas debajo.
+    if !narrow {
+        let core_h = (side.width / 2).min(side.height.saturating_sub(8)).max(6);
+        let frame = Rect { height: core_h + 2, ..side };
+        {
+            let buf = f.buffer_mut();
+            corners(buf, frame, Style::new().fg(theme::dim()), Some("CANAL A ─ 2V/DIV"));
+            for y in (frame.y + 2..frame.bottom().saturating_sub(1)).step_by(3) {
+                for x in (frame.x + 2..frame.right().saturating_sub(2)).step_by(6) {
+                    put(buf, x, y, "·", Style::new().fg(theme::dim()), 1);
+                }
+            }
+        }
+        let core = Rect { x: frame.x + 1, y: frame.y + 1, width: frame.width.saturating_sub(2), height: frame.height.saturating_sub(2) };
+        core_draw(app, core, f.buffer_mut());
+        let (title, detail) = core_label(app, t, side.width as usize);
+        let buf = f.buffer_mut();
+        let hi = Style::new().fg(theme::text()).bold();
+        let lo = Style::new().fg(theme::faint());
+        let mut y = frame.bottom() + 1;
+        put(buf, side.x + 1, y, &format!("ESTADO: {}", title.to_uppercase()), hi, side.width);
+        y += 1;
+        put(buf, side.x + 1, y, &detail.to_uppercase(), lo, side.width);
+        y += 2;
+        let n = (ctx_pct(app) / 5.0).round().clamp(0.0, 20.0) as usize;
+        let rows = [
+            format!("CTX   [{}{}]  {:.0}%", "#".repeat(n), ".".repeat(20 - n), ctx_pct(app)),
+            format!("COSTO ${:.2}", app.cost),
+            format!("TURNO {}", app.turns),
+            format!("VOZ   {}", voice_value(app).to_uppercase()),
+        ];
+        for r in rows {
+            if y >= side.bottom() {
+                break;
+            }
+            put(buf, side.x + 1, y, &r, Style::new().fg(theme::text()), side.width);
+            y += 1;
+        }
+    }
+
+    {
+        let buf = f.buffer_mut();
+        hline(buf, chat.x, chat.right() - 1, rule2.y, "─", Style::new().fg(theme::dim()));
+    }
+    let input_w = Rect { width: chat.width, ..input };
+    if listening(state) {
+        wave(f, input_w, app, t, theme::accent(), theme::dim());
+    } else {
+        orden_line(f, input_w, Rect { width: chat.width, ..rule2 }, app, state, t, "JARVIS> ", theme::accent());
+    }
+    {
+        let buf = f.buffer_mut();
+        match flash(app) {
+            Some(l) => {
+                buf.set_line(hints.x, hints.y, &l, hints.width);
+            }
+            None => {
+                let up: Vec<(String, String)> = hints_for(app, state).into_iter().map(|(k, d)| (k.to_uppercase(), d.to_uppercase())).collect();
+                let refs: Vec<(&str, &str)> = up.iter().map(|(k, d)| (k.as_str(), d.as_str())).collect();
+                keys(buf, hints.x, hints.y, hints.right(), &refs, theme::text(), false);
+            }
+        }
+        // Todo pasa a la rampa del fósforo; una fila más brillante baja como el barrido.
+        let scan = area.y + ((t * 7.0) as u16 % area.height.max(1));
+        phosphor(buf, area, scan);
+    }
+}
+
+/// Pasa cada celda a la rampa de un solo color según lo brillante que era.
+fn phosphor(buf: &mut Buffer, area: Rect, scan: u16) {
+    let ramp = [theme::dim(), mix(theme::dim(), theme::accent(), 0.55), theme::accent(), rgb3(theme::accent_toward_white(0.55))];
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if !matches!(cell.bg, Color::Reset) {
+                cell.set_bg(theme::accent()).set_fg(Color::Black);
+                continue;
+            }
+            let v = match cell.fg {
+                Color::Rgb(r, g, b) => r.max(g).max(b) as f64 / 255.0,
+                Color::Black => 0.0,
+                Color::White => 1.0,
+                _ => 0.75,
+            };
+            let mut k = if v < 0.45 {
+                0
+            } else if v < 0.6 {
+                1
+            } else if v < 0.93 {
+                2
+            } else {
+                3
+            };
+            if y == scan {
+                k = (k + 1).min(3);
+            }
+            cell.set_fg(ramp[k]);
+        }
+    }
+}
+
+// ── Radar: cada herramienta en su sector ────────────────────────────────────────────────
+
+const SECTORES: [&str; 8] = ["LEER", "BUSCAR", "EDITAR", "GIT", "PROBAR", "EJECUTAR", "RED", "AGENTES"];
+
+fn sector(a: &Activity) -> usize {
+    match crate::nucleo::tool_state(&a.name, &a.detail) {
+        State::Reading => 0,
+        State::Searching => 1,
+        State::Editing => 2,
+        State::Git => 3,
+        State::Testing => 4,
+        State::Web => 6,
+        State::Delegating | State::Planning => 7,
+        _ => 5,
+    }
+}
+
+fn radar(f: &mut Frame, app: &App) {
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let tone = app.nucleo.color();
+    let inner = Rect { x: area.x + 2, width: area.width.saturating_sub(4), ..area };
+    let input_h = if listening(state) { 4 } else { 2 };
+    let [head, rule, body, input, hints] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(8),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    {
+        let buf = f.buffer_mut();
+        let x = put(buf, head.x, head.y, "◎ JARVIS", Style::new().fg(theme::accent()).bold(), head.width);
+        put(buf, x + 3, head.y, &model_short(app), Style::new().fg(theme::text()), head.width / 3);
+        let clock = now_hhmmss();
+        put_right(buf, head.right() - 1, head.y, &clock, Style::new().fg(theme::text()));
+        put_right(buf, head.right() - 1 - clock.len() as u16 - 3, head.y, &format!("{}   {}", cwd(), ses8(app)), Style::new().fg(theme::faint()));
+        hline(buf, rule.x, rule.right() - 1, rule.y, "─", Style::new().fg(theme::dim()));
+    }
+
+    let side_w = (body.width * 46 / 100).clamp(40, 76);
+    let narrow = body.width < 100;
+    let (chat, side) = if narrow {
+        (body, Rect::default())
+    } else {
+        let [c, _, s] = Layout::horizontal([Constraint::Min(30), Constraint::Length(2), Constraint::Length(side_w)]).areas(body);
+        (c, s)
+    };
+    let chat_in = Rect { y: chat.y + 1, height: chat.height.saturating_sub(1), ..chat };
+    if app.messages.is_empty() {
+        let buf = f.buffer_mut();
+        let y = chat_in.y + chat_in.height / 3;
+        put(buf, chat_in.x + GUION as u16, y, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold(), chat_in.width);
+        put(buf, chat_in.x + GUION as u16, y + 1, "¿En qué trabajamos?", Style::new().fg(theme::accent()).bold(), chat_in.width);
+        *app.view.borrow_mut() = Default::default();
+    } else {
+        render_chat(f, chat_in, app, chat_rows(app, chat_in.width as usize, Voz::Guion));
+    }
+
+    if !narrow {
+        let disc_h = side.height.saturating_sub(5);
+        // Radio en filas; en columnas es el doble, porque las celdas son altas.
+        let r = ((disc_h as f64 / 2.0) - 1.5).min(side.width as f64 / 4.0 - 4.0).max(4.0);
+        let cx = side.x as f64 + side.width as f64 / 2.0;
+        let cy = side.y as f64 + disc_h as f64 / 2.0;
+        let at = |a: f64, rr: f64| ((cx + a.cos() * rr * 2.0).round(), (cy - a.sin() * rr).round());
+        let ok = |x: f64, y: f64| x >= side.x as f64 && x < side.right() as f64 && y >= side.y as f64 && y < (side.y + disc_h) as f64;
+        {
+            let buf = f.buffer_mut();
+            let dim = Style::new().fg(theme::dim());
+            // Anillos y divisiones de los sectores.
+            for (rr, step) in [(r, 0.03), (r * 0.66, 0.05), (r * 0.33, 0.09)] {
+                let mut a = 0.0;
+                while a < TAU {
+                    let (x, y) = at(a, rr);
+                    if ok(x, y) {
+                        put(buf, x as u16, y as u16, "·", dim, 1);
+                    }
+                    a += step;
+                }
+            }
+            for k in 0..8 {
+                let a = FRAC_PI_2 - k as f64 * FRAC_PI_4 + FRAC_PI_4 / 2.0;
+                let mut rr = r * 0.4;
+                while rr <= r {
+                    let (x, y) = at(a, rr);
+                    if ok(x, y) {
+                        put(buf, x as u16, y as u16, "·", dim, 1);
+                    }
+                    rr += 0.9;
+                }
+            }
+            // El barrido, con su estela.
+            let speed = if app.busy { 2.2 } else { 0.8 };
+            let sweep = -t * speed;
+            for (j, c) in [(0, tone), (1, mix(tone, theme::dim(), 0.5)), (2, theme::dim())] {
+                let a = sweep + j as f64 * 0.08;
+                let mut rr = r * 0.36;
+                while rr <= r {
+                    let (x, y) = at(a, rr);
+                    if ok(x, y) {
+                        put(buf, x as u16, y as u16, if j == 0 { "•" } else { "·" }, Style::new().fg(c), 1);
+                    }
+                    rr += 0.5;
+                }
+            }
+            for (k, name) in SECTORES.iter().enumerate() {
+                let a = FRAC_PI_2 - k as f64 * FRAC_PI_4;
+                let (x, y) = at(a, r + 1.3);
+                let w = name.len() as f64;
+                let x0 = (x - w / 2.0).max(side.x as f64).min(side.right() as f64 - w);
+                if y >= side.y as f64 && y < (side.y + disc_h) as f64 {
+                    put(buf, x0 as u16, y as u16, name, Style::new().fg(theme::faint()), name.len() as u16);
+                }
+            }
+        }
+        // El núcleo en el centro.
+        let cw = ((r * 0.62 * 2.0) as u16).max(6);
+        let ch = ((r * 0.62) as u16).max(3);
+        let core = Rect { x: (cx as u16).saturating_sub(cw / 2), y: (cy as u16).saturating_sub(ch / 2), width: cw, height: ch };
+        core_draw(app, core, f.buffer_mut());
+        let buf = f.buffer_mut();
+        // Las herramientas como blips en su sector: las más nuevas, más afuera.
+        let recent: Vec<&Activity> = app.activity.iter().rev().take(8).collect();
+        for (i, a) in recent.iter().enumerate() {
+            let s = sector(a);
+            let jitter = (i % 3) as f64 - 1.0;
+            let ang = FRAC_PI_2 - s as f64 * FRAC_PI_4 + jitter * 0.22;
+            let rr = r * (0.9 - 0.1 * (i as f64 / 2.0).floor()).max(0.55);
+            let (x, y) = at(ang, rr);
+            if !ok(x, y) {
+                continue;
+            }
+            let (icon, c) = act_icon(a, t);
+            let mark = if a.status == ToolStatus::Running { icon } else { "◆" };
+            put(buf, x as u16, y as u16, mark, Style::new().fg(c).bold(), 1);
+            let label = format!("{} {:.1}s", a.name, act_secs(a));
+            let room = side.right().saturating_sub(x as u16 + 2);
+            put(buf, x as u16 + 2, y as u16, &label, Style::new().fg(if i == 0 { theme::text() } else { theme::faint() }), room);
+        }
+        let (title, detail) = core_label(app, t, side.width as usize);
+        let y = side.y + disc_h;
+        put_center(buf, side, y + 1, &spaced_title(&title), Style::new().fg(tone).bold());
+        put_center(buf, side, y + 2, &detail, Style::new().fg(theme::faint()));
+        let kx = side.x + side.width / 2 - 18;
+        put(buf, kx, y + 4, "contexto", Style::new().fg(theme::faint()), 10);
+        let x = meter(buf, kx + 10, y + 4, 20, ctx_pct(app) / 100.0, tone);
+        put(buf, x + 2, y + 4, &format!("{:.0}%", ctx_pct(app)), Style::new().fg(theme::text()), 5);
+    }
+
+    let input_w = Rect { width: chat.width, ..input };
+    {
+        let col = if listening(state) { tone } else if app.busy { theme::dim() } else { theme::accent() };
+        let buf = f.buffer_mut();
+        hline(buf, input_w.x, input_w.right() - 1, input_w.y, "─", Style::new().fg(col));
+    }
+    let line = Rect { y: input_w.y + 1, height: input_w.height - 1, ..input_w };
+    if listening(state) {
+        wave(f, line, app, t, tone, theme::dim());
+    } else {
+        orden_line(f, line, Rect { y: input_w.y, height: 1, ..input_w }, app, state, t, "› ", theme::accent());
+    }
+    let kc = if listening(state) { tone } else { theme::accent() };
+    foot_keys(f.buffer_mut(), hints, app, state, kc, false);
+}
+
+// ── Editorial: titular, columna de datos, lectura y figura ──────────────────────────────
+
+fn editorial(f: &mut Frame, app: &App) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let tone = app.nucleo.color();
+    let m = if area.width > 100 { 3 } else { 1 };
+    let inner = Rect { x: area.x + m, width: area.width.saturating_sub(m * 2), ..area };
+    let (title, detail) = core_label(app, t, inner.width as usize);
+    let big = big_text(&title, inner.width as usize);
+    let title_h = if big.is_some() { 3 } else { 1 };
+    let input_h = if listening(state) { 3 } else { 1 };
+    let [head, _, tit, _, sub, rule, _, body, rule2, input, _, hints] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(title_h),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(4),
+        Constraint::Length(1),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    {
+        let buf = f.buffer_mut();
+        const DIAS: [&str; 7] = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+        const MESES: [&str; 12] =
+            ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+        let (_, mo, d, wd) = local_date();
+        let x = put(buf, head.x, head.y, &spaced("JARVIS"), Style::new().fg(theme::accent()).bold(), head.width);
+        let ed = format!("  ·  edición del {} {d} de {}  ·  nº {}", DIAS[wd as usize], MESES[(mo as usize).saturating_sub(1) % 12], app.turns);
+        put(buf, x, head.y, &ed, Style::new().fg(theme::faint()), head.width.saturating_sub(x - head.x + 10));
+        put_right(buf, head.right() - 1, head.y, &now_hhmmss(), Style::new().fg(theme::text()));
+        match &big {
+            Some(rows) => {
+                for (k, r) in rows.iter().enumerate() {
+                    put(buf, tit.x, tit.y + k as u16, r, Style::new().fg(tone).bold(), tit.width);
+                }
+            }
+            None => {
+                put(buf, tit.x, tit.y, &spaced_title(&title), Style::new().fg(tone).bold(), tit.width);
+            }
+        }
+        let lead = if detail.is_empty() { format!("{}. ¿En qué trabajamos?", greeting()) } else { detail.clone() };
+        put(buf, sub.x, sub.y, &lead, Style::new().fg(theme::text()), sub.width);
+        hline(buf, rule.x, rule.right() - 1, rule.y, "━", Style::new().fg(theme::faint()));
+    }
+
+    // Columna de datos │ lectura │ figura.
+    let col_w = 26u16;
+    let narrow = body.width < 110;
+    let fig_w = if narrow { 0 } else { (body.width * 34 / 100).clamp(30, 60) };
+    let [data, bar, read, _, fig] = Layout::horizontal([
+        Constraint::Length(col_w),
+        Constraint::Length(3),
+        Constraint::Min(30),
+        Constraint::Length(if narrow { 0 } else { 3 }),
+        Constraint::Length(fig_w),
+    ])
+    .areas(body);
+    {
+        let buf = f.buffer_mut();
+        for y in bar.y..bar.bottom() {
+            put(buf, bar.x + 1, y, "│", Style::new().fg(theme::dim()), 1);
+        }
+        let last = app.activity.last().map(|a| {
+            let (icon, _) = act_icon(a, t);
+            format!("{icon} {} · {:.1}s", a.name, act_secs(a))
+        });
+        let items = [
+            ("MODELO", model_short(app)),
+            ("SESIÓN", ses8(app)),
+            ("CARPETA", cwd()),
+            ("CONTEXTO", format!("{:.0} %", ctx_pct(app))),
+            ("COSTO", format!("${:.2}", app.cost)),
+            ("VOZ", voice_value(app)),
+            ("AHORA", last.unwrap_or_else(|| "—".into())),
+        ];
+        let mut y = data.y;
+        for (k, v) in items {
+            if y + 1 >= data.bottom() {
+                break;
+            }
+            put(buf, data.x, y, &spaced(k), Style::new().fg(theme::faint()).bold(), data.width);
+            put(buf, data.x, y + 1, &v, Style::new().fg(theme::text()), data.width);
+            y += 3;
+        }
+    }
+    if app.messages.is_empty() {
+        *app.view.borrow_mut() = Default::default();
+        let buf = f.buffer_mut();
+        put(buf, read.x + 2, read.y + 1, "Escribe, o mantén espacio y háblame.", Style::new().fg(theme::faint()), read.width);
+    } else {
+        render_chat(f, read, app, chat_rows(app, read.width as usize, Voz::Guion));
+    }
+    if !narrow {
+        let core = Rect { height: fig.height.saturating_sub(3).min(fig.width / 2 + 2), ..fig };
+        core_draw(app, core, f.buffer_mut());
+        let buf = f.buffer_mut();
+        let y = core.bottom() + 1;
+        hline(buf, fig.x, fig.right() - 1, y, "─", Style::new().fg(theme::dim()));
+        let cap = if detail.is_empty() { "a la espera".to_string() } else { detail.to_lowercase() };
+        put(buf, fig.x, y + 1, &format!("Fig. 1 — El núcleo, {cap}."), Style::new().fg(theme::faint()), fig.width);
+    }
+
+    {
+        let buf = f.buffer_mut();
+        hline(buf, rule2.x, rule2.right() - 1, rule2.y, "─", Style::new().fg(theme::dim()));
+    }
+    if listening(state) {
+        wave(f, input, app, t, tone, theme::dim());
+    } else {
+        orden_line(f, input, Rect { width: read.right() - input.x, ..rule2 }, app, state, t, "Escribe → ", theme::accent());
+    }
+    let kc = if listening(state) { tone } else { theme::accent() };
+    foot_keys(f.buffer_mut(), hints, app, state, kc, false);
+}
+
+// ── Zen: un punto que late y la línea de escritura ──────────────────────────────────────
+
+fn zen(f: &mut Frame, app: &App) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let tone = app.nucleo.color();
+    let inner = Rect { x: area.x + 3, width: area.width.saturating_sub(6), ..area };
+    let input_h = if listening(state) { 3 } else { 1 };
+    let top_h = inner.height * 40 / 100;
+    let [top, chat, _, input, _] = Layout::vertical([
+        Constraint::Length(top_h),
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    // El punto: late más rápido cuanto más hace.
+    {
+        let buf = f.buffer_mut();
+        let speed = if app.busy { 4.0 } else if listening(state) { 6.0 } else { 1.2 };
+        let p = (t * speed).sin();
+        let dot = if p > 0.35 {
+            "●"
+        } else if p > -0.35 {
+            "•"
+        } else {
+            "·"
+        };
+        let y = top.y + top.height / 2;
+        put_center(buf, top, y, dot, Style::new().fg(tone).bold());
+        let (title, _) = core_label(app, t, top.width as usize);
+        put_center(buf, top, y + 2, &title.to_lowercase(), Style::new().fg(theme::dim()));
+    }
+    if app.messages.is_empty() {
+        *app.view.borrow_mut() = Default::default();
+    } else {
+        render_chat(f, chat, app, chat_rows(app, chat.width as usize, Voz::Canal));
+    }
+
+    let stats = format!("{} · {:.0}% · ${:.2}", model_short(app), ctx_pct(app), app.cost);
+    let sw = stats.width() as u16;
+    if listening(state) {
+        wave(f, input, app, t, tone, theme::dim());
+    } else {
+        let line = Rect { width: input.width.saturating_sub(sw + 2), ..input };
+        orden_line(f, line, Rect { y: input.y.saturating_sub(1), height: 1, ..line }, app, state, t, "› ", theme::accent());
+        let buf = f.buffer_mut();
+        put_right(buf, input.right() - 1, input.y, &stats, Style::new().fg(theme::dim()));
+    }
+    if let Some(l) = flash(app) {
+        let buf = f.buffer_mut();
+        let y = area.bottom() - 1;
+        buf.set_line(inner.x, y, &l, inner.width);
+    }
+}
+
+// ── Bitácora: todo en orden, línea por línea ────────────────────────────────────────────
+
+fn bitacora(f: &mut Frame, app: &App) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let tone = app.nucleo.color();
+    let inner = Rect { x: area.x + 2, width: area.width.saturating_sub(4), ..area };
+    let input_h = if listening(state) { 3 } else { 1 };
+    let [head, rule, cols, _, body, rule2, input, _, hints] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(1),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    {
+        let buf = f.buffer_mut();
+        let x = put(buf, head.x, head.y, "JARVIS", Style::new().fg(theme::accent()).bold(), 6);
+        put(buf, x + 1, head.y, "bitácora", Style::new().fg(theme::faint()), 10);
+        // El estado como una traza: el nivel de la voz al escuchar, el pulso del núcleo si no.
+        let clock = now_hhmmss();
+        let n = 30usize;
+        let bars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+        let trace: String = (0..n)
+            .map(|i| {
+                let v = if listening(state) {
+                    let l = app.levels[app.levels.len().saturating_sub(n) + i.min(n - 1)] as f64;
+                    (l * 5.0).sqrt().min(1.0)
+                } else {
+                    let speed = if app.busy { 3.0 } else { 0.8 };
+                    0.5 + 0.45 * ((i as f64 * 0.45) - t * speed).sin() * if app.busy { 1.0 } else { 0.4 }
+                };
+                bars[((v * 7.0).round() as usize).min(7)]
+            })
+            .collect();
+        put_right(buf, head.right() - 1, head.y, &clock, Style::new().fg(theme::text()));
+        let tx = head.right().saturating_sub(clock.len() as u16 + 2 + n as u16);
+        put(buf, tx, head.y, &trace, Style::new().fg(tone), n as u16);
+        put_right(buf, tx.saturating_sub(2), head.y, "estado", Style::new().fg(theme::faint()));
+        hline(buf, rule.x, rule.right() - 1, rule.y, "─", Style::new().fg(theme::dim()));
+        let h = Style::new().fg(theme::faint()).bold();
+        put(buf, cols.x, cols.y, "HORA", h, 8);
+        put(buf, cols.x + 10, cols.y, "TIPO", h, 8);
+        put(buf, cols.x + 18, cols.y, "CONTENIDO", h, 20);
+        put_right(buf, cols.right() - 1, cols.y, "DURACIÓN", h);
+    }
+
+    // Cada mensaje y cada herramienta es una entrada; lo largo sigue debajo, sangrado.
+    let w = body.width as usize;
+    let cw = w.saturating_sub(18 + 10).max(10);
+    let mut rows: Vec<(Line<'static>, usize, bool)> = Vec::new();
+    let entry = |rows: &mut Vec<(Line<'static>, usize, bool)>, time: String, tipo: &str, tc: Color, text: &str, fg: Color, dur: Option<(String, Color)>| {
+        let lines = wrap_cont(text, cw);
+        for (k, (l, cont)) in lines.into_iter().enumerate() {
+            let mut spans = vec![
+                Span::styled(format!("{:<10}", if k == 0 { time.as_str() } else { "" }), Style::new().fg(theme::dim())),
+                Span::styled(format!("{:<8}", if k == 0 { tipo } else { "" }), Style::new().fg(tc).bold()),
+                Span::styled(format!("{:<cw$}", l), Style::new().fg(fg)),
+            ];
+            if k == 0 {
+                if let Some((d, c)) = &dur {
+                    spans.push(Span::styled(format!("{d:>10}"), Style::new().fg(*c)));
+                }
+            }
+            rows.push((Line::from(spans), 18, cont));
+        }
+    };
+    entry(
+        &mut rows,
+        clock_ago(app.started.elapsed().as_secs()),
+        "SES",
+        theme::faint(),
+        &format!("sesión {} · {} · {}", ses8(app), model_short(app), cwd()),
+        theme::faint(),
+        None,
+    );
+    for m in &app.messages {
+        match m.role {
+            Role::User if m.waiting.is_some() => entry(&mut rows, String::new(), "COLA", theme::faint(), &m.text, theme::faint(), None),
+            Role::User => entry(&mut rows, String::new(), "TÚ", theme::text(), &m.text, theme::text(), None),
+            Role::Assistant => entry(&mut rows, String::new(), "JARVIS", theme::accent(), &plain(&m.text), theme::text(), None),
+            Role::System => entry(&mut rows, String::new(), "SYS", theme::faint(), &m.text, theme::faint(), None),
+            Role::Error => entry(&mut rows, String::new(), "ERROR", RED, &m.text, RED, None),
+            Role::Tool => {
+                let Some(a) = m.tool.and_then(|i| app.activity.get(i)) else { continue };
+                let (icon, c) = act_icon(a, t);
+                let dur = Some((format!("{icon} {:.1}s", act_secs(a)), c));
+                let name = truncate(&a.name.to_uppercase(), 7);
+                entry(&mut rows, clock_ago(a.started.elapsed().as_secs()), &name, theme::text(), &a.detail, theme::faint(), dur);
+            }
+        }
+    }
+    if app.busy && app.current_tool().is_none() {
+        let dots = ".".repeat((t * 3.0) as usize % 4 + 1);
+        entry(&mut rows, String::new(), "PIENSA", tone, &dots, tone, None);
+    }
+    render_chat(f, body, app, rows);
+
+    {
+        let buf = f.buffer_mut();
+        hline(buf, rule2.x, rule2.right() - 1, rule2.y, "─", Style::new().fg(theme::dim()));
+    }
+    if listening(state) {
+        wave(f, input, app, t, tone, theme::dim());
+    } else {
+        orden_line(f, input, rule2, app, state, t, "▶ ", theme::accent());
+    }
+    let kc = if listening(state) { tone } else { theme::accent() };
+    foot_keys(f.buffer_mut(), hints, app, state, kc, false);
+}
+
+// ── Tablero: mosaicos ───────────────────────────────────────────────────────────────────
+
+fn tablero(f: &mut Frame, app: &App) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let area = f.area();
+    let tone = app.nucleo.color();
+    let inner = Rect { x: area.x + 1, width: area.width.saturating_sub(2), ..area };
+    let band_h = (inner.height * 46 / 100).clamp(12, 28);
+    let input_h = if listening(state) { 3 } else { 1 };
+    let [head, band, chat, input, hints] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(band_h),
+        Constraint::Min(5),
+        Constraint::Length(input_h),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    {
+        let buf = f.buffer_mut();
+        let x = put(buf, head.x + 1, head.y, "◆ JARVIS", Style::new().fg(theme::accent()).bold(), 8);
+        put(buf, x + 2, head.y, "tablero de la sesión", Style::new().fg(theme::faint()), 22);
+        put_right(buf, head.right() - 1, head.y, &format!("{} · {} · {}", model_short(app), ses8(app), now_hhmmss()), Style::new().fg(theme::faint()));
+    }
+
+    let [core_t, _, right] =
+        Layout::horizontal([Constraint::Percentage(40), Constraint::Length(1), Constraint::Min(30)]).areas(band);
+    let [r_top, r_bot] = Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(right);
+    let [ctx_t, _, cost_t] = Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(10)]).areas(r_top);
+    let [tools_t, _, ses_t] = Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(10)]).areas(r_bot);
+
+    let dim = Style::new().fg(theme::dim());
+    // Núcleo.
+    {
+        let buf = f.buffer_mut();
+        corners(buf, core_t, dim, Some(&spaced("NÚCLEO")));
+    }
+    let core = Rect { x: core_t.x + 1, y: core_t.y + 1, width: core_t.width.saturating_sub(2), height: core_t.height.saturating_sub(4) };
+    core_draw(app, core, f.buffer_mut());
+    let buf = f.buffer_mut();
+    let (title, detail) = core_label(app, t, core_t.width as usize);
+    put_center(buf, core_t, core_t.bottom().saturating_sub(3), &spaced_title(&title), Style::new().fg(tone).bold());
+    put_center(buf, core_t, core_t.bottom().saturating_sub(2), &truncate(&detail, core_t.width as usize - 2), Style::new().fg(theme::faint()));
+
+    // Contexto: el número grande y el medidor.
+    corners(buf, ctx_t, dim, Some(&spaced("CONTEXTO")));
+    let pct = ctx_pct(app);
+    let big_row = |buf: &mut Buffer, r: Rect, s: &str, col: Color| {
+        match big_text(s, r.width.saturating_sub(4) as usize) {
+            Some(rows) if r.height >= 6 => {
+                for (k, row) in rows.iter().enumerate() {
+                    put(buf, r.x + 3, r.y + 2 + k as u16, row, Style::new().fg(col).bold(), r.width.saturating_sub(4));
+                }
+            }
+            _ => {
+                put(buf, r.x + 3, r.y + 2, s, Style::new().fg(col).bold(), r.width.saturating_sub(4));
+            }
+        }
+    };
+    big_row(buf, ctx_t, &format!("{pct:.0}%"), theme::text());
+    if ctx_t.height >= 7 {
+        let y = ctx_t.bottom() - 2;
+        let w = ctx_t.width.saturating_sub(6);
+        meter(buf, ctx_t.x + 3, y, w, pct / 100.0, tone);
+    }
+
+    // Costo y turnos.
+    corners(buf, cost_t, dim, Some(&spaced("COSTO")));
+    big_row(buf, cost_t, &format!("${:.2}", app.cost), theme::text());
+    if cost_t.height >= 7 {
+        put(buf, cost_t.x + 3, cost_t.bottom() - 2, &turns(app), Style::new().fg(theme::faint()), cost_t.width.saturating_sub(4));
+    }
+
+    // Herramientas: cuántas veces cada una, en barras.
+    corners(buf, tools_t, dim, Some(&spaced("HERRAMIENTAS")));
+    let mut counts: Vec<(String, usize, usize)> = Vec::new();
+    for a in &app.activity {
+        match counts.iter_mut().find(|c| c.0 == a.name) {
+            Some(c) => {
+                c.1 += 1;
+                c.2 += (a.status == ToolStatus::Err) as usize;
+            }
+            None => counts.push((a.name.clone(), 1, (a.status == ToolStatus::Err) as usize)),
+        }
+    }
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    let rows = tools_t.height.saturating_sub(3) as usize;
+    if counts.is_empty() {
+        put(buf, tools_t.x + 3, tools_t.y + 2, "— ninguna todavía —", Style::new().fg(theme::dim()), tools_t.width);
+    }
+    let max = counts.first().map_or(1, |c| c.1).max(1);
+    let bar_w = tools_t.width.saturating_sub(22) as usize;
+    for (i, (name, n, err)) in counts.iter().take(rows).enumerate() {
+        let y = tools_t.y + 2 + i as u16;
+        let x = put(buf, tools_t.x + 3, y, &format!("{:<7}", truncate(name, 7)), Style::new().fg(theme::text()), 7);
+        let len = (n * bar_w / max).max(1);
+        let x = put(buf, x + 1, y, &"█".repeat(len), Style::new().fg(if *err > 0 && *err == *n { RED } else { tone }), len as u16);
+        let tail = if *err > 0 { format!("{n} · {err} err") } else { n.to_string() };
+        put(buf, x + 1, y, &tail, Style::new().fg(theme::faint()), 12);
+    }
+
+    // Sesión.
+    corners(buf, ses_t, dim, Some(&spaced("SESIÓN")));
+    let items = [("modelo", model_short(app)), ("voz", voice_value(app)), ("en línea", uptime(app)), ("sesión", ses8(app))];
+    for (i, (k, v)) in items.iter().enumerate() {
+        let y = ses_t.y + 2 + i as u16;
+        if y + 1 >= ses_t.bottom() {
+            break;
+        }
+        put(buf, ses_t.x + 3, y, k, Style::new().fg(theme::faint()), 10);
+        put(buf, ses_t.x + 13, y, v, Style::new().fg(theme::text()), ses_t.width.saturating_sub(15));
+    }
+
+    // Conversación.
+    corners(buf, chat, dim, Some(&spaced("CONVERSACIÓN")));
+    let chat_in = Rect { x: chat.x + 2, y: chat.y + 1, width: chat.width.saturating_sub(4), height: chat.height.saturating_sub(2) };
+    if app.messages.is_empty() {
+        *app.view.borrow_mut() = Default::default();
+        put(buf, chat_in.x + GUION as u16, chat_in.y + 1, &format!("{}. ¿En qué trabajamos?", greeting()), Style::new().fg(theme::text()).bold(), chat_in.width);
+    } else {
+        render_chat(f, chat_in, app, chat_rows(app, chat_in.width as usize, Voz::Guion));
+    }
+
+    if listening(state) {
+        wave(f, Rect { x: input.x + 1, width: input.width.saturating_sub(2), ..input }, app, t, tone, theme::dim());
+    } else {
+        orden_line(f, Rect { x: input.x + 1, ..input }, Rect { y: chat.bottom().saturating_sub(1), height: 1, ..chat }, app, state, t, "› ", theme::accent());
+    }
+    let kc = if listening(state) { tone } else { theme::accent() };
+    foot_keys(f.buffer_mut(), Rect { x: hints.x + 1, ..hints }, app, state, kc, false);
 }

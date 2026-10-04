@@ -6,6 +6,7 @@ mod entrada;
 mod habla;
 mod estilo;
 mod md;
+mod musica;
 mod miniatura;
 mod nucleo;
 mod select;
@@ -168,6 +169,8 @@ pub struct App {
     pub sel: Option<select::Selection>,
     /// Aviso breve en la barra de abajo («copiado…»).
     pub flash: Option<(String, Instant)>,
+    /// El primer Ctrl+C: si llega otro mientras se ve el aviso, se sale.
+    quit_armed: Option<Instant>,
     /// El blob del panel NÚCLEO.
     pub nucleo: nucleo::Core,
     /// Tokens de contexto en uso y la ventana del modelo.
@@ -214,6 +217,9 @@ pub struct App {
     /// Está sonando su voz, y con qué volumen.
     pub talking: bool,
     tts_level: f32,
+    /// Lo que suena en el equipo (cava), y la última vez que sonó algo.
+    musica: musica::Musica,
+    music_at: std::cell::Cell<Option<Instant>>,
     /// Cómo se compone la pantalla (`/theme`).
     pub estilo: estilo::Estilo,
     /// Cine: la respuesta abierta entera en el centro (lo decide el dibujo, que sabe si cabe).
@@ -273,7 +279,10 @@ impl App {
             State::Speaking
         } else if !self.input.is_empty() && self.last_key.elapsed() < Duration::from_secs(3) {
             State::Typing
-        } else if self.last_activity.elapsed() > Duration::from_secs(120) {
+        } else if self.last_activity.elapsed() > Duration::from_secs(120)
+            && self.music_at.get().is_none_or(|t| t.elapsed() > Duration::from_secs(10))
+        {
+            // Con música no se duerme: se queda bailando.
             State::Sleeping
         } else {
             State::Idle
@@ -289,7 +298,17 @@ impl App {
             kids: self.agents.iter().filter(|a| a.ended.is_none()).map(|a| (a.kid, a.state())).collect(),
             idle: self.last_activity.elapsed().as_secs_f64(),
             calm: self.calm,
+            music: self.music(),
         }
+    }
+
+    /// Lo que suena, como en el teclado: cuenta recién 3 s después de la última tecla.
+    fn music(&self) -> f32 {
+        let l = self.musica.level();
+        if l > 0.05 {
+            self.music_at.set(Some(Instant::now()));
+        }
+        if self.last_key.elapsed() < Duration::from_secs(3) { 0.0 } else { l }
     }
 
     pub fn md_rows(&self, i: usize, text: &str, width: usize) -> Vec<md::Row> {
@@ -561,6 +580,7 @@ fn main() -> Result<()> {
         todos: (0, 0),
         compacting: false,
         last_activity: Instant::now(),
+        quit_armed: None,
         last_key: Instant::now(),
         last_voice: Instant::now(),
         noise_floor: 0.0,
@@ -587,6 +607,8 @@ fn main() -> Result<()> {
         speak_turn: false,
         talking: false,
         tts_level: 0.0,
+        musica: musica::Musica::spawn(),
+        music_at: std::cell::Cell::new(None),
         estilo: estilo::cargar(),
         reading: Default::default(),
         transcript: false,
@@ -894,7 +916,15 @@ fn handle_key(
     }
 
     match k.code {
-        KeyCode::Char('c') | KeyCode::Char('d') if ctrl => return Flow::Quit,
+        // Ctrl+C pide confirmación: hay que darlo otra vez antes de que se borre el aviso.
+        KeyCode::Char('c') if ctrl => {
+            if app.quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(2500)) {
+                return Flow::Quit;
+            }
+            app.quit_armed = Some(Instant::now());
+            app.flash = Some(("Ctrl+C otra vez para salir".into(), Instant::now()));
+        }
+        KeyCode::Char('d') if ctrl => return Flow::Quit,
         KeyCode::Char('r') if ctrl => return Flow::Restart,
         KeyCode::Char('l') if ctrl => return clear(app),
         KeyCode::Char('u') if ctrl => {
