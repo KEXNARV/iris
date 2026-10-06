@@ -18,6 +18,10 @@ const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
 pub use crate::nucleo::State;
 
 pub fn draw(f: &mut Frame, app: &App) {
+    theme::usar(app.buddy.paleta());
+    if let Some(bg) = theme::fondo() {
+        f.render_widget(Block::new().style(Style::new().bg(bg)), f.area());
+    }
     // Los estilos sin paneles necesitan aire; en una terminal chica se ve el clásico.
     let a = f.area();
     let fits = |w: u16, h: u16| a.width >= w && a.height >= h;
@@ -38,13 +42,21 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
+/// Borra lo que haya debajo de una ventana; con paleta propia, deja su fondo y no el de la terminal.
+fn limpiar(f: &mut Frame, area: Rect) {
+    f.render_widget(Clear, area);
+    if let Some(bg) = theme::fondo() {
+        f.render_widget(Block::new().style(Style::new().bg(bg)), area);
+    }
+}
+
 /// Ctrl+G: la lista de herramientas a la izquierda y la elegida entera a la derecha.
 fn tools_overlay(f: &mut Frame, app: &App) {
     use crate::ToolStatus;
     let Some((sel, scroll)) = app.tools_view else { return };
     let a = f.area();
     let area = Rect { x: a.x + 2, y: a.y + 1, width: a.width.saturating_sub(4), height: a.height.saturating_sub(2) };
-    f.render_widget(Clear, area);
+    limpiar(f, area);
     let block = panel("HERRAMIENTAS · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -698,6 +710,9 @@ fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
+        Some(Modal::Fondo { sel, .. }) => draw_fondos(f, anchor, *sel),
+        Some(Modal::Color { sel, .. }) => draw_colores(f, anchor, *sel),
+        Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
         None => draw_menu(f, anchor, app),
     }
@@ -726,7 +741,7 @@ fn overlay(
     }
     let block = panel(title).border_style(Style::new().fg(color)).title_bottom(Line::from(foot));
     let inner = block.inner(area);
-    f.render_widget(Clear, area);
+    limpiar(f, area);
     f.render_widget(block, area);
 
     let room = (inner.height as usize).saturating_sub(head.len());
@@ -738,13 +753,13 @@ fn overlay(
 
 /// Una fila elegible: marca, nombre a ancho fijo y una descripción que se recorta.
 fn item(on: bool, mark: &str, name: &str, name_w: usize, desc: &str, w: usize) -> Line<'static> {
-    let bg = if on { Style::new().bg(Color::Rgb(15, 45, 65)) } else { Style::new() };
+    let bg = if on { Style::new().bg(theme::seleccion()) } else { Style::new() };
     let cursor = if on { " › " } else { "   " };
     let name = format!("{mark}{:<name_w$}", truncate(name, name_w));
     let room = w.saturating_sub(3 + name.chars().count() + 2);
     Line::from(vec![
         Span::styled(cursor, bg.fg(theme::accent()).bold()),
-        Span::styled(name, bg.fg(if on { Color::White } else { theme::accent() }).bold()),
+        Span::styled(name, bg.fg(if !on { theme::accent() } else if theme::claro() { theme::text() } else { Color::White }).bold()),
         Span::styled(format!("  {:<room$}", truncate(desc, room)), bg.fg(if on { theme::text() } else { theme::faint() })),
     ])
 }
@@ -804,6 +819,60 @@ fn draw_estilos(f: &mut Frame, anchor: Rect, sel: usize) {
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
     overlay(f, anchor, "ESTILO", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_buddies(f: &mut Frame, anchor: Rect, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let items = crate::buddy::TODOS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, _, name, what))| item(i == sel, &format!("{} ", i + 1), name, 10, what, w))
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    overlay(f, anchor, "BUDDY", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_fondos(f: &mut Frame, anchor: Rect, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    // Primero, los colores del sistema: sin muestra, que cambian con el tema.
+    let sistema = [("Del sistema", "cambia con el tema de Omarchy", "◐  "), ("Del sistema, transparente", "se ve el fondo de pantalla", "◌  ")]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, desc, marca))| {
+            let mut l = item(sel == i, &format!("{} ", i + 1), name, 26, desc, w.saturating_sub(3));
+            l.spans.insert(1, Span::styled(marca, Style::new().fg(theme::accent())));
+            l
+        });
+    let items = sistema
+        .chain(crate::estilo::FONDOS.iter().enumerate().map(|(i, (_, name, c))| {
+            let i = i + 2;
+            let mut l = item(i == sel, &format!("{} ", i + 1), name, 26, &format!("#{c:06X}"), w.saturating_sub(3));
+            // La muestra del color, entre la marca y el nombre.
+            let muestra = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8);
+            l.spans.insert(1, Span::styled("██ ", Style::new().fg(muestra)));
+            l
+        }))
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    overlay(f, anchor, "FONDOS BAYMAX", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_colores(f: &mut Frame, anchor: Rect, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let acento = theme::acento_u32();
+    let items = crate::baymax::OPCIONES
+        .iter()
+        .enumerate()
+        .map(|(i, (_, nombre, m))| {
+            let mut l = item(i == sel, &format!("{} ", i + 1), nombre, 22, "", w.saturating_sub(3));
+            // La muestra del color, entre la marca y el nombre.
+            let c = m.color(acento);
+            l.spans.insert(1, Span::styled("██ ", Style::new().fg(Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))));
+            l
+        })
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    overlay(f, anchor, "NÚCLEO BAYMAX", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
 fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::update::Info) {

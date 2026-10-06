@@ -932,11 +932,15 @@ impl Core {
     /// (1 apagado … 3 pleno).
     fn palette(&self) -> Vec<[[f64; 3]; 4]> {
         let dim = crate::theme::dim_rgb();
-        [self.col, GREEN, RED, WARM, crate::theme::accent_rgb()]
-            .into_iter()
-            .chain(self.kids.iter().take(MAX_KID_INKS).map(|k| k.core.col))
-            .map(|c| [dim, dim, mix(c, dim, 0.38), c])
-            .collect()
+        let tones = |c: [f64; 3]| [dim, dim, mix(c, dim, 0.38), c];
+        let mut pal: Vec<_> = [self.col, GREEN, RED, WARM, crate::theme::accent_rgb()].into_iter().map(tones).collect();
+        // Baymax, con los tonos apagados hacia el fondo.
+        let (fondo, c) = (crate::theme::fondo_rgb(), crate::baymax::nucleo().color(crate::theme::acento_u32()));
+        let full = crate::baymax::hacia(c, fondo, 0.0);
+        // El relleno de la cara va claro (es blanca); al hablar, más todavía.
+        pal.push([full, crate::baymax::hacia(c, fondo, 0.38), crate::baymax::hacia(c, fondo, 0.15), full]);
+        pal.extend(self.kids.iter().take(MAX_KID_INKS).map(|k| tones(k.core.col)));
+        pal
     }
 
     /// El núcleo como imagen Sixel de `w`×`h` píxeles, con puntos redondos cada `sp` píxeles y
@@ -1077,7 +1081,8 @@ impl Core {
         }
 
         // Arcos: tres por fuera, seis por dentro, en sentidos opuestos.
-        if p.arcs * boot > 0.05 && !self.mini {
+        let baymax = !self.mini && crate::theme::baymax();
+        if p.arcs * boot > 0.05 && !self.mini && !baymax {
             let n1 = (60.0 * p.arc_len * p.arcs * (boot * 1.4 - 0.4).max(0.0)).round() as usize;
             for k in 0..3 {
                 for q in 0..n1 {
@@ -1358,65 +1363,73 @@ impl Core {
         // Contorno: al menos ~2 puntos de grosor, aunque el panel sea chico.
         let band = 0.065_f64.max(1.9 * g.du);
 
-        for j in 0..g.dh {
-            for i in 0..g.dw {
-                let (x, y) = g.center(i, j);
-                let (dx, dy) = ((x - cx) / sx, (y - cy) / sy);
-                let r = dx.hypot(dy);
-                let mut in_bud = false;
-                if let Some((bx, by, br)) = bud {
-                    let e = br - (x - bx).hypot(y - by);
-                    if (0.0..0.05).contains(&e) {
-                        g.dot(i, j, 3, err);
-                        continue;
-                    }
-                    in_bud = e >= 0.05;
-                }
-                if r > 0.8 && !in_bud {
-                    continue;
-                }
-                let th = dy.atan2(dx);
-                let d = r_at(th) - r;
-                if (0.0..band).contains(&d) {
-                    if p.dashed > 0.5 && (th * 18.0).sin() <= 0.0 {
-                        continue;
-                    }
-                    let mut tone = 3;
-                    if p.stitch > 0.5 {
-                        let da = ((th - cursor).rem_euclid(TAU) - PI).abs();
-                        tone = if da > PI - 0.5 { 3 } else { 2 };
-                    }
-                    g.dot(i, j, tone, err);
-                } else if (d > band + 0.035 || in_bud) && p.dashed < 0.5 {
-                    // Capas de adentro hacia afuera: pupila > lupa > línea de lectura > líquido > trama.
-                    let pupil_r = pr * if p.lens > 0.5 { 1.5 } else { 1.0 };
-                    let (ex, ey) = (x - px, y - py);
-                    let er = ex.hypot(ey);
-                    if pupil_r > 0.01 && er < pupil_r {
-                        // Al parpadear queda solo una raya.
-                        if !blink || ey.abs() < 0.02 {
+        if baymax {
+            // Buddy Baymax: su cara en lugar del cuerpo; lo de alrededor sigue diciendo el estado.
+            let half = (radius + breath + beat + voice * 0.5) * 1.8;
+            let open = if p.ripple > 0.5 { if self.level > 0.01 { self.level * 1.6 } else { (t * 5.0).sin().abs() } } else { 0.0 };
+            let lupa = (p.lens > 0.01).then_some((lx, ly, lr));
+            self.paint_baymax(g, [cx, cy], half, [sx, sy], blink, open.max(yawn), scan_y, lupa);
+        } else {
+            for j in 0..g.dh {
+                for i in 0..g.dw {
+                    let (x, y) = g.center(i, j);
+                    let (dx, dy) = ((x - cx) / sx, (y - cy) / sy);
+                    let r = dx.hypot(dy);
+                    let mut in_bud = false;
+                    if let Some((bx, by, br)) = bud {
+                        let e = br - (x - bx).hypot(y - by);
+                        if (0.0..0.05).contains(&e) {
                             g.dot(i, j, 3, err);
+                            continue;
                         }
+                        in_bud = e >= 0.05;
+                    }
+                    if r > 0.8 && !in_bud {
                         continue;
                     }
-                    if p.lens > 0.5 && (x - lx).hypot(y - ly) < lr {
-                        if (i + j) % 2 == 0 {
+                    let th = dy.atan2(dx);
+                    let d = r_at(th) - r;
+                    if (0.0..band).contains(&d) {
+                        if p.dashed > 0.5 && (th * 18.0).sin() <= 0.0 {
+                            continue;
+                        }
+                        let mut tone = 3;
+                        if p.stitch > 0.5 {
+                            let da = ((th - cursor).rem_euclid(TAU) - PI).abs();
+                            tone = if da > PI - 0.5 { 3 } else { 2 };
+                        }
+                        g.dot(i, j, tone, err);
+                    } else if (d > band + 0.035 || in_bud) && p.dashed < 0.5 {
+                        // Capas de adentro hacia afuera: pupila > lupa > línea de lectura > líquido > trama.
+                        let pupil_r = pr * if p.lens > 0.5 { 1.5 } else { 1.0 };
+                        let (ex, ey) = (x - px, y - py);
+                        let er = ex.hypot(ey);
+                        if pupil_r > 0.01 && er < pupil_r {
+                            // Al parpadear queda solo una raya.
+                            if !blink || ey.abs() < 0.02 {
+                                g.dot(i, j, 3, err);
+                            }
+                            continue;
+                        }
+                        if p.lens > 0.5 && (x - lx).hypot(y - ly) < lr {
+                            if (i + j) % 2 == 0 {
+                                g.dot(i, j, 3, INK_MAIN);
+                            }
+                            continue;
+                        }
+                        if p.scan > 0.01 && (y - scan_y).abs() < 0.025 {
                             g.dot(i, j, 3, INK_MAIN);
+                            continue;
                         }
-                        continue;
-                    }
-                    if p.scan > 0.01 && (y - scan_y).abs() < 0.025 {
-                        g.dot(i, j, 3, INK_MAIN);
-                        continue;
-                    }
-                    if ctx > 0.01 && y < cy - radius + 2.0 * radius * ctx + 0.02 * (x * 14.0 + t * 3.0).sin() {
-                        if (i + j) % 2 == 0 {
-                            g.dot(i, j, 2, liquid_ink);
+                        if ctx > 0.01 && y < cy - radius + 2.0 * radius * ctx + 0.02 * (x * 14.0 + t * 3.0).sin() {
+                            if (i + j) % 2 == 0 {
+                                g.dot(i, j, 2, liquid_ink);
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    if (i + j * 2) % 3 == 0 && j % 2 == 0 {
-                        g.dot(i, j, 2, err);
+                        if (i + j * 2) % 3 == 0 && j % 2 == 0 {
+                            g.dot(i, j, 2, err);
+                        }
                     }
                 }
             }
@@ -1458,6 +1471,46 @@ impl Core {
 }
 
 impl Core {
+    /// La cara de Baymax, de `half` hacia cada lado del centro: el borde pleno, el relleno más
+    /// apagado y los ojos huecos. Miran hacia donde pasan las cosas, parpadean, se cierran al
+    /// dormir, la cara se enciende al hablar (`open`) y con un error se pone roja. Sin conexión
+    /// queda solo el borde, punteado. La lupa (buscando) va encima de la cara.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_baymax(&self, g: &mut Grid, [cx, cy]: [f64; 2], half: f64, [sx, sy]: [f64; 2], blink: bool, open: f64, scan_y: f64, lupa: Option<(f64, f64, f64)>) {
+        let p = &self.p;
+        let lim = (p.blob_r * 0.42).max(1e-3);
+        let gesto = crate::baymax::Gesto {
+            cerrados: blink || p.pupil < 0.3,
+            mirada: [(self.gaze[0] / lim).clamp(-1.0, 1.0), (self.gaze[1] / lim).clamp(-1.0, 1.0)],
+        };
+        let ink = if self.red > 0.35 { INK_RED } else { INK_BAYMAX };
+        let relleno = if open > 0.4 { 2 } else { 1 };
+        let du = g.du / half;
+        for j in 0..g.dh {
+            for i in 0..g.dw {
+                let (x, y) = g.center(i, j);
+                let (u, v) = ((x - cx) / sx / half, (y - cy) / sy / half);
+                if u.abs() > 1.0 || v.abs() > 1.0 {
+                    continue;
+                }
+                match crate::baymax::cara(u, v, du, &gesto) {
+                    0 => {}
+                    3 if p.dashed > 0.5 => {
+                        if (i + j) % 2 == 0 {
+                            g.dot(i, j, 1, ink);
+                        }
+                    }
+                    _ if p.dashed > 0.5 => {}
+                    // Leyendo: la línea que baja por la cara.
+                    _ if p.scan > 0.01 && (y - scan_y).abs() < 0.025 => g.dot(i, j, 3, INK_MAIN),
+                    _ if lupa.is_some_and(|(lx, ly, lr)| ((x - lx).hypot(y - ly) - lr).abs() < 1.5 * g.du) => g.dot(i, j, 3, INK_MAIN),
+                    3 => g.dot(i, j, 3, ink),
+                    _ => g.dot(i, j, relleno, ink),
+                }
+            }
+        }
+    }
+
     /// Los hijos, con su línea al principal y las partículas que suben por ella.
     fn paint_kids(&self, g: &mut Grid, cx: f64, cy: f64, radius: f64) {
         let t = self.t;
@@ -1550,8 +1603,10 @@ const INK_RED: u8 = 2;
 const INK_WARM: u8 = 3;
 /// El acento del tema (Aether): lo de alrededor, que no cambia con el estado.
 const INK_ACCENT: u8 = 4;
+/// La cara de Baymax: el color del tema o el que se elija con `/nucleo`.
+const INK_BAYMAX: u8 = 5;
 /// Desde acá, una tinta por hijo: cada uno con el color de lo que está haciendo.
-const INK_KID: u8 = 5;
+const INK_KID: u8 = 6;
 const MAX_KID_INKS: usize = 40;
 
 /// Rejilla de puntos. Coordenadas del mundo: y ∈ [-1, 1] (x proporcional); si el panel es
@@ -1912,6 +1967,32 @@ mod tests {
 
     /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
     /// los estados, para mirarlos en el navegador.
+    #[test]
+    /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::baymax_ppm` deja en target/baymax/ la cara
+    /// de Baymax en varios estados, como la ve foot (Sixel), con la paleta Baymax de verdad.
+    fn baymax_ppm() {
+        if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
+            return;
+        }
+        let home = std::env::var("HOME").unwrap();
+        crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-baymax.toml").into()));
+        let dir = std::path::Path::new("target/baymax");
+        std::fs::create_dir_all(dir).unwrap();
+        let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);
+        let sig = Signals::default();
+        for (s, secs) in [(State::Idle, 3.0), (State::Thinking, 2.6), (State::Speaking, 2.6), (State::Sleeping, 3.0), (State::Searching, 2.6), (State::Offline, 2.6)] {
+            let c = run(s, secs, &sig);
+            let (w, h) = (480, 400);
+            let (img, colors) = c.pixels(w, h, 4);
+            let mut out = format!("P6 {w} {h} 255\n").into_bytes();
+            for i in img {
+                let c = if i == 0 { bg } else { colors[i as usize - 1] };
+                out.extend(c.map(|v| v.round() as u8));
+            }
+            std::fs::write(dir.join(format!("{:?}.ppm", s)), out).unwrap();
+        }
+    }
+
     #[test]
     fn snapshot() {
         if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
