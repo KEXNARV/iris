@@ -8,6 +8,7 @@ mod entrada;
 mod habla;
 mod estilo;
 mod md;
+mod musica;
 mod miniatura;
 mod nucleo;
 mod select;
@@ -16,6 +17,7 @@ mod sixel;
 mod teclado;
 mod theme;
 mod ui;
+mod update;
 mod voice;
 
 use std::sync::mpsc::{self, Sender};
@@ -34,6 +36,7 @@ pub enum AppEvent {
     Claude(u64, ClaudeEvent),
     Voice(VoiceEvent),
     Habla(habla::HablaEvent),
+    Update(update::UpdateEvent),
 }
 
 /// Cuándo contesta en voz alta: `Auto` cuando le hablaste (si escribiste, en silencio).
@@ -136,6 +139,8 @@ pub enum Modal {
     Color { sel: usize, antes: baymax::Modo },
     /// `/buddy`: como `/theme`, con quién vive en el núcleo.
     Buddy { sel: usize, antes: buddy::Buddy },
+    /// Hay una versión nueva en GitHub: ¿actualizar?
+    Update(update::Info),
 }
 
 pub struct App {
@@ -177,6 +182,12 @@ pub struct App {
     pub sel: Option<select::Selection>,
     /// Aviso breve en la barra de abajo («copiado…»).
     pub flash: Option<(String, Instant)>,
+    /// El primer Ctrl+C: si llega otro mientras se ve el aviso, se sale.
+    quit_armed: Option<Instant>,
+    /// Versión nueva por ofrecer: se muestra cuando no estorbe.
+    update: Option<update::Info>,
+    /// Se instaló la versión nueva: al salir, Jarvis se vuelve a abrir con ella.
+    reexec: bool,
     /// El blob del panel NÚCLEO.
     pub nucleo: nucleo::Core,
     /// Tokens de contexto en uso y la ventana del modelo.
@@ -223,6 +234,9 @@ pub struct App {
     /// Está sonando su voz, y con qué volumen.
     pub talking: bool,
     tts_level: f32,
+    /// Lo que suena en el equipo (cava), y la última vez que sonó algo.
+    musica: musica::Musica,
+    music_at: std::cell::Cell<Option<Instant>>,
     /// Cómo se compone la pantalla (`/theme`).
     pub estilo: estilo::Estilo,
     /// Quién vive en el núcleo (`/buddy`).
@@ -249,6 +263,8 @@ pub struct App {
     pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<miniatura::Thumb>, (u16, u16, u16))>>,
     thumbs_shown: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))>,
     sixel_shown: Option<ratatui::layout::Rect>,
+    /// El fondo que le pedimos a la terminal en el modo transparente (`None`: el suyo).
+    fondo_terminal: Option<u32>,
     /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
     pub turn_from: usize,
     /// Subagentes, los hijos del núcleo.
@@ -284,7 +300,10 @@ impl App {
             State::Speaking
         } else if !self.input.is_empty() && self.last_key.elapsed() < Duration::from_secs(3) {
             State::Typing
-        } else if self.last_activity.elapsed() > Duration::from_secs(120) {
+        } else if self.last_activity.elapsed() > Duration::from_secs(120)
+            && self.music_at.get().is_none_or(|t| t.elapsed() > Duration::from_secs(10))
+        {
+            // Con música no se duerme: se queda bailando.
             State::Sleeping
         } else {
             State::Idle
@@ -300,7 +319,17 @@ impl App {
             kids: self.agents.iter().filter(|a| a.ended.is_none()).map(|a| (a.kid, a.state())).collect(),
             idle: self.last_activity.elapsed().as_secs_f64(),
             calm: self.calm,
+            music: self.music(),
         }
+    }
+
+    /// Lo que suena, como en el teclado: cuenta recién 3 s después de la última tecla.
+    fn music(&self) -> f32 {
+        let l = self.musica.level();
+        if l > 0.05 {
+            self.music_at.set(Some(Instant::now()));
+        }
+        if self.last_key.elapsed() < Duration::from_secs(3) { 0.0 } else { l }
     }
 
     pub fn md_rows(&self, i: usize, text: &str, width: usize) -> Vec<md::Row> {
@@ -533,6 +562,7 @@ fn main() -> Result<()> {
 
     let mut claude = Some(Claude::spawn(&extra, tx.clone())?);
     let (voice_tx, level) = voice::spawn(tx.clone());
+    update::spawn(tx.clone());
 
     // `jarvis --resume <id>`: además de pasárselo al motor, se muestra la conversación.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::history(id));
@@ -572,6 +602,9 @@ fn main() -> Result<()> {
         todos: (0, 0),
         compacting: false,
         last_activity: Instant::now(),
+        quit_armed: None,
+        update: None,
+        reexec: false,
         last_key: Instant::now(),
         last_voice: Instant::now(),
         noise_floor: 0.0,
@@ -598,6 +631,8 @@ fn main() -> Result<()> {
         speak_turn: false,
         talking: false,
         tts_level: 0.0,
+        musica: musica::Musica::spawn(),
+        music_at: std::cell::Cell::new(None),
         estilo: estilo::cargar(),
         buddy: buddy::cargar(),
         reading: Default::default(),
@@ -612,6 +647,7 @@ fn main() -> Result<()> {
         thumb_targets: Default::default(),
         thumbs_shown: vec![],
         sixel_shown: None,
+        fondo_terminal: None,
         turn_from: 0,
         agents: vec![],
         next_kid: 0,
@@ -642,7 +678,32 @@ fn main() -> Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
+    if app.fondo_terminal.is_some() {
+        // La terminal vuelve a su fondo: no queda transparente después de salir.
+        use std::io::Write;
+        let _ = write!(std::io::stdout(), "\x1b]111\x1b\\");
+    }
     ratatui::restore();
+    if res.is_ok() && app.reexec {
+        // Se instaló la versión nueva: se reabre con ella y retoma esta misma sesión.
+        drop(claude);
+        let mut args: Vec<String> = vec![];
+        let mut old = std::env::args().skip(1);
+        while let Some(a) = old.next() {
+            if a == "--resume" {
+                old.next();
+            } else {
+                args.push(a);
+            }
+        }
+        if !app.session.is_empty() {
+            args.extend(["--resume".into(), app.session.clone()]);
+        }
+        drop(app);
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(update::exe()).args(args).exec();
+        return Err(err.into());
+    }
     res
 }
 
@@ -678,6 +739,17 @@ fn run(
             hear(app, lvl);
         }
         flotante_tick(app, voice_tx);
+        // La versión nueva se ofrece cuando no estorba: si apareciera mientras escribes, el
+        // Enter de tu mensaje la aceptaría.
+        if app.update.is_some()
+            && app.modal.is_none()
+            && app.tools_view.is_none()
+            && app.input.is_empty()
+            && !app.busy
+            && app.last_key.elapsed() > Duration::from_secs(3)
+        {
+            app.modal = app.update.take().map(Modal::Update);
+        }
 
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
@@ -697,6 +769,7 @@ fn run(
         // Lo que se dibujó en este cuadro: hace falta para reescribir el texto que tapaba una
         // miniatura que se movió.
         let snap = term.draw(|f| ui::draw(f, app))?.buffer.clone();
+        fondo_terminal(app)?;
         if sixel_frame(term, app, &mut frames)? {
             app.thumbs_shown.clear(); // la pantalla se limpió: hay que volver a dibujarlas
         }
@@ -785,6 +858,10 @@ fn run(
                             term.clear()?;
                         }
                         Flow::Redraw => term.clear()?,
+                        Flow::Update => {
+                            app.push(Role::System, "actualizando: bajando y compilando la versión nueva…");
+                            update::install(tx.clone());
+                        }
                         Flow::Go => {}
                     }
                 }
@@ -817,6 +894,16 @@ fn run(
                         app.push(Role::Error, format!("sin voz: {why}"));
                     }
                 },
+                AppEvent::Update(e) => match e {
+                    update::UpdateEvent::Available(info) => app.update = Some(info),
+                    update::UpdateEvent::Installed => {
+                        app.reexec = true;
+                        return Ok(());
+                    }
+                    update::UpdateEvent::Failed(why) => {
+                        app.push(Role::Error, format!("no se pudo actualizar: {why}"));
+                    }
+                },
             }
         }
     }
@@ -830,6 +917,8 @@ enum Flow {
     Quit,
     Restart,
     Resume(String),
+    /// Bajar e instalar la versión nueva.
+    Update,
 }
 
 fn handle_key(
@@ -906,7 +995,15 @@ fn handle_key(
     }
 
     match k.code {
-        KeyCode::Char('c') | KeyCode::Char('d') if ctrl => return Flow::Quit,
+        // Ctrl+C pide confirmación: hay que darlo otra vez antes de que se borre el aviso.
+        KeyCode::Char('c') if ctrl => {
+            if app.quit_armed.is_some_and(|t| t.elapsed() < Duration::from_millis(2500)) {
+                return Flow::Quit;
+            }
+            app.quit_armed = Some(Instant::now());
+            app.flash = Some(("Ctrl+C otra vez para salir".into(), Instant::now()));
+        }
+        KeyCode::Char('d') if ctrl => return Flow::Quit,
         KeyCode::Char('r') if ctrl => return Flow::Restart,
         KeyCode::Char('l') if ctrl => return clear(app),
         KeyCode::Char('u') if ctrl => {
@@ -1213,6 +1310,17 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
                     let id = list[*sel].id.clone();
                     app.modal = None;
                     return Some(Flow::Resume(id));
+                }
+                KeyCode::Esc => app.modal = None,
+                _ => {}
+            }
+            Some(Flow::Go)
+        }
+        Modal::Update(_) => {
+            match k.code {
+                KeyCode::Enter => {
+                    app.modal = None;
+                    return Some(Flow::Update);
                 }
                 KeyCode::Esc => app.modal = None,
                 _ => {}
@@ -1784,6 +1892,25 @@ fn scroll(app: &mut App, up: bool, n: usize) {
     }
 }
 
+
+/// El modo transparente: JARVIS no pinta el fondo y le pide a la terminal el color del tema con
+/// transparencia (`OSC 11` con la extensión de URxvt, que foot entiende), así se ve el fondo de
+/// pantalla. Al salir del modo, la terminal vuelve a su fondo (`OSC 111`).
+fn fondo_terminal(app: &mut App) -> Result<()> {
+    use std::io::Write;
+    let quiero = theme::transparente().then(theme::fondo_rgb);
+    if quiero == app.fondo_terminal {
+        return Ok(());
+    }
+    let mut out = std::io::stdout().lock();
+    match quiero {
+        Some(c) => write!(out, "\x1b]11;[{}]#{c:06x}\x1b\\", theme::OPACIDAD)?,
+        None => write!(out, "\x1b]111\x1b\\")?,
+    }
+    out.flush()?;
+    app.fondo_terminal = quiero;
+    Ok(())
+}
 
 /// ¿Se puede dibujar el núcleo como imagen? Hace falta una terminal con Sixel (foot) y saber
 /// cuántos píxeles mide una celda. `JARVIS_SIXEL=0` lo apaga; `=1` lo fuerza en otra terminal.

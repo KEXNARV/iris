@@ -75,7 +75,12 @@ pub struct Signals {
     pub idle: f64,
     /// Menos movimiento (`/calma`).
     pub calm: bool,
+    /// Lo que suena en el equipo, 0..1 (cava, como el teclado). En reposo, baila con eso.
+    pub music: f32,
 }
+
+/// Fracción de la escala donde el medidor de música ya es rojo, como la barra del teclado.
+const METER_TOP: f64 = 0.5;
 
 /// Motas de la corona, repartidas en tres capas de profundidad.
 const MOTES: usize = 24;
@@ -395,6 +400,9 @@ pub struct Core {
     /// Hacia dónde mira el principal cuando un hijo le manda algo: (cuándo, ángulo).
     heard_kid: Option<(f64, f64)>,
     level: f64,
+    /// Nivel de la música y cuánto está bailando (0..1: entra en medio segundo, se va de golpe).
+    music: f64,
+    groove: f64,
     sig: Signals,
     rng: u64,
     fired: Vec<Event>,
@@ -436,6 +444,8 @@ impl Core {
             kids: vec![],
             heard_kid: None,
             level: 0.0,
+            music: 0.0,
+            groove: 0.0,
             sig: Signals::default(),
             rng: 0x9E37_79B9_7F4A_7C15,
             fired: vec![],
@@ -672,9 +682,24 @@ impl Core {
 
         let lvl = if matches!(self.shown, State::Listening | State::Speaking) { (sig.level as f64 * 6.0).min(1.0) } else { 0.0 };
         self.level += (lvl - self.level) * if lvl > self.level { 0.5 } else { 0.12 };
+        // Música: cava ya viene suavizado, así que se sigue casi tal cual. Como en el teclado,
+        // aparece en medio segundo y una tecla (o cualquier otro estado) lo apaga al instante.
+        let m = sig.music as f64;
+        // Un golpe (el nivel sube de golpe) lo aplasta un poco: así se ve que baila.
+        if m - self.music > 0.15 {
+            self.kick(1.5 * self.groove);
+        }
+        self.music += (m - self.music) * (dt * 30.0).min(1.0);
+        self.groove = if self.shown != State::Idle {
+            (self.groove - dt * 8.0).max(0.0)
+        } else if m > 0.02 {
+            (self.groove + dt / 0.5).min(1.0)
+        } else {
+            (self.groove - dt).max(0.0) // entre canción y canción se apaga despacio
+        };
 
         // Gestos ocasionales cuando lleva rato quieto, para que no repita siempre lo mismo.
-        if self.shown == State::Idle && sig.idle > 15.0 && t > self.next_gesture && self.gesture.is_none() {
+        if self.shown == State::Idle && self.groove < 0.05 && sig.idle > 15.0 && t > self.next_gesture && self.gesture.is_none() {
             let g = if sig.idle > 95.0 {
                 Gesture::Yawn
             } else {
@@ -712,7 +737,7 @@ impl Core {
 
         // Motas: caen al centro escuchando, salen respondiendo, flotan el resto.
         let r0 = self.p.blob_r;
-        let (shown, level, swallow) = (self.shown, self.level, self.swallow);
+        let (shown, level, swallow, groove) = (self.shown, self.level, self.swallow, self.groove * self.music);
         for m in &mut self.motes {
             if swallow > 0.01 {
                 m.r += (r0 - m.r) * (dt * 6.0).min(1.0);
@@ -731,7 +756,7 @@ impl Core {
                 }
             } else {
                 let (lo, hi) = mote_band(m.z, r0);
-                m.a += dt * 0.12 * (1.0 + m.s * 0.5) * mote_speed(m.z) * calm;
+                m.a += dt * 0.12 * (1.0 + m.s * 0.5) * mote_speed(m.z) * calm * (1.0 + groove * 4.0);
                 m.r += (t * 0.7 + m.a * 3.0).sin() * dt * 0.02;
                 m.r = m.r.clamp(lo, hi);
             }
@@ -1001,6 +1026,15 @@ impl Core {
             }
             if p.cardinal > 0.01 && k % 6 == 0 && (t * 4.0).sin() > 0.0 {
                 tone = 3;
+            }
+            // Música: el medidor de la barra del teclado, llenándose desde abajo hacia los dos
+            // lados, en el acento y rojo cuando el golpe pasa de la mitad.
+            if self.groove > 0.01 {
+                let from = (k as f64 - 12.0).abs() / 12.0;
+                if from <= self.music * self.groove {
+                    tone = 3;
+                    ink = if from < METER_TOP * 0.6 { INK_ACCENT } else { INK_RED };
+                }
             }
             if p.tests > 0.5 && (k as f64) < (st * 9.0) % 25.0 {
                 tone = 3; // avance de la corrida; el resultado lo dicen Pass o Error
@@ -1284,8 +1318,10 @@ impl Core {
         let breath = p.zzz * 0.03 * (t * 1.25).sin() + (1.0 - p.zzz) * 0.012 * (t * 1.2).sin() + yawn * 0.05;
         // Respondiendo late con el volumen real de su voz; sin voz, a su propio ritmo.
         let beat = p.ripple * 0.045 * if self.level > 0.01 { self.level * 1.6 } else { (t * 5.0).sin().abs() };
-        let voice = p.vu * lv * 0.22;
-        let radius = p.blob_r * grow * (1.0 - 0.35 * self.deflate);
+        let groove = self.groove * self.music;
+        let voice = p.vu * lv * 0.22 + groove * 0.10;
+        // Con música crece desde el centro con el nivel, como el brillo de las teclas.
+        let radius = p.blob_r * grow * (1.0 - 0.35 * self.deflate) * (1.0 + groove * 0.18);
         let chaos = p.chaos + self.red * 2.0;
         let red = self.red;
         let phase = self.phase;
@@ -1807,6 +1843,25 @@ mod tests {
         let mut buf = Buffer::empty(area);
         c.draw(area, &mut buf);
         buf
+    }
+
+    #[test]
+    fn en_reposo_baila_con_la_musica() {
+        let fuerte = Signals { music: 0.9, ..Default::default() };
+        let mut c = run(State::Idle, 4.0, &fuerte);
+        assert!(c.groove > 0.99);
+        // El golpe fuerte llega al rojo en la escala, como la barra del teclado.
+        let (px, _) = c.pixels(200, 200, 4);
+        assert!(px.contains(&(1 + INK_RED * 3 + 2)), "sin rojo en la escala");
+        let quieto = run(State::Idle, 4.0, &Signals::default()).pixels(200, 200, 4).0;
+        assert!(!quieto.contains(&(1 + INK_RED * 3 + 2)));
+        // Una tecla lo saca de reposo y deja de bailar enseguida.
+        for _ in 0..10 {
+            c.step(0.04, State::Typing, &fuerte);
+        }
+        assert!(c.groove < 0.1);
+        // Sin música no baila.
+        assert_eq!(run(State::Idle, 4.0, &Signals::default()).groove, 0.0);
     }
 
     #[test]
