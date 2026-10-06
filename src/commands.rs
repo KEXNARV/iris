@@ -19,9 +19,9 @@ const LOCAL: &[(&str, &str)] = &[
     ("calma", "menos movimiento en el núcleo (alterna)"),
     ("voz", "cuándo contesta hablando: auto (si le hablas), siempre o nunca"),
     ("theme", "elegir el estilo de la pantalla · /theme cabina"),
-    ("fondo", "fondos Chopper: solo para Clásico Chopper y Cine Chopper · /fondo drum"),
-    ("nucleo", "color de la cara de Chopper en el núcleo · /nucleo chopper"),
-    ("esquinas", "color de las cabecitas de Chopper (o no) · /esquinas rosa"),
+    ("buddy", "quién vive en el núcleo: original o Baymax · /buddy baymax"),
+    ("fondo", "fondos de Baymax (con /buddy baymax) · /fondo sistema · /fondo defecto"),
+    ("nucleo", "color de la cara de Baymax en el núcleo · /nucleo blanco"),
     ("quit", "salir de Jarvis (^C)"),
 ];
 

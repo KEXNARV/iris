@@ -18,15 +18,14 @@ const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
 pub use crate::nucleo::State;
 
 pub fn draw(f: &mut Frame, app: &App) {
-    theme::usar(app.estilo.paleta());
+    theme::usar(app.buddy.paleta());
     if let Some(bg) = theme::fondo() {
         f.render_widget(Block::new().style(Style::new().bg(bg)), f.area());
     }
-    draw_esquinas(f);
     // Los estilos sin paneles necesitan aire; en una terminal chica se ve el clásico.
-    let a = zona(f);
+    let a = f.area();
     let fits = |w: u16, h: u16| a.width >= w && a.height >= h;
-    match app.estilo.base() {
+    match app.estilo {
         Estilo::Propuesta if fits(60, 16) => propuesta(f, app),
         Estilo::Cabina if fits(70, 18) => cabina(f, app),
         Estilo::Cine if fits(64, 22) => cine(f, app),
@@ -34,48 +33,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
     if app.tools_view.is_some() {
         tools_overlay(f, app);
-    }
-}
-
-/// Las cabecitas de Chopper: 14×9 píxeles en sextantes (7×3 celdas), en un costado de 8
-/// columnas a cada lado. En una terminal chica no se ponen.
-const ESQ_W: u16 = 7;
-const ESQ_H: u16 = 3;
-
-fn esquinas(a: Rect) -> Option<crate::chopper::Modo> {
-    let m = crate::chopper::esquinas()?;
-    (theme::chopper() && a.width >= 90 && a.height >= 20).then_some(m)
-}
-
-/// Lo que queda para la pantalla de siempre: todo, o sin los costados de las cabecitas.
-fn zona(f: &Frame) -> Rect {
-    let a = f.area();
-    if esquinas(a).is_none() {
-        return a;
-    }
-    Rect { x: a.x + ESQ_W + 1, width: a.width - 2 * (ESQ_W + 1), ..a }
-}
-
-fn draw_esquinas(f: &mut Frame) {
-    let a = f.area();
-    let Some(modo) = esquinas(a) else { return };
-    let c = modo.color(theme::acento_u32());
-    let color = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
-    let buf = f.buffer_mut();
-    for (x0, y0) in [(a.x, a.y), (a.right() - ESQ_W, a.y), (a.x, a.bottom() - ESQ_H), (a.right() - ESQ_W, a.bottom() - ESQ_H)] {
-        for cy in 0..ESQ_H as usize {
-            for cx in 0..ESQ_W as usize {
-                let mut bits = 0u8;
-                for k in 0..6 {
-                    if crate::chopper::mini(cx * 2 + k % 2, cy * 3 + k / 2) {
-                        bits |= 1 << k;
-                    }
-                }
-                if bits != 0 {
-                    buf[(x0 + cx as u16, y0 + cy as u16)].set_char(crate::chopper::sextante(bits)).set_fg(color);
-                }
-            }
-        }
     }
 }
 
@@ -230,7 +187,7 @@ fn clasico(f: &mut Frame, app: &App) {
         Constraint::Length(if listening(state) { 5 } else { 3 }),
         Constraint::Length(1),
     ])
-    .areas(zona(f));
+    .areas(f.area());
 
     draw_header(f, header, app);
 
@@ -748,7 +705,8 @@ fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
         Some(Modal::Fondo { sel, .. }) => draw_fondos(f, anchor, *sel),
-        Some(Modal::Color { esquinas, sel, .. }) => draw_colores(f, anchor, *esquinas, *sel),
+        Some(Modal::Color { sel, .. }) => draw_colores(f, anchor, *sel),
+        Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
         None => draw_menu(f, anchor, app),
     }
 }
@@ -788,13 +746,13 @@ fn overlay(
 
 /// Una fila elegible: marca, nombre a ancho fijo y una descripción que se recorta.
 fn item(on: bool, mark: &str, name: &str, name_w: usize, desc: &str, w: usize) -> Line<'static> {
-    let bg = if on { Style::new().bg(Color::Rgb(15, 45, 65)) } else { Style::new() };
+    let bg = if on { Style::new().bg(theme::seleccion()) } else { Style::new() };
     let cursor = if on { " › " } else { "   " };
     let name = format!("{mark}{:<name_w$}", truncate(name, name_w));
     let room = w.saturating_sub(3 + name.chars().count() + 2);
     Line::from(vec![
         Span::styled(cursor, bg.fg(theme::accent()).bold()),
-        Span::styled(name, bg.fg(if on { Color::White } else { theme::accent() }).bold()),
+        Span::styled(name, bg.fg(if !on { theme::accent() } else if theme::claro() { theme::text() } else { Color::White }).bold()),
         Span::styled(format!("  {:<room$}", truncate(desc, room)), bg.fg(if on { theme::text() } else { theme::faint() })),
     ])
 }
@@ -856,48 +814,58 @@ fn draw_estilos(f: &mut Frame, anchor: Rect, sel: usize) {
     overlay(f, anchor, "ESTILO", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
-fn draw_fondos(f: &mut Frame, anchor: Rect, sel: usize) {
+fn draw_buddies(f: &mut Frame, anchor: Rect, sel: usize) {
     let w = anchor.width.saturating_sub(2) as usize;
-    let items = crate::estilo::FONDOS
+    let items = crate::buddy::TODOS
         .iter()
         .enumerate()
-        .map(|(i, (_, name, c))| {
+        .map(|(i, (_, _, name, what))| item(i == sel, &format!("{} ", i + 1), name, 10, what, w))
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    overlay(f, anchor, "BUDDY", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_fondos(f: &mut Frame, anchor: Rect, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    // Primero, los colores del sistema: sin muestra, que cambian con el tema.
+    let sistema = [("Del sistema", "cambia con el tema de Omarchy", "◐  "), ("Del sistema, transparente", "se ve el fondo de pantalla", "◌  ")]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, desc, marca))| {
+            let mut l = item(sel == i, &format!("{} ", i + 1), name, 26, desc, w.saturating_sub(3));
+            l.spans.insert(1, Span::styled(marca, Style::new().fg(theme::accent())));
+            l
+        });
+    let items = sistema
+        .chain(crate::estilo::FONDOS.iter().enumerate().map(|(i, (_, name, c))| {
+            let i = i + 2;
             let mut l = item(i == sel, &format!("{} ", i + 1), name, 26, &format!("#{c:06X}"), w.saturating_sub(3));
             // La muestra del color, entre la marca y el nombre.
             let muestra = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8);
             l.spans.insert(1, Span::styled("██ ", Style::new().fg(muestra)));
             l
-        })
+        }))
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
-    overlay(f, anchor, "FONDOS CHOPPER", theme::accent(), vec![], items, sel, 8, &hints);
+    overlay(f, anchor, "FONDOS BAYMAX", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
-fn draw_colores(f: &mut Frame, anchor: Rect, esquinas: bool, sel: usize) {
-    use crate::chopper::OPCIONES;
+fn draw_colores(f: &mut Frame, anchor: Rect, sel: usize) {
     let w = anchor.width.saturating_sub(2) as usize;
     let acento = theme::acento_u32();
-    let mut filas: Vec<(&str, Option<u32>)> = OPCIONES.iter().map(|(_, nombre, m)| (*nombre, Some(m.color(acento)))).collect();
-    if esquinas {
-        filas.push(("Ocultar", None));
-    }
-    let items = filas
+    let items = crate::baymax::OPCIONES
         .iter()
         .enumerate()
-        .map(|(i, (nombre, c))| {
+        .map(|(i, (_, nombre, m))| {
             let mut l = item(i == sel, &format!("{} ", i + 1), nombre, 22, "", w.saturating_sub(3));
             // La muestra del color, entre la marca y el nombre.
-            let muestra = match c {
-                Some(c) => Span::styled("██ ", Style::new().fg(Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8))),
-                None => Span::raw("   "),
-            };
-            l.spans.insert(1, muestra);
+            let c = m.color(acento);
+            l.spans.insert(1, Span::styled("██ ", Style::new().fg(Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))));
             l
         })
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
-    let title = if esquinas { "ESQUINAS CHOPPER" } else { "NÚCLEO CHOPPER" };
-    overlay(f, anchor, title, theme::accent(), vec![], items, sel, 8, &hints);
+    overlay(f, anchor, "NÚCLEO BAYMAX", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
 fn draw_ask(f: &mut Frame, anchor: Rect, a: &crate::ask::Ask) {
@@ -1175,7 +1143,7 @@ fn hints_for(app: &App, state: State) -> Vec<(&'static str, &'static str)> {
 fn propuesta(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = zona(f);
+    let area = f.area();
     let m = if area.width > 90 { 3 } else { 1 };
     let inner = Rect { x: area.x + m, width: area.width.saturating_sub(m * 2), ..area };
     let tone = app.nucleo.color();
@@ -1300,7 +1268,7 @@ fn propuesta(f: &mut Frame, app: &App) {
 fn cabina(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = zona(f);
+    let area = f.area();
     let tone = app.nucleo.color();
     let [bar, body, foot] = Layout::vertical([Constraint::Length(1), Constraint::Min(8), Constraint::Length(1)]).areas(area);
 
@@ -1458,7 +1426,7 @@ fn clock_ago(ago: u64) -> String {
 fn cine(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = zona(f);
+    let area = f.area();
     let tone = app.nucleo.color();
     let hear = listening(state);
 

@@ -1,5 +1,6 @@
 mod ask;
-mod chopper;
+mod baymax;
+mod buddy;
 mod claude;
 mod clip;
 mod commands;
@@ -128,11 +129,13 @@ pub enum Modal {
     Model { sel: usize },
     /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
     Estilo { sel: usize, antes: estilo::Estilo },
-    /// `/fondo`: igual que `/theme`, con los fondos de los estilos Chopper.
-    Fondo { sel: usize, antes: u32 },
-    /// `/nucleo` y `/esquinas` (`esquinas: true`): el color de la cara de Chopper o de las
-    /// cabecitas. En las esquinas, `None` es ocultarlas.
-    Color { esquinas: bool, sel: usize, antes: Option<chopper::Modo> },
+    /// `/fondo`: igual que `/theme`, con los fondos de Baymax. Las filas 0 y 1 son
+    /// los colores del sistema (opaco y transparente); las demás, `estilo::FONDOS`.
+    Fondo { sel: usize, antes: (theme::Colores, u32) },
+    /// `/nucleo`: el color de la cara de Baymax.
+    Color { sel: usize, antes: baymax::Modo },
+    /// `/buddy`: como `/theme`, con quién vive en el núcleo.
+    Buddy { sel: usize, antes: buddy::Buddy },
 }
 
 pub struct App {
@@ -222,6 +225,8 @@ pub struct App {
     tts_level: f32,
     /// Cómo se compone la pantalla (`/theme`).
     pub estilo: estilo::Estilo,
+    /// Quién vive en el núcleo (`/buddy`).
+    pub buddy: buddy::Buddy,
     /// Cine: la respuesta abierta entera en el centro (lo decide el dibujo, que sabe si cabe).
     pub reading: std::cell::Cell<bool>,
     /// Cine: la conversación entera desplegada como una cortina (^T).
@@ -594,6 +599,7 @@ fn main() -> Result<()> {
         talking: false,
         tts_level: 0.0,
         estilo: estilo::cargar(),
+        buddy: buddy::cargar(),
         reading: Default::default(),
         transcript: false,
         tools_view: None,
@@ -1020,16 +1026,16 @@ fn handle_key(
                     theme(app, arg.trim());
                     return Flow::Go;
                 }
+                "/buddy" | "/budy" => {
+                    elegir_buddy(app, arg.trim());
+                    return Flow::Go;
+                }
                 "/fondo" => {
                     fondo(app, arg.trim());
                     return Flow::Go;
                 }
                 "/nucleo" | "/núcleo" => {
-                    color(app, false, arg.trim());
-                    return Flow::Go;
-                }
-                "/esquinas" => {
-                    color(app, true, arg.trim());
+                    color(app, arg.trim());
                     return Flow::Go;
                 }
                 "/quit" => return Flow::Quit,
@@ -1250,47 +1256,86 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
             app.estilo = estilo::TODOS[*sel].0;
             Some(Flow::Redraw)
         }
-        Modal::Fondo { sel, antes } => {
-            let n = estilo::FONDOS.len();
+        Modal::Buddy { sel, antes } => {
+            let n = buddy::TODOS.len();
             match k.code {
                 KeyCode::Up => *sel = (*sel + n - 1) % n,
                 KeyCode::Down => *sel = (*sel + 1) % n,
                 KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
                 KeyCode::Enter => {
                     app.modal = None;
-                    set_fondo(app, theme::fondo_rgb());
+                    set_buddy(app, app.buddy);
                     return Some(Flow::Redraw);
                 }
                 KeyCode::Esc => {
-                    theme::probar_fondo(*antes);
+                    app.buddy = *antes;
                     app.modal = None;
                     return Some(Flow::Redraw);
                 }
                 _ => {}
             }
-            theme::probar_fondo(estilo::FONDOS[*sel].2);
+            // Vista previa: el núcleo cambia mientras se elige.
+            app.buddy = buddy::TODOS[*sel].0;
             Some(Flow::Redraw)
         }
-        Modal::Color { esquinas, sel, antes } => {
-            let n = chopper::OPCIONES.len() + *esquinas as usize;
+        Modal::Fondo { sel, antes } => {
+            let n = estilo::FONDOS.len() + FILAS_SISTEMA;
             match k.code {
                 KeyCode::Up => *sel = (*sel + n - 1) % n,
                 KeyCode::Down => *sel = (*sel + 1) % n,
                 KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
                 KeyCode::Enter => {
-                    let (esquinas, m) = (*esquinas, opcion(*sel));
+                    let sel = *sel;
                     app.modal = None;
-                    set_color(app, esquinas, m);
+                    match sel {
+                        0 => set_colores(app, theme::Colores::Sistema),
+                        1 => set_colores(app, theme::Colores::Transparente),
+                        i => set_fondo(app, estilo::FONDOS[i - FILAS_SISTEMA].2),
+                    }
                     return Some(Flow::Redraw);
                 }
                 KeyCode::Esc => {
-                    poner_color(*esquinas, *antes);
+                    let (colores, fondo) = *antes;
+                    theme::probar_colores(colores);
+                    if colores == theme::Colores::Defecto {
+                        theme::probar_fondo(fondo);
+                    }
                     app.modal = None;
                     return Some(Flow::Redraw);
                 }
                 _ => {}
             }
-            poner_color(*esquinas, opcion(*sel));
+            // Vista previa.
+            match *sel {
+                0 => theme::probar_colores(theme::Colores::Sistema),
+                1 => theme::probar_colores(theme::Colores::Transparente),
+                i => {
+                    theme::probar_colores(theme::Colores::Defecto);
+                    theme::probar_fondo(estilo::FONDOS[i - FILAS_SISTEMA].2);
+                }
+            }
+            Some(Flow::Redraw)
+        }
+        Modal::Color { sel, antes } => {
+            let n = baymax::OPCIONES.len();
+            match k.code {
+                KeyCode::Up => *sel = (*sel + n - 1) % n,
+                KeyCode::Down => *sel = (*sel + 1) % n,
+                KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
+                KeyCode::Enter => {
+                    let m = baymax::OPCIONES[*sel].2;
+                    app.modal = None;
+                    set_color(app, m);
+                    return Some(Flow::Redraw);
+                }
+                KeyCode::Esc => {
+                    baymax::poner_nucleo(*antes);
+                    app.modal = None;
+                    return Some(Flow::Redraw);
+                }
+                _ => {}
+            }
+            baymax::poner_nucleo(baymax::OPCIONES[*sel].2);
             Some(Flow::Redraw)
         }
         Modal::Ask(a) => {
@@ -1359,86 +1404,121 @@ fn theme(app: &mut App, arg: &str) {
     }
 }
 
-/// `/fondo`: el fondo de los estilos Chopper. Sin argumento, la lista con vista previa; con uno
+/// `/buddy`: sin argumento abre la lista con vista previa; con uno (`baymax`, `original`) lo aplica.
+fn elegir_buddy(app: &mut App, arg: &str) {
+    if arg.is_empty() {
+        let sel = buddy::TODOS.iter().position(|b| b.0 == app.buddy).unwrap_or(0);
+        app.modal = Some(Modal::Buddy { sel, antes: app.buddy });
+        return;
+    }
+    match buddy::Buddy::buscar(arg) {
+        Some(b) => set_buddy(app, b),
+        None => {
+            let ids: Vec<&str> = buddy::TODOS.iter().map(|b| b.1).collect();
+            app.push(Role::Error, format!("no conozco el buddy «{arg}» · hay {}", ids.join(", ")));
+        }
+    }
+}
+
+fn set_buddy(app: &mut App, b: buddy::Buddy) {
+    app.buddy = b;
+    let msg = match buddy::guardar(b) {
+        Ok(()) => format!("buddy {}", b.nombre()),
+        Err(err) => format!("buddy {} (no se guardó: {err})", b.nombre()),
+    };
+    app.flash = Some((msg, Instant::now()));
+}
+
+/// `/fondo`: el fondo de Baymax. Sin argumento, la lista con vista previa; con uno
 /// (`3`, `drum`, `#301830`) lo aplica.
 fn fondo(app: &mut App, arg: &str) {
-    if app.estilo.paleta().is_none() {
-        app.push(Role::Error, String::from("los fondos Chopper son solo para el diseño Chopper · /theme clasico-chopper o /theme cine-chopper"));
+    if app.buddy.paleta().is_none() {
+        app.push(Role::Error, String::from("los fondos son de Baymax · /buddy baymax"));
         return;
     }
     if arg.is_empty() {
-        let antes = theme::fondo_rgb();
-        let sel = estilo::FONDOS.iter().position(|f| f.2 == antes).unwrap_or(0);
+        let antes = (theme::colores(), theme::fondo_rgb());
+        let sel = match antes.0 {
+            theme::Colores::Sistema => 0,
+            theme::Colores::Transparente => 1,
+            theme::Colores::Defecto => estilo::FONDOS.iter().position(|f| f.2 == antes.1).unwrap_or(0) + FILAS_SISTEMA,
+        };
         app.modal = Some(Modal::Fondo { sel, antes });
         return;
     }
-    match estilo::buscar_fondo(arg) {
+    // Los números van como en la lista: el 1 y el 2 son los del sistema y los fondos empiezan
+    // en el 3.
+    let q = arg.trim().to_lowercase();
+    match q.as_str() {
+        "1" | "sistema" | "del sistema" | "omarchy" => return set_colores(app, theme::Colores::Sistema),
+        "2" | "transparente" => return set_colores(app, theme::Colores::Transparente),
+        _ => {}
+    }
+    let q = match q.parse::<usize>() {
+        Ok(n) if n > FILAS_SISTEMA => (n - FILAS_SISTEMA).to_string(),
+        _ => q,
+    };
+    match estilo::buscar_fondo(&q) {
         Some(v) => set_fondo(app, v),
         None => {
             let ids: Vec<&str> = estilo::FONDOS.iter().map(|f| f.0).collect();
-            app.push(Role::Error, format!("no conozco el fondo Chopper «{arg}» · hay {}, del 1 al {} o un #rrggbb", ids.join(", "), ids.len()));
+            app.push(Role::Error, format!("no conozco el fondo Baymax «{arg}» · hay sistema, transparente, {}, del 1 al {} o un #rrggbb", ids.join(", "), ids.len() + FILAS_SISTEMA));
         }
     }
+}
+
+/// En `/fondo`, las filas de los colores del sistema (opaco y transparente), antes de los fondos.
+const FILAS_SISTEMA: usize = 2;
+
+/// Los colores del tema del sistema: cambian cuando cambia el tema de Omarchy.
+fn set_colores(app: &mut App, c: theme::Colores) {
+    let que = match c {
+        theme::Colores::Transparente => "colores del sistema, transparente · se ve el fondo de pantalla",
+        _ => "colores del sistema · cambian con el tema de Omarchy",
+    };
+    let msg = match theme::guardar_colores(c) {
+        Ok(()) => que.to_string(),
+        Err(err) => format!("{que} (no se guardó: {err})"),
+    };
+    app.flash = Some((msg, Instant::now()));
 }
 
 fn set_fondo(app: &mut App, v: u32) {
     let nombre = estilo::FONDOS.iter().find(|f| f.2 == v).map_or_else(|| format!("#{v:06X}"), |f| f.1.to_string());
     let msg = match theme::guardar_fondo(v) {
-        Ok(()) => format!("fondo Chopper {nombre}"),
-        Err(err) => format!("fondo Chopper {nombre} (no se guardó: {err})"),
+        Ok(()) => format!("fondo Baymax {nombre}"),
+        Err(err) => format!("fondo Baymax {nombre} (no se guardó: {err})"),
     };
     app.flash = Some((msg, Instant::now()));
 }
 
-/// `/nucleo` y `/esquinas`: sin argumento, la lista con vista previa; con uno (`auto`, `chopper`,
-/// `rosa`, `#ffd84a`; en las esquinas también `no`) lo aplica.
-fn color(app: &mut App, esquinas: bool, arg: &str) {
-    if app.estilo.paleta().is_none() {
-        app.push(Role::Error, String::from("los colores de Chopper son solo para el diseño Chopper · /theme clasico-chopper o /theme cine-chopper"));
+/// `/nucleo`: sin argumento, la lista con vista previa; con uno (`auto`, `rosa`, `#ffd84a`) lo
+/// aplica.
+fn color(app: &mut App, arg: &str) {
+    if app.buddy.paleta().is_none() {
+        app.push(Role::Error, String::from("los colores del núcleo son de Baymax · /buddy baymax"));
         return;
     }
-    let antes = if esquinas { chopper::esquinas() } else { Some(chopper::nucleo()) };
     if arg.is_empty() {
-        let sel = match antes {
-            None => chopper::OPCIONES.len(),
-            Some(m) => chopper::OPCIONES.iter().position(|o| o.2 == m).unwrap_or(0),
-        };
-        app.modal = Some(Modal::Color { esquinas, sel, antes });
+        let antes = baymax::nucleo();
+        let sel = baymax::OPCIONES.iter().position(|o| o.2 == antes).unwrap_or(0);
+        app.modal = Some(Modal::Color { sel, antes });
         return;
     }
-    if esquinas && matches!(arg, "no" | "ocultar" | "ocultas") {
-        return set_color(app, true, None);
-    }
-    match chopper::Modo::buscar(arg) {
-        Some(m) => set_color(app, esquinas, Some(m)),
+    match baymax::Modo::buscar(arg) {
+        Some(m) => set_color(app, m),
         None => {
-            let ids: Vec<&str> = chopper::OPCIONES.iter().map(|o| o.0).collect();
-            let extra = if esquinas { ", no" } else { "" };
-            app.push(Role::Error, format!("no conozco el color «{arg}» · hay {}{extra} o un #rrggbb", ids.join(", ")));
+            let ids: Vec<&str> = baymax::OPCIONES.iter().map(|o| o.0).collect();
+            app.push(Role::Error, format!("no conozco el color «{arg}» · hay {} o un #rrggbb", ids.join(", ")));
         }
     }
 }
 
-/// La opción `sel` de la lista; pasada la última de colores, ocultar (solo en las esquinas).
-fn opcion(sel: usize) -> Option<chopper::Modo> {
-    chopper::OPCIONES.get(sel).map(|o| o.2)
-}
-
-fn poner_color(esquinas: bool, m: Option<chopper::Modo>) {
-    if esquinas {
-        chopper::poner_esquinas(m);
-    } else if let Some(m) = m {
-        chopper::poner_nucleo(m);
-    }
-}
-
-fn set_color(app: &mut App, esquinas: bool, m: Option<chopper::Modo>) {
-    poner_color(esquinas, m);
-    let (clave, que) = if esquinas { ("esquinas", "esquinas") } else { ("nucleo", "núcleo") };
-    let (valor, nombre) = m.map_or(("no".to_string(), "ocultas".to_string()), |m| (m.texto(), m.nombre()));
-    let msg = match theme::guardar(clave, &valor) {
-        Ok(()) => format!("{que} {nombre}"),
-        Err(err) => format!("{que} {nombre} (no se guardó: {err})"),
+fn set_color(app: &mut App, m: baymax::Modo) {
+    baymax::poner_nucleo(m);
+    let msg = match theme::guardar("nucleo", &m.texto()) {
+        Ok(()) => format!("núcleo {}", m.nombre()),
+        Err(err) => format!("núcleo {} (no se guardó: {err})", m.nombre()),
     };
     app.flash = Some((msg, Instant::now()));
 }

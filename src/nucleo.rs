@@ -909,10 +909,11 @@ impl Core {
         let dim = crate::theme::dim_rgb();
         let tones = |c: [f64; 3]| [dim, dim, mix(c, dim, 0.38), c];
         let mut pal: Vec<_> = [self.col, GREEN, RED, WARM, crate::theme::accent_rgb()].into_iter().map(tones).collect();
-        // Chopper, con los tonos apagados hacia el fondo.
-        let (fondo, c) = (crate::theme::fondo_rgb(), crate::chopper::nucleo().color(crate::theme::acento_u32()));
-        let full = crate::chopper::hacia(c, fondo, 0.0);
-        pal.push([full, crate::chopper::hacia(c, fondo, 0.72), crate::chopper::hacia(c, fondo, 0.48), full]);
+        // Baymax, con los tonos apagados hacia el fondo.
+        let (fondo, c) = (crate::theme::fondo_rgb(), crate::baymax::nucleo().color(crate::theme::acento_u32()));
+        let full = crate::baymax::hacia(c, fondo, 0.0);
+        // El relleno de la cara va claro (es blanca); al hablar, más todavía.
+        pal.push([full, crate::baymax::hacia(c, fondo, 0.38), crate::baymax::hacia(c, fondo, 0.15), full]);
         pal.extend(self.kids.iter().take(MAX_KID_INKS).map(|k| tones(k.core.col)));
         pal
     }
@@ -1046,8 +1047,8 @@ impl Core {
         }
 
         // Arcos: tres por fuera, seis por dentro, en sentidos opuestos.
-        let chopper = !self.mini && crate::theme::chopper();
-        if p.arcs * boot > 0.05 && !self.mini && !chopper {
+        let baymax = !self.mini && crate::theme::baymax();
+        if p.arcs * boot > 0.05 && !self.mini && !baymax {
             let n1 = (60.0 * p.arc_len * p.arcs * (boot * 1.4 - 0.4).max(0.0)).round() as usize;
             for k in 0..3 {
                 for q in 0..n1 {
@@ -1326,11 +1327,12 @@ impl Core {
         // Contorno: al menos ~2 puntos de grosor, aunque el panel sea chico.
         let band = 0.065_f64.max(1.9 * g.du);
 
-        if chopper {
-            // Estilos Chopper: su cara en lugar del cuerpo; lo de alrededor sigue diciendo el estado.
-            let half = (radius + breath + beat + voice * 0.5) * 1.55;
+        if baymax {
+            // Buddy Baymax: su cara en lugar del cuerpo; lo de alrededor sigue diciendo el estado.
+            let half = (radius + breath + beat + voice * 0.5) * 1.8;
             let open = if p.ripple > 0.5 { if self.level > 0.01 { self.level * 1.6 } else { (t * 5.0).sin().abs() } } else { 0.0 };
-            self.paint_chopper(g, [cx, cy], half, [sx, sy], blink, open.max(yawn), scan_y);
+            let lupa = (p.lens > 0.01).then_some((lx, ly, lr));
+            self.paint_baymax(g, [cx, cy], half, [sx, sy], blink, open.max(yawn), scan_y, lupa);
         } else {
             for j in 0..g.dh {
                 for i in 0..g.dw {
@@ -1433,33 +1435,42 @@ impl Core {
 }
 
 impl Core {
-    /// La cara de Chopper en líneas, de `half` hacia cada lado del centro. Las pupilas siguen la
-    /// mirada, parpadea, duerme con los ojos cerrados, abre la boca al hablar (`open`) y con un
-    /// error se pone roja. Sin conexión queda punteada y apagada.
+    /// La cara de Baymax, de `half` hacia cada lado del centro: el borde pleno, el relleno más
+    /// apagado y los ojos huecos. Miran hacia donde pasan las cosas, parpadean, se cierran al
+    /// dormir, la cara se enciende al hablar (`open`) y con un error se pone roja. Sin conexión
+    /// queda solo el borde, punteado. La lupa (buscando) va encima de la cara.
     #[allow(clippy::too_many_arguments)]
-    fn paint_chopper(&self, g: &mut Grid, [cx, cy]: [f64; 2], half: f64, [sx, sy]: [f64; 2], blink: bool, open: f64, scan_y: f64) {
+    fn paint_baymax(&self, g: &mut Grid, [cx, cy]: [f64; 2], half: f64, [sx, sy]: [f64; 2], blink: bool, open: f64, scan_y: f64, lupa: Option<(f64, f64, f64)>) {
         let p = &self.p;
         let lim = (p.blob_r * 0.42).max(1e-3);
-        let gesto = crate::chopper::Gesto {
+        let gesto = crate::baymax::Gesto {
             cerrados: blink || p.pupil < 0.3,
             mirada: [(self.gaze[0] / lim).clamp(-1.0, 1.0), (self.gaze[1] / lim).clamp(-1.0, 1.0)],
-            boca: open,
         };
-        let ink = if self.red > 0.35 { INK_RED } else { INK_CHOPPER };
-        let (tone, salto) = if p.dashed > 0.5 { (1, 2) } else { (3, 1) };
-        let mut k = 0usize;
-        crate::chopper::trazar(g.du / half, &gesto, &mut |x, y| {
-            k += 1;
-            if k % salto == 0 {
-                g.plot(cx + x * half * sx, cy + y * half * sy, tone, ink);
-            }
-        });
-        // Leyendo: la línea que baja por la cara.
-        if p.scan > 0.01 {
-            let mut x = -0.6;
-            while x <= 0.6 {
-                g.plot(cx + x * half * sx, scan_y, 3, INK_MAIN);
-                x += g.du / half;
+        let ink = if self.red > 0.35 { INK_RED } else { INK_BAYMAX };
+        let relleno = if open > 0.4 { 2 } else { 1 };
+        let du = g.du / half;
+        for j in 0..g.dh {
+            for i in 0..g.dw {
+                let (x, y) = g.center(i, j);
+                let (u, v) = ((x - cx) / sx / half, (y - cy) / sy / half);
+                if u.abs() > 1.0 || v.abs() > 1.0 {
+                    continue;
+                }
+                match crate::baymax::cara(u, v, du, &gesto) {
+                    0 => {}
+                    3 if p.dashed > 0.5 => {
+                        if (i + j) % 2 == 0 {
+                            g.dot(i, j, 1, ink);
+                        }
+                    }
+                    _ if p.dashed > 0.5 => {}
+                    // Leyendo: la línea que baja por la cara.
+                    _ if p.scan > 0.01 && (y - scan_y).abs() < 0.025 => g.dot(i, j, 3, INK_MAIN),
+                    _ if lupa.is_some_and(|(lx, ly, lr)| ((x - lx).hypot(y - ly) - lr).abs() < 1.5 * g.du) => g.dot(i, j, 3, INK_MAIN),
+                    3 => g.dot(i, j, 3, ink),
+                    _ => g.dot(i, j, relleno, ink),
+                }
             }
         }
     }
@@ -1556,8 +1567,8 @@ const INK_RED: u8 = 2;
 const INK_WARM: u8 = 3;
 /// El acento del tema (Aether): lo de alrededor, que no cambia con el estado.
 const INK_ACCENT: u8 = 4;
-/// La cara de Chopper: el color del tema o el que se elija con `/nucleo`.
-const INK_CHOPPER: u8 = 5;
+/// La cara de Baymax: el color del tema o el que se elija con `/nucleo`.
+const INK_BAYMAX: u8 = 5;
 /// Desde acá, una tinta por hijo: cada uno con el color de lo que está haciendo.
 const INK_KID: u8 = 6;
 const MAX_KID_INKS: usize = 40;
@@ -1902,17 +1913,17 @@ mod tests {
     /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
     /// los estados, para mirarlos en el navegador.
     #[test]
-    /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::chopper_ppm` deja en target/chopper/ la cara
-    /// de Chopper en varios estados, como la ve foot (Sixel), con la paleta Chopper de verdad.
-    fn chopper_ppm() {
+    /// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::baymax_ppm` deja en target/baymax/ la cara
+    /// de Baymax en varios estados, como la ve foot (Sixel), con la paleta Baymax de verdad.
+    fn baymax_ppm() {
         if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
             return;
         }
         let home = std::env::var("HOME").unwrap();
-        crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-chopper.toml").into()));
-        let dir = std::path::Path::new("target/chopper");
+        crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-baymax.toml").into()));
+        let dir = std::path::Path::new("target/baymax");
         std::fs::create_dir_all(dir).unwrap();
-        let bg = crate::chopper::hacia(crate::theme::fondo_rgb(), 0, 0.0);
+        let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);
         let sig = Signals::default();
         for (s, secs) in [(State::Idle, 3.0), (State::Thinking, 2.6), (State::Speaking, 2.6), (State::Sleeping, 3.0), (State::Searching, 2.6), (State::Offline, 2.6)] {
             let c = run(s, secs, &sig);
