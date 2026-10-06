@@ -18,10 +18,15 @@ const SPIN: [&str; 4] = ["◐", "◓", "◑", "◒"];
 pub use crate::nucleo::State;
 
 pub fn draw(f: &mut Frame, app: &App) {
+    theme::usar(app.estilo.paleta());
+    if let Some(bg) = theme::fondo() {
+        f.render_widget(Block::new().style(Style::new().bg(bg)), f.area());
+    }
+    draw_esquinas(f);
     // Los estilos sin paneles necesitan aire; en una terminal chica se ve el clásico.
-    let a = f.area();
+    let a = zona(f);
     let fits = |w: u16, h: u16| a.width >= w && a.height >= h;
-    match app.estilo {
+    match app.estilo.base() {
         Estilo::Propuesta if fits(60, 16) => propuesta(f, app),
         Estilo::Cabina if fits(70, 18) => cabina(f, app),
         Estilo::Cine if fits(64, 22) => cine(f, app),
@@ -32,13 +37,63 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
+/// Las cabecitas de Chopper: 14×9 píxeles en sextantes (7×3 celdas), en un costado de 8
+/// columnas a cada lado. En una terminal chica no se ponen.
+const ESQ_W: u16 = 7;
+const ESQ_H: u16 = 3;
+
+fn esquinas(a: Rect) -> Option<crate::chopper::Modo> {
+    let m = crate::chopper::esquinas()?;
+    (theme::chopper() && a.width >= 90 && a.height >= 20).then_some(m)
+}
+
+/// Lo que queda para la pantalla de siempre: todo, o sin los costados de las cabecitas.
+fn zona(f: &Frame) -> Rect {
+    let a = f.area();
+    if esquinas(a).is_none() {
+        return a;
+    }
+    Rect { x: a.x + ESQ_W + 1, width: a.width - 2 * (ESQ_W + 1), ..a }
+}
+
+fn draw_esquinas(f: &mut Frame) {
+    let a = f.area();
+    let Some(modo) = esquinas(a) else { return };
+    let c = modo.color(theme::acento_u32());
+    let color = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+    let buf = f.buffer_mut();
+    for (x0, y0) in [(a.x, a.y), (a.right() - ESQ_W, a.y), (a.x, a.bottom() - ESQ_H), (a.right() - ESQ_W, a.bottom() - ESQ_H)] {
+        for cy in 0..ESQ_H as usize {
+            for cx in 0..ESQ_W as usize {
+                let mut bits = 0u8;
+                for k in 0..6 {
+                    if crate::chopper::mini(cx * 2 + k % 2, cy * 3 + k / 2) {
+                        bits |= 1 << k;
+                    }
+                }
+                if bits != 0 {
+                    buf[(x0 + cx as u16, y0 + cy as u16)].set_char(crate::chopper::sextante(bits)).set_fg(color);
+                }
+            }
+        }
+    }
+}
+
+/// Borra lo que haya debajo de una ventana; con paleta propia, deja su fondo y no el de la terminal.
+fn limpiar(f: &mut Frame, area: Rect) {
+    f.render_widget(Clear, area);
+    if let Some(bg) = theme::fondo() {
+        f.render_widget(Block::new().style(Style::new().bg(bg)), area);
+    }
+}
+
 /// Ctrl+G: la lista de herramientas a la izquierda y la elegida entera a la derecha.
 fn tools_overlay(f: &mut Frame, app: &App) {
     use crate::ToolStatus;
     let Some((sel, scroll)) = app.tools_view else { return };
     let a = f.area();
     let area = Rect { x: a.x + 2, y: a.y + 1, width: a.width.saturating_sub(4), height: a.height.saturating_sub(2) };
-    f.render_widget(Clear, area);
+    limpiar(f, area);
     let block = panel("HERRAMIENTAS · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -175,7 +230,7 @@ fn clasico(f: &mut Frame, app: &App) {
         Constraint::Length(if listening(state) { 5 } else { 3 }),
         Constraint::Length(1),
     ])
-    .areas(f.area());
+    .areas(zona(f));
 
     draw_header(f, header, app);
 
@@ -692,6 +747,8 @@ fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
+        Some(Modal::Fondo { sel, .. }) => draw_fondos(f, anchor, *sel),
+        Some(Modal::Color { esquinas, sel, .. }) => draw_colores(f, anchor, *esquinas, *sel),
         None => draw_menu(f, anchor, app),
     }
 }
@@ -719,7 +776,7 @@ fn overlay(
     }
     let block = panel(title).border_style(Style::new().fg(color)).title_bottom(Line::from(foot));
     let inner = block.inner(area);
-    f.render_widget(Clear, area);
+    limpiar(f, area);
     f.render_widget(block, area);
 
     let room = (inner.height as usize).saturating_sub(head.len());
@@ -797,6 +854,50 @@ fn draw_estilos(f: &mut Frame, anchor: Rect, sel: usize) {
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
     overlay(f, anchor, "ESTILO", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_fondos(f: &mut Frame, anchor: Rect, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let items = crate::estilo::FONDOS
+        .iter()
+        .enumerate()
+        .map(|(i, (_, name, c))| {
+            let mut l = item(i == sel, &format!("{} ", i + 1), name, 26, &format!("#{c:06X}"), w.saturating_sub(3));
+            // La muestra del color, entre la marca y el nombre.
+            let muestra = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8);
+            l.spans.insert(1, Span::styled("██ ", Style::new().fg(muestra)));
+            l
+        })
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    overlay(f, anchor, "FONDOS CHOPPER", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+fn draw_colores(f: &mut Frame, anchor: Rect, esquinas: bool, sel: usize) {
+    use crate::chopper::OPCIONES;
+    let w = anchor.width.saturating_sub(2) as usize;
+    let acento = theme::acento_u32();
+    let mut filas: Vec<(&str, Option<u32>)> = OPCIONES.iter().map(|(_, nombre, m)| (*nombre, Some(m.color(acento)))).collect();
+    if esquinas {
+        filas.push(("Ocultar", None));
+    }
+    let items = filas
+        .iter()
+        .enumerate()
+        .map(|(i, (nombre, c))| {
+            let mut l = item(i == sel, &format!("{} ", i + 1), nombre, 22, "", w.saturating_sub(3));
+            // La muestra del color, entre la marca y el nombre.
+            let muestra = match c {
+                Some(c) => Span::styled("██ ", Style::new().fg(Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8))),
+                None => Span::raw("   "),
+            };
+            l.spans.insert(1, muestra);
+            l
+        })
+        .collect();
+    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
+    let title = if esquinas { "ESQUINAS CHOPPER" } else { "NÚCLEO CHOPPER" };
+    overlay(f, anchor, title, theme::accent(), vec![], items, sel, 8, &hints);
 }
 
 fn draw_ask(f: &mut Frame, anchor: Rect, a: &crate::ask::Ask) {
@@ -1074,7 +1175,7 @@ fn hints_for(app: &App, state: State) -> Vec<(&'static str, &'static str)> {
 fn propuesta(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = f.area();
+    let area = zona(f);
     let m = if area.width > 90 { 3 } else { 1 };
     let inner = Rect { x: area.x + m, width: area.width.saturating_sub(m * 2), ..area };
     let tone = app.nucleo.color();
@@ -1199,7 +1300,7 @@ fn propuesta(f: &mut Frame, app: &App) {
 fn cabina(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = f.area();
+    let area = zona(f);
     let tone = app.nucleo.color();
     let [bar, body, foot] = Layout::vertical([Constraint::Length(1), Constraint::Min(8), Constraint::Length(1)]).areas(area);
 
@@ -1357,7 +1458,7 @@ fn clock_ago(ago: u64) -> String {
 fn cine(f: &mut Frame, app: &App) {
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
-    let area = f.area();
+    let area = zona(f);
     let tone = app.nucleo.color();
     let hear = listening(state);
 

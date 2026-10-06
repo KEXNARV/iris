@@ -15,8 +15,92 @@ static BG: AtomicU32 = AtomicU32::new(0x05090d);
 /// El contenido leído la última vez: Omarchy copia los temas conservando sus fechas, así que
 /// la fecha del archivo no alcanza para saber si cambió.
 static SEEN: Mutex<String> = Mutex::new(String::new());
+/// La paleta propia del estilo (los Chopper): manda sobre `JARVIS_THEME` y Omarchy, y además
+/// pinta el fondo, que si no es el de la terminal.
+static PALETA: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Cambia a la paleta de un estilo (`None`: la de siempre). Si es otra, vuelve a los colores
+/// de fábrica y relee, para que no quede nada de la anterior.
+pub fn usar(p: Option<PathBuf>) {
+    let mut actual = PALETA.lock().unwrap();
+    if *actual == p {
+        return;
+    }
+    *actual = p;
+    drop(actual);
+    ACCENT.store(0x00c8ff, Ordering::Relaxed);
+    TEXT.store(0xcde1eb, Ordering::Relaxed);
+    FAINT.store(0x5a6e7d, Ordering::Relaxed);
+    BG.store(0x05090d, Ordering::Relaxed);
+    SEEN.lock().unwrap().clear();
+    poll();
+}
+
+/// El fondo a pintar: solo con paleta propia; sin ella se ve el de la terminal.
+pub fn fondo() -> Option<Color> {
+    PALETA.lock().unwrap().as_ref()?;
+    Some(color(rgb(BG.load(Ordering::Relaxed))))
+}
+
+/// El fondo de ahora, como `0xrrggbb`.
+pub fn fondo_rgb() -> u32 {
+    BG.load(Ordering::Relaxed)
+}
+
+/// Cambia el fondo solo en pantalla (la vista previa de `/fondo`).
+pub fn probar_fondo(v: u32) {
+    BG.store(v, Ordering::Relaxed);
+}
+
+/// Cambia el fondo y lo escribe en la paleta del estilo, para que quede.
+pub fn guardar_fondo(v: u32) -> std::io::Result<()> {
+    probar_fondo(v);
+    guardar("background", &format!("#{v:06X}"))
+}
+
+/// ¿Hay paleta propia (un estilo Chopper)?
+pub fn chopper() -> bool {
+    PALETA.lock().unwrap().is_some()
+}
+
+pub fn acento_u32() -> u32 {
+    ACCENT.load(Ordering::Relaxed)
+}
+
+/// Escribe `clave = "valor"` en la paleta del estilo (sin paleta, no hace nada).
+pub fn guardar(clave: &str, valor: &str) -> std::io::Result<()> {
+    let Some(p) = PALETA.lock().unwrap().clone() else { return Ok(()) };
+    let text = std::fs::read_to_string(&p).unwrap_or_default();
+    let nueva = con_clave(&text, clave, valor);
+    std::fs::write(&p, &nueva)?;
+    *SEEN.lock().unwrap() = nueva;
+    Ok(())
+}
+
+/// El toml con `clave` cambiada (o agregada al final si no estaba).
+fn con_clave(toml: &str, clave: &str, valor: &str) -> String {
+    let linea = format!("{clave} = \"{valor}\"");
+    let mut hay = false;
+    let mut out: Vec<String> = toml
+        .lines()
+        .map(|l| match l.split_once('=') {
+            Some((k, _)) if k.trim() == clave => {
+                hay = true;
+                linea.clone()
+            }
+            _ => l.to_string(),
+        })
+        .collect();
+    if !hay {
+        out.push(linea);
+    }
+    out.join("\n") + "\n"
+}
 
 fn path() -> Option<PathBuf> {
+    if let Some(p) = PALETA.lock().unwrap().clone() {
+        return Some(p);
+    }
     if let Some(p) = std::env::var_os("JARVIS_THEME") {
         return Some(p.into());
     }
@@ -53,6 +137,9 @@ fn apply(toml: &str) -> bool {
     }
     if let Some(bg) = get("background") {
         BG.store(bg, Ordering::Relaxed);
+    }
+    if chopper() {
+        crate::chopper::leer(toml);
     }
     true
 }
@@ -123,6 +210,13 @@ mod tests {
         // Un archivo sin acento no toca nada.
         assert!(!apply("foreground = \"#ffffff\""));
         assert_eq!(text(), Color::Rgb(0xbe, 0xbe, 0xbe));
+    }
+
+    #[test]
+    fn cambia_el_fondo_sin_tocar_lo_demas() {
+        let toml = "# Fondo:\naccent = \"#F56FA1\"\nbackground = \"#1E120C\"\n";
+        assert_eq!(con_clave(toml, "background", "#1A2332"), "# Fondo:\naccent = \"#F56FA1\"\nbackground = \"#1A2332\"\n");
+        assert_eq!(con_clave("accent = \"#F56FA1\"\n", "nucleo", "auto"), "accent = \"#F56FA1\"\nnucleo = \"auto\"\n");
     }
 }
 

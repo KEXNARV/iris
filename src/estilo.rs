@@ -14,15 +14,52 @@ pub enum Estilo {
     Cabina,
     /// La voz primero: núcleo al centro, historial a la izquierda y lo que hace a la derecha.
     Cine,
+    /// El clásico con la paleta de Chopper (`~/.config/jarvis/colores-chopper.toml`).
+    ClasicoChopper,
+    /// Cine con la misma paleta de Chopper.
+    CineChopper,
 }
 
 /// (estilo, id, nombre, para qué)
-pub const TODOS: [(Estilo, &str, &str, &str); 4] = [
+pub const TODOS: [(Estilo, &str, &str, &str); 6] = [
     (Estilo::Clasico, "clasico", "Clásico", "paneles con borde, como siempre"),
     (Estilo::Propuesta, "propuesta", "Propuesta", "sin cajas, el núcleo al frente"),
     (Estilo::Cabina, "cabina", "Cabina", "HUD denso: registro con hora y línea del turno"),
     (Estilo::Cine, "cine", "Cine", "la voz primero: historial, núcleo y lo que hace"),
+    (Estilo::ClasicoChopper, "clasico-chopper", "Clásico Chopper", "el clásico con los colores de Chopper"),
+    (Estilo::CineChopper, "cine-chopper", "Cine Chopper", "cine con los colores de Chopper"),
 ];
+
+/// Fondos de los estilos Chopper para `/fondo`: (id, nombre, color).
+pub const FONDOS: [(&str, &str, u32); 11] = [
+    ("chocolate", "Chocolate", 0x1e120c),
+    ("nariz", "Azul de su nariz", 0x10233f),
+    ("drum", "Noche nevada de Drum", 0x1a2332),
+    ("sombrero", "Morado del sombrero", 0x24142e),
+    ("pelaje", "Pelaje café suave", 0x3a2418),
+    ("rojizo", "Café rojizo", 0x2b1a16),
+    ("sunny", "Mar del Sunny, de noche", 0x0f2a33),
+    ("pizarra", "Pizarra con un toque rosa", 0x2a2228),
+    // Los claros que todavía dejan leer el crema del texto.
+    ("celeste", "Celeste", 0x235a75),
+    ("hielo", "Azul hielo", 0x1e3a55),
+    ("real", "Azul real", 0x1a2d66),
+];
+
+/// Un fondo por número (`3`), id o comienzo del nombre (`drum`, `noche`) o `#rrggbb`.
+pub fn buscar_fondo(q: &str) -> Option<u32> {
+    let q = sin_tildes(&q.trim().to_lowercase());
+    if q.is_empty() {
+        return None;
+    }
+    if let Some(h) = q.strip_prefix('#') {
+        return (h.len() == 6).then(|| u32::from_str_radix(h, 16).ok())?;
+    }
+    if let Ok(n) = q.parse::<usize>() {
+        return FONDOS.get(n.checked_sub(1)?).map(|f| f.2);
+    }
+    FONDOS.iter().find(|f| f.0.starts_with(&q) || sin_tildes(&f.1.to_lowercase()).starts_with(&q)).map(|f| f.2)
+}
 
 impl Estilo {
     pub fn id(self) -> &'static str {
@@ -31,6 +68,24 @@ impl Estilo {
 
     pub fn nombre(self) -> &'static str {
         TODOS.iter().find(|e| e.0 == self).map_or("Clásico", |e| e.2)
+    }
+
+    /// Cómo se reparte la pantalla: los Chopper usan la de su original.
+    pub fn base(self) -> Estilo {
+        match self {
+            Estilo::ClasicoChopper => Estilo::Clasico,
+            Estilo::CineChopper => Estilo::Cine,
+            e => e,
+        }
+    }
+
+    /// La paleta propia del estilo, si tiene; si no, manda el tema de Omarchy. Los dos Chopper
+    /// comparten la misma.
+    pub fn paleta(self) -> Option<PathBuf> {
+        match self {
+            Estilo::ClasicoChopper | Estilo::CineChopper => Some(path()?.with_file_name("colores-chopper.toml")),
+            _ => None,
+        }
     }
 
     /// Por id o por el comienzo del nombre, sin importar tildes ni mayúsculas (`clas`, `Cine`).
@@ -93,8 +148,34 @@ mod tests {
         assert_eq!(Estilo::buscar("clas"), Some(Estilo::Clasico));
         assert_eq!(Estilo::buscar(" CAB \n"), Some(Estilo::Cabina));
         assert_eq!(Estilo::buscar("pro"), Some(Estilo::Propuesta));
+        assert_eq!(Estilo::buscar("cine-chop"), Some(Estilo::CineChopper));
+        assert_eq!(Estilo::buscar("Clásico Chopper"), Some(Estilo::ClasicoChopper));
         assert_eq!(Estilo::buscar("x"), None);
         assert_eq!(Estilo::buscar(""), None);
+    }
+
+    #[test]
+    fn los_chopper_usan_la_pantalla_de_su_original() {
+        assert_eq!(Estilo::ClasicoChopper.base(), Estilo::Clasico);
+        assert_eq!(Estilo::CineChopper.base(), Estilo::Cine);
+        assert_eq!(Estilo::Cabina.base(), Estilo::Cabina);
+        assert!(Estilo::Cine.paleta().is_none());
+        assert!(Estilo::CineChopper.paleta().unwrap().ends_with("jarvis/colores-chopper.toml"));
+        assert_eq!(Estilo::ClasicoChopper.paleta(), Estilo::CineChopper.paleta());
+    }
+
+    #[test]
+    fn busca_fondos_por_numero_nombre_y_color() {
+        assert_eq!(buscar_fondo("3"), Some(0x1a2332));
+        assert_eq!(buscar_fondo("drum"), Some(0x1a2332));
+        assert_eq!(buscar_fondo("Café"), Some(0x2b1a16));
+        assert_eq!(buscar_fondo("#301830"), Some(0x301830));
+        assert_eq!(buscar_fondo("0"), None);
+        assert_eq!(buscar_fondo("9"), Some(0x235a75));
+        assert_eq!(buscar_fondo("celeste"), Some(0x235a75));
+        assert_eq!(buscar_fondo("12"), None);
+        assert_eq!(buscar_fondo("#12"), None);
+        assert_eq!(buscar_fondo("x"), None);
     }
 
     #[test]

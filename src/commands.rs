@@ -19,6 +19,9 @@ const LOCAL: &[(&str, &str)] = &[
     ("calma", "menos movimiento en el núcleo (alterna)"),
     ("voz", "cuándo contesta hablando: auto (si le hablas), siempre o nunca"),
     ("theme", "elegir el estilo de la pantalla · /theme cabina"),
+    ("fondo", "fondos Chopper: solo para Clásico Chopper y Cine Chopper · /fondo drum"),
+    ("nucleo", "color de la cara de Chopper en el núcleo · /nucleo chopper"),
+    ("esquinas", "color de las cabecitas de Chopper (o no) · /esquinas rosa"),
     ("quit", "salir de Jarvis (^C)"),
 ];
 
