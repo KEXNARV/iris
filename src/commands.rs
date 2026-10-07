@@ -20,7 +20,6 @@ const LOCAL: &[(&str, &str)] = &[
     ("voice", "cuándo contesta hablando: auto (si le hablas), always o never"),
     ("theme", "elegir el estilo de la pantalla · /theme cabina"),
     ("buddy", "quién vive en el núcleo: original o Baymax · /buddy baymax"),
-    ("background", "fondos de Baymax (con /buddy baymax) · /background system · /background defecto"),
     ("core", "color de la cara de Baymax en el núcleo · /core blanco"),
     ("agents", "qué hace cada subagente, paso a paso (también ^G y Tab)"),
     ("quit", "salir de Jarvis (^C)"),

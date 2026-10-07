@@ -2,7 +2,7 @@
 //! de siempre y los tonos apagados salen de él. Se relee solo cuando cambia el tema.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 use ratatui::style::Color;
@@ -15,50 +15,16 @@ static BG: AtomicU32 = AtomicU32::new(0x05090d);
 /// El contenido leído la última vez: Omarchy copia los temas conservando sus fechas, así que
 /// la fecha del archivo no alcanza para saber si cambió.
 static SEEN: Mutex<String> = Mutex::new(String::new());
-/// La paleta propia del buddy (Baymax). Con ella JARVIS pinta el fondo, que si no es el de
-/// la terminal, y guarda ahí lo que se elija (`nucleo`, `background`, `colores`).
+/// El archivo del buddy (Baymax), donde se guarda el color de su cara (`nucleo`, con `/core`).
+/// Los demás colores salen siempre del tema de Omarchy.
 static PALETA: Mutex<Option<PathBuf>> = Mutex::new(None);
-/// Con paleta propia, de dónde salen los colores. Se guarda como `colores = "sistema"`,
-/// `"transparente"` o `"defecto"`; sin nada, transparente: el mismo fondo que con el original,
-/// para que cambiar de buddy no cambie el fondo.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Colores {
-    /// Del tema de Omarchy (Aether), y cambian con él.
-    Sistema,
-    /// Del tema, sin pintar el fondo: foot lo deja ver con transparencia (el fondo de pantalla).
-    Transparente,
-    /// De la paleta propia: el modo por defecto, blanco y negro.
-    Defecto,
-}
-
-impl Colores {
-    pub fn id(self) -> &'static str {
-        match self {
-            Colores::Sistema => "sistema",
-            Colores::Transparente => "transparente",
-            Colores::Defecto => "defecto",
-        }
-    }
-
-    fn de(s: &str) -> Colores {
-        match s {
-            "defecto" => Colores::Defecto,
-            "sistema" => Colores::Sistema,
-            _ => Colores::Transparente,
-        }
-    }
-}
-
-static COLORES: AtomicU8 = AtomicU8::new(0);
 /// Los colores con nombre del tema (rojo, verde…): con ellos se pintan los estados con
 /// Baymax. Los que el tema no trae quedan en 0 (y se usan los de siempre).
 static ANSI: Mutex<[u32; 8]> = Mutex::new([0; 8]);
 const ANSI_NOMBRES: [&str; 8] = ["red", "green", "yellow", "blue", "magenta", "cyan", "orange", "muted"];
-/// Lo opaco que queda el fondo en el modo transparente (%).
-pub const OPACIDAD: u8 = 80;
 
-/// Cambia a la paleta de un buddy (`None`: la de siempre). Si es otra, vuelve a los colores
-/// de fábrica y relee, para que no quede nada de la anterior.
+/// Cambia al archivo de un buddy (`None`: el original, sin archivo). Si es otro, vuelve a los
+/// colores de fábrica y relee el tema.
 pub fn usar(p: Option<PathBuf>) {
     let mut actual = PALETA.lock().unwrap();
     if *actual == p {
@@ -66,56 +32,7 @@ pub fn usar(p: Option<PathBuf>) {
     }
     *actual = p;
     drop(actual);
-    poner(Colores::de(clave_paleta("colores").as_deref().unwrap_or("")));
     recargar();
-}
-
-fn poner(c: Colores) -> bool {
-    let v = match c {
-        Colores::Sistema => 0,
-        Colores::Transparente => 1,
-        Colores::Defecto => 2,
-    };
-    COLORES.swap(v, Ordering::Relaxed) != v
-}
-
-/// De dónde salen los colores ahora (con paleta propia).
-pub fn colores() -> Colores {
-    match COLORES.load(Ordering::Relaxed) {
-        1 => Colores::Transparente,
-        2 => Colores::Defecto,
-        _ => Colores::Sistema,
-    }
-}
-
-/// ¿Los colores siguen al tema del sistema? (solo con paleta propia)
-pub fn sistema() -> bool {
-    baymax() && colores() != Colores::Defecto
-}
-
-/// ¿El fondo lo pone la terminal, con transparencia? (solo con paleta propia)
-pub fn transparente() -> bool {
-    baymax() && colores() == Colores::Transparente
-}
-
-/// Pasa a otros colores solo en pantalla (la vista previa de `/background`); `guardar_colores`
-/// además lo deja escrito.
-pub fn probar_colores(c: Colores) {
-    if poner(c) {
-        recargar();
-    }
-}
-
-pub fn guardar_colores(c: Colores) -> std::io::Result<()> {
-    probar_colores(c);
-    guardar("colores", c.id())
-}
-
-/// ¿El fondo es claro? (un tema claro de Aether)
-/// ¿Fondo claro? Solo cuenta con paleta propia: sin ella el fondo de la selección es el azul
-/// oscuro de siempre y el texto encima tiene que seguir siendo blanco.
-pub fn claro() -> bool {
-    baymax() && luz(BG.load(Ordering::Relaxed)) > 0.4
 }
 
 /// Un color con nombre del tema (`red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`,
@@ -155,37 +72,12 @@ fn recargar() {
     BG.store(0x05090d, Ordering::Relaxed);
     SEEN.lock().unwrap().clear();
     *ANSI.lock().unwrap() = [0; 8];
-    // Sin archivo todavía, la paleta de fábrica del personaje.
-    if !poll() && baymax() && !sistema() {
-        apply(crate::baymax::PALETA);
-    }
+    poll();
 }
 
-/// Un valor de la paleta del buddy, aunque los colores salgan del sistema.
-fn clave_paleta(clave: &str) -> Option<String> {
-    let p = PALETA.lock().unwrap().clone()?;
-    let text = std::fs::read_to_string(p).ok()?;
-    text.lines().find_map(|l| {
-        let (k, v) = l.split_once('=')?;
-        (k.trim() == clave).then(|| v.trim().trim_matches('"').to_string())
-    })
-}
-
-/// El fondo de la fila elegida en las listas: con paleta propia, el acento hundido en el fondo;
-/// si no, el azul de siempre.
+/// El fondo de la fila elegida en las listas.
 pub fn seleccion() -> Color {
-    if !baymax() {
-        return Color::Rgb(15, 45, 65);
-    }
-    color(mix(accent_rgb(), rgb(BG.load(Ordering::Relaxed)), 0.78))
-}
-
-/// El fondo a pintar: solo con paleta propia; sin ella se ve el de la terminal.
-pub fn fondo() -> Option<Color> {
-    if !baymax() || transparente() {
-        return None;
-    }
-    Some(color(rgb(BG.load(Ordering::Relaxed))))
+    Color::Rgb(15, 45, 65)
 }
 
 /// El fondo de ahora, como `0xrrggbb`.
@@ -193,21 +85,7 @@ pub fn fondo_rgb() -> u32 {
     BG.load(Ordering::Relaxed)
 }
 
-/// Cambia el fondo solo en pantalla (la vista previa de `/background`).
-pub fn probar_fondo(v: u32) {
-    BG.store(v, Ordering::Relaxed);
-}
-
-/// Cambia el fondo y lo escribe en la paleta del buddy, para que quede. Elegir un fondo es
-/// salir de los colores del sistema: vuelve a la paleta propia, con ese fondo.
-pub fn guardar_fondo(v: u32) -> std::io::Result<()> {
-    probar_colores(Colores::Defecto);
-    probar_fondo(v);
-    guardar("colores", "defecto")?;
-    guardar("background", &format!("#{v:06X}"))
-}
-
-/// ¿Hay paleta propia (el buddy Baymax)?
+/// ¿Está Baymax en el núcleo?
 pub fn baymax() -> bool {
     PALETA.lock().unwrap().is_some()
 }
@@ -216,22 +94,14 @@ pub fn acento_u32() -> u32 {
     ACCENT.load(Ordering::Relaxed)
 }
 
-/// Escribe `clave = "valor"` en la paleta del buddy (sin paleta, no hace nada).
+/// Escribe `clave = "valor"` en el archivo del buddy (sin buddy con archivo, no hace nada).
 pub fn guardar(clave: &str, valor: &str) -> std::io::Result<()> {
     let Some(p) = PALETA.lock().unwrap().clone() else { return Ok(()) };
-    // Sin archivo todavía se parte de la paleta de fábrica: si no, el archivo quedaba sin
-    // `accent`, `apply` lo descartaba al arrancar y el fondo elegido se perdía.
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| crate::baymax::PALETA.to_string());
+    let text = std::fs::read_to_string(&p).unwrap_or_default();
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let nueva = con_clave(&text, clave, valor);
-    std::fs::write(&p, &nueva)?;
-    // Lo leído es la paleta solo si los colores salen de ella.
-    if !sistema() {
-        *SEEN.lock().unwrap() = nueva;
-    }
-    Ok(())
+    std::fs::write(&p, con_clave(&text, clave, valor))
 }
 
 /// El toml con `clave` cambiada (o agregada al final si no estaba).
@@ -255,11 +125,6 @@ fn con_clave(toml: &str, clave: &str, valor: &str) -> String {
 }
 
 fn path() -> Option<PathBuf> {
-    if let Some(p) = PALETA.lock().unwrap().clone() {
-        if colores() == Colores::Defecto {
-            return Some(p);
-        }
-    }
     if let Some(p) = std::env::var_os("JARVIS_THEME") {
         return Some(p.into());
     }
@@ -310,9 +175,9 @@ fn apply(toml: &str) -> bool {
     }
     drop(ansi);
     if baymax() {
-        // El color de Baymax se guarda en la paleta, aunque los colores salgan del sistema.
+        // El color de su cara está en su archivo; los demás, en el tema.
         let propia = PALETA.lock().unwrap().clone().and_then(|p| std::fs::read_to_string(p).ok());
-        crate::baymax::leer(propia.as_deref().unwrap_or(toml));
+        crate::baymax::leer(propia.as_deref().unwrap_or(""));
     }
     true
 }
@@ -374,23 +239,6 @@ pub(crate) mod tests {
     pub(crate) static TURNO: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 
-    /// El fondo elegido con /background sobrevive al reinicio aunque no hubiera paleta guardada.
-    #[test]
-    fn fondo_sin_paleta_previa_se_conserva() {
-        let _turno = TURNO.lock().unwrap_or_else(|e| e.into_inner());
-        let dir = std::env::temp_dir().join(format!("jarvis-fondo-{}", std::process::id()));
-        let file = dir.join("colores-baymax.toml");
-        let _ = std::fs::remove_dir_all(&dir);
-        usar(Some(file.clone()));
-        guardar_fondo(0x10233F).unwrap();
-        // Lo que pasa al arrancar de nuevo: soltar la paleta y volver a tomarla del disco.
-        usar(None);
-        usar(Some(file.clone()));
-        assert_eq!(fondo_rgb(), 0x10233F, "{}", std::fs::read_to_string(&file).unwrap());
-        usar(None);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     use super::*;
 
     #[test]
@@ -408,9 +256,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn cambia_el_fondo_sin_tocar_lo_demas() {
-        let toml = "# Fondo:\naccent = \"#F56FA1\"\nbackground = \"#1E120C\"\n";
-        assert_eq!(con_clave(toml, "background", "#1A2332"), "# Fondo:\naccent = \"#F56FA1\"\nbackground = \"#1A2332\"\n");
+    fn cambia_una_clave_sin_tocar_lo_demas() {
+        let toml = "# Cara:\naccent = \"#F56FA1\"\nnucleo = \"rosa\"\n";
+        assert_eq!(con_clave(toml, "nucleo", "#1A2332"), "# Cara:\naccent = \"#F56FA1\"\nnucleo = \"#1A2332\"\n");
         assert_eq!(con_clave("accent = \"#F56FA1\"\n", "nucleo", "auto"), "accent = \"#F56FA1\"\nnucleo = \"auto\"\n");
     }
 }

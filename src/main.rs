@@ -154,9 +154,6 @@ pub enum Modal {
     Model { sel: usize },
     /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
     Estilo { sel: usize, antes: estilo::Estilo },
-    /// `/background`: igual que `/theme`, con los fondos de Baymax. Las filas 0 y 1 son
-    /// los colores del sistema (opaco y transparente); las demás, `estilo::FONDOS`.
-    Fondo { sel: usize, antes: (theme::Colores, u32) },
     /// `/core`: el color de la cara de Baymax.
     Color { sel: usize, antes: baymax::Modo },
     /// `/buddy`: como `/theme`, con quién vive en el núcleo.
@@ -295,8 +292,6 @@ pub struct App {
     pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<miniatura::Thumb>, (u16, u16, u16))>>,
     thumbs_shown: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))>,
     sixel_shown: Option<ratatui::layout::Rect>,
-    /// El fondo que le pedimos a la terminal en el modo transparente (`None`: el suyo).
-    fondo_terminal: Option<u32>,
     /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
     pub turn_from: usize,
     /// Subagentes, los hijos del núcleo.
@@ -729,7 +724,6 @@ fn main() -> Result<()> {
         thumb_targets: Default::default(),
         thumbs_shown: vec![],
         sixel_shown: None,
-        fondo_terminal: None,
         turn_from,
         agents: vec![],
         agents_done,
@@ -761,11 +755,6 @@ fn main() -> Result<()> {
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
-    if app.fondo_terminal.is_some() {
-        // La terminal vuelve a su fondo: no queda transparente después de salir.
-        use std::io::Write;
-        let _ = write!(std::io::stdout(), "\x1b]111\x1b\\");
-    }
     ratatui::restore();
     if res.is_ok() && app.reexec {
         // Se instaló la versión nueva: se reabre con ella y retoma esta misma sesión.
@@ -806,7 +795,7 @@ fn run(
     let mut teclado = teclado::Teclado::new();
     let mut theme_check = Instant::now();
     theme::poll();
-    // Los colores con que se dibujó el markdown guardado. /buddy, /background, /core y sus vistas
+    // Los colores con que se dibujó el markdown guardado. /buddy, /core y sus vistas
     // previas los cambian sin pasar por `poll`, así que se compara en cada vuelta.
     let mut colores = (theme::acento_u32(), theme::texto_u32(), theme::fondo_rgb());
     loop {
@@ -871,7 +860,6 @@ fn run(
         // Lo que se dibujó en este cuadro: hace falta para reescribir el texto que tapaba una
         // miniatura que se movió.
         let snap = term.draw(|f| ui::draw(f, app))?.buffer.clone();
-        fondo_terminal(app)?;
         if sixel_frame(term, app, &mut frames)? {
             app.thumbs_shown.clear(); // la pantalla se limpió: hay que volver a dibujarlas
         }
@@ -1150,6 +1138,10 @@ fn handle_key(
             app.transcript = false;
             app.scroll = 0;
         }
+        // Fuera de Cine, ^O es una vista aparte: Esc la cierra, como a ^T.
+        KeyCode::Esc if app.reading.get() && app.read_override == Some(true) && app.estilo != estilo::Estilo::Cine => {
+            app.read_override = None;
+        }
 
         // Espacio con la entrada vacía: empezar/terminar de escuchar.
         KeyCode::Char(' ') if app.input.is_empty() && space_repeat(app) => {}
@@ -1237,10 +1229,6 @@ fn handle_key(
                 }
                 "/buddy" | "/budy" => {
                     elegir_buddy(app, arg.trim());
-                    return Flow::Go;
-                }
-                "/background" | "/bg" => {
-                    fondo(app, arg.trim());
                     return Flow::Go;
                 }
                 "/core" => {
@@ -1516,44 +1504,6 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
             app.buddy = buddy::TODOS[*sel].0;
             Some(Flow::Redraw)
         }
-        Modal::Fondo { sel, antes } => {
-            let n = estilo::FONDOS.len() + FILAS_SISTEMA;
-            match k.code {
-                KeyCode::Up => *sel = (*sel + n - 1) % n,
-                KeyCode::Down => *sel = (*sel + 1) % n,
-                KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
-                KeyCode::Enter => {
-                    let sel = *sel;
-                    app.modal = None;
-                    match sel {
-                        0 => set_colores(app, theme::Colores::Sistema),
-                        1 => set_colores(app, theme::Colores::Transparente),
-                        i => set_fondo(app, estilo::FONDOS[i - FILAS_SISTEMA].2),
-                    }
-                    return Some(Flow::Redraw);
-                }
-                KeyCode::Esc => {
-                    let (colores, fondo) = *antes;
-                    theme::probar_colores(colores);
-                    if colores == theme::Colores::Defecto {
-                        theme::probar_fondo(fondo);
-                    }
-                    app.modal = None;
-                    return Some(Flow::Redraw);
-                }
-                _ => {}
-            }
-            // Vista previa.
-            match *sel {
-                0 => theme::probar_colores(theme::Colores::Sistema),
-                1 => theme::probar_colores(theme::Colores::Transparente),
-                i => {
-                    theme::probar_colores(theme::Colores::Defecto);
-                    theme::probar_fondo(estilo::FONDOS[i - FILAS_SISTEMA].2);
-                }
-            }
-            Some(Flow::Redraw)
-        }
         Modal::Color { sel, antes } => {
             let n = baymax::OPCIONES.len();
             match k.code {
@@ -1663,69 +1613,6 @@ fn set_buddy(app: &mut App, b: buddy::Buddy) {
     let msg = match buddy::guardar(b) {
         Ok(()) => format!("buddy {}", b.nombre()),
         Err(err) => format!("buddy {} (no se guardó: {err})", b.nombre()),
-    };
-    app.flash = Some((msg, Instant::now()));
-}
-
-/// `/background`: el fondo de Baymax. Sin argumento, la lista con vista previa; con uno
-/// (`3`, `drum`, `#301830`) lo aplica.
-fn fondo(app: &mut App, arg: &str) {
-    if app.buddy.paleta().is_none() {
-        app.push(Role::Error, String::from("los fondos son de Baymax · /buddy baymax"));
-        return;
-    }
-    if arg.is_empty() {
-        let antes = (theme::colores(), theme::fondo_rgb());
-        let sel = match antes.0 {
-            theme::Colores::Sistema => 0,
-            theme::Colores::Transparente => 1,
-            theme::Colores::Defecto => estilo::FONDOS.iter().position(|f| f.2 == antes.1).unwrap_or(0) + FILAS_SISTEMA,
-        };
-        app.modal = Some(Modal::Fondo { sel, antes });
-        return;
-    }
-    // Los números van como en la lista: el 1 y el 2 son los del sistema y los fondos empiezan
-    // en el 3.
-    let q = arg.trim().to_lowercase();
-    match q.as_str() {
-        "1" | "system" | "omarchy" => return set_colores(app, theme::Colores::Sistema),
-        "2" | "transparent" => return set_colores(app, theme::Colores::Transparente),
-        _ => {}
-    }
-    let q = match q.parse::<usize>() {
-        Ok(n) if n > FILAS_SISTEMA => (n - FILAS_SISTEMA).to_string(),
-        _ => q,
-    };
-    match estilo::buscar_fondo(&q) {
-        Some(v) => set_fondo(app, v),
-        None => {
-            let ids: Vec<&str> = estilo::FONDOS.iter().map(|f| f.0).collect();
-            app.push(Role::Error, format!("no conozco el fondo Baymax «{arg}» · hay system, transparent, {}, del 1 al {} o un #rrggbb", ids.join(", "), ids.len() + FILAS_SISTEMA));
-        }
-    }
-}
-
-/// En `/background`, las filas de los colores del sistema (opaco y transparente), antes de los fondos.
-const FILAS_SISTEMA: usize = 2;
-
-/// Los colores del tema del sistema: cambian cuando cambia el tema de Omarchy.
-fn set_colores(app: &mut App, c: theme::Colores) {
-    let que = match c {
-        theme::Colores::Transparente => "colores del sistema, transparente · se ve el fondo de pantalla",
-        _ => "colores del sistema · cambian con el tema de Omarchy",
-    };
-    let msg = match theme::guardar_colores(c) {
-        Ok(()) => que.to_string(),
-        Err(err) => format!("{que} (no se guardó: {err})"),
-    };
-    app.flash = Some((msg, Instant::now()));
-}
-
-fn set_fondo(app: &mut App, v: u32) {
-    let nombre = estilo::FONDOS.iter().find(|f| f.2 == v).map_or_else(|| format!("#{v:06X}"), |f| f.1.to_string());
-    let msg = match theme::guardar_fondo(v) {
-        Ok(()) => format!("fondo Baymax {nombre}"),
-        Err(err) => format!("fondo Baymax {nombre} (no se guardó: {err})"),
     };
     app.flash = Some((msg, Instant::now()));
 }
@@ -2023,25 +1910,6 @@ fn scroll(app: &mut App, up: bool, n: usize) {
 }
 
 
-/// El modo transparente: JARVIS no pinta el fondo y le pide a la terminal el color del tema con
-/// transparencia (`OSC 11` con la extensión de URxvt, que foot entiende), así se ve el fondo de
-/// pantalla. Al salir del modo, la terminal vuelve a su fondo (`OSC 111`).
-fn fondo_terminal(app: &mut App) -> Result<()> {
-    use std::io::Write;
-    let quiero = theme::transparente().then(theme::fondo_rgb);
-    if quiero == app.fondo_terminal {
-        return Ok(());
-    }
-    let mut out = std::io::stdout().lock();
-    match quiero {
-        Some(c) => write!(out, "\x1b]11;[{}]#{c:06x}\x1b\\", theme::OPACIDAD)?,
-        None => write!(out, "\x1b]111\x1b\\")?,
-    }
-    out.flush()?;
-    app.fondo_terminal = quiero;
-    Ok(())
-}
-
 /// ¿Se puede dibujar el núcleo como imagen? Hace falta una terminal con Sixel (foot) y saber
 /// cuántos píxeles mide una celda. `JARVIS_SIXEL=0` lo apaga; `=1` lo fuerza en otra terminal.
 fn sixel_cell() -> Option<(u16, u16)> {
@@ -2092,11 +1960,6 @@ fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut 
     // dentro de una actualización sincronizada (modo 2026) borrar y dibujar se ven juntos.
     let mut seq = String::with_capacity(img.len() + 32 * r.height as usize);
     seq.push_str("\x1b[?2026h\x1b7");
-    // ECH borra con el fondo activo: con paleta propia (Baymax) tiene que ser el que Iris pinta en
-    // el resto de la pantalla, o el panel queda como un recuadro del fondo de la terminal.
-    if let Some(ratatui::style::Color::Rgb(r_, g_, b_)) = theme::fondo() {
-        seq.push_str(&format!("\x1b[48;2;{r_};{g_};{b_}m"));
-    }
     for y in r.y..r.bottom() {
         seq.push_str(&format!("\x1b[{};{}H\x1b[{}X", y + 1, r.x + 1, r.width));
     }

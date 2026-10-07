@@ -46,21 +46,6 @@ pub fn cara(x: f64, y: f64, du: f64, g: &Gesto) -> u8 {
     }
 }
 
-/// La paleta de Baymax si todavía no hay archivo: en blanco y negro, como él.
-pub const PALETA: &str = "\
-# Paleta de Baymax en JARVIS: blanco y negro, como él.
-# Cada comentario va en su propia línea: JARVIS no entiende un comentario al lado del valor.
-
-# Blanco: Baymax, bordes, lo principal.
-accent = \"#FFFFFF\"
-# Texto.
-foreground = \"#F2F2F2\"
-# Texto apagado.
-light_foreground = \"#8C8C8C\"
-# Fondo negro: sus ojos huecos se ven negros (cambia con /background).
-background = \"#000000\"
-";
-
 /// De qué color va: el del tema o uno elegido.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Modo {

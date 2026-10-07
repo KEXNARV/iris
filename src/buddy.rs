@@ -8,14 +8,14 @@ use std::path::PathBuf;
 pub enum Buddy {
     /// El núcleo de siempre, con los colores de Omarchy.
     Original,
-    /// La cara de Baymax, con su paleta (`~/.config/jarvis/colores-baymax.toml`).
+    /// La cara de Baymax; el color de su cara se guarda en `~/.config/jarvis/colores-baymax.toml`.
     Baymax,
 }
 
 /// (buddy, id, nombre, para qué)
 pub const TODOS: [(Buddy, &str, &str, &str); 2] = [
     (Buddy::Original, "original", "Original", "el núcleo de siempre, con sus arcos"),
-    (Buddy::Baymax, "baymax", "Baymax", "su cara en el núcleo · /background y /core para sus colores"),
+    (Buddy::Baymax, "baymax", "Baymax", "su cara en el núcleo · /core para su color"),
 ];
 
 impl Buddy {
@@ -27,7 +27,7 @@ impl Buddy {
         TODOS.iter().find(|b| b.0 == self).map_or("Original", |b| b.2)
     }
 
-    /// La paleta propia del personaje, si tiene; si no, manda el tema de Omarchy.
+    /// El archivo del personaje (el color de su cara), si tiene. Los colores salen del tema.
     pub fn paleta(self) -> Option<PathBuf> {
         match self {
             Buddy::Baymax => Some(path()?.with_file_name("colores-baymax.toml")),

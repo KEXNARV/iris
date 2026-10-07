@@ -19,12 +19,28 @@ pub use crate::nucleo::State;
 
 pub fn draw(f: &mut Frame, app: &App) {
     theme::usar(app.buddy.paleta());
-    if let Some(bg) = theme::fondo() {
-        f.render_widget(Block::new().style(Style::new().bg(bg)), f.area());
-    }
     // Los estilos sin paneles necesitan aire; en una terminal chica se ve el clásico.
     let a = f.area();
     let fits = |w: u16, h: u16| a.width >= w && a.height >= h;
+    // ^T (la conversación entera) y ^O (la respuesta entera) valen en todos los estilos. Cine
+    // las trae dentro de su diseño; en los demás se abren a pantalla completa, como ^G.
+    if !(app.estilo == Estilo::Cine && fits(64, 22)) {
+        app.reading.set(false);
+        if app.transcript {
+            f.render_widget(Clear, a);
+            transcript_view(f, app, a);
+            if app.tools_view.is_some() {
+                tools_overlay(f, app);
+            }
+            return;
+        }
+        if app.read_override == Some(true) && lectura(f, app) {
+            if app.tools_view.is_some() {
+                tools_overlay(f, app);
+            }
+            return;
+        }
+    }
     match app.estilo {
         Estilo::Propuesta if fits(60, 16) => propuesta(f, app),
         Estilo::Cabina if fits(70, 18) => cabina(f, app),
@@ -42,12 +58,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-/// Borra lo que haya debajo de una ventana; con paleta propia, deja su fondo y no el de la terminal.
+/// Borra lo que haya debajo de una ventana.
 fn limpiar(f: &mut Frame, area: Rect) {
     f.render_widget(Clear, area);
-    if let Some(bg) = theme::fondo() {
-        f.render_widget(Block::new().style(Style::new().bg(bg)), area);
-    }
 }
 
 /// Ctrl+G: la lista de herramientas a la izquierda y la elegida entera a la derecha.
@@ -869,7 +882,6 @@ fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
-        Some(Modal::Fondo { sel, .. }) => draw_fondos(f, anchor, *sel),
         Some(Modal::Color { sel, .. }) => draw_colores(f, anchor, *sel),
         Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
@@ -918,7 +930,7 @@ fn item(on: bool, mark: &str, name: &str, name_w: usize, desc: &str, w: usize) -
     let room = w.saturating_sub(3 + name.chars().count() + 2);
     Line::from(vec![
         Span::styled(cursor, bg.fg(theme::accent()).bold()),
-        Span::styled(name, bg.fg(if !on { theme::accent() } else if theme::claro() { theme::text() } else { Color::White }).bold()),
+        Span::styled(name, bg.fg(if on { Color::White } else { theme::accent() }).bold()),
         Span::styled(format!("  {:<room$}", truncate(desc, room)), bg.fg(if on { theme::text() } else { theme::faint() })),
     ])
 }
@@ -989,31 +1001,6 @@ fn draw_buddies(f: &mut Frame, anchor: Rect, sel: usize) {
         .collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
     overlay(f, anchor, "BUDDY", theme::accent(), vec![], items, sel, 8, &hints);
-}
-
-fn draw_fondos(f: &mut Frame, anchor: Rect, sel: usize) {
-    let w = anchor.width.saturating_sub(2) as usize;
-    // Primero, los colores del sistema: sin muestra, que cambian con el tema.
-    let sistema = [("Del sistema", "cambia con el tema de Omarchy", "◐  "), ("Del sistema, transparente", "se ve el fondo de pantalla", "◌  ")]
-        .into_iter()
-        .enumerate()
-        .map(|(i, (name, desc, marca))| {
-            let mut l = item(sel == i, &format!("{} ", i + 1), name, 26, desc, w.saturating_sub(3));
-            l.spans.insert(1, Span::styled(marca, Style::new().fg(theme::accent())));
-            l
-        });
-    let items = sistema
-        .chain(crate::estilo::FONDOS.iter().enumerate().map(|(i, (_, name, c))| {
-            let i = i + 2;
-            let mut l = item(i == sel, &format!("{} ", i + 1), name, 26, &format!("#{c:06X}"), w.saturating_sub(3));
-            // La muestra del color, entre la marca y el nombre.
-            let muestra = Color::Rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8);
-            l.spans.insert(1, Span::styled("██ ", Style::new().fg(muestra)));
-            l
-        }))
-        .collect();
-    let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
-    overlay(f, anchor, "FONDOS BAYMAX", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
 fn draw_colores(f: &mut Frame, anchor: Rect, sel: usize) {
@@ -1638,31 +1625,7 @@ fn cine(f: &mut Frame, app: &App) {
 
     // ^T: la conversación entera como una cortina, con su markdown; la orden sigue abajo.
     if app.transcript {
-        app.reading.set(false);
-        let body = Rect {
-            x: area.x + 2,
-            y: area.y + 3,
-            width: area.width.saturating_sub(4),
-            height: area.height.saturating_sub(9),
-        };
-        draw_chat(f, body, app);
-        let line = Rect { x: area.x + 4, y: body.bottom() + 1, width: area.width.saturating_sub(8), height: 1 };
-        let mut spans = vec![Span::styled("› ", Style::new().fg(theme::accent()).bold())];
-        spans.extend(input_spans(app, state, t, line.width.saturating_sub(2) as usize, theme::accent()));
-        f.render_widget(Paragraph::new(Line::from(spans)), line);
-        let hint = Line::from(vec![
-            Span::styled("^T", Style::new().fg(theme::accent())),
-            Span::styled(" o ", Style::new().fg(theme::faint())),
-            Span::styled("esc", Style::new().fg(theme::accent())),
-            Span::styled(" vuelve a Cine   ", Style::new().fg(theme::faint())),
-            Span::styled("pgup/pgdn", Style::new().fg(theme::accent())),
-            Span::styled(" recorre   ", Style::new().fg(theme::faint())),
-            Span::styled("arrastra", Style::new().fg(theme::accent())),
-            Span::styled(" para copiar", Style::new().fg(theme::faint())),
-        ]);
-        let hr = Rect { y: line.y + 1, ..line };
-        f.render_widget(Paragraph::new(hint).alignment(Alignment::Center), hr);
-        return;
+        return transcript_view(f, app, Rect { y: area.y + 3, height: area.height.saturating_sub(3), ..area });
     }
 
     let inner = Rect {
@@ -1837,6 +1800,84 @@ fn cine(f: &mut Frame, app: &App) {
     if !hear {
         draw_modal(f, Rect { y: orden.y, height: 1, ..center }, app);
     }
+}
+
+/// ^T: la conversación entera con su markdown en `area`, la orden debajo y cómo volver.
+fn transcript_view(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let body = Rect {
+        x: area.x + 2,
+        y: area.y,
+        width: area.width.saturating_sub(4),
+        height: area.height.saturating_sub(6),
+    };
+    draw_chat(f, body, app);
+    orden_y_teclas(f, app, area, body.bottom() + 1, state, t, "^T", &[("pgup/pgdn", "recorre"), ("arrastra", "para copiar")]);
+}
+
+/// ^O fuera de Cine: la última respuesta (o la que se eligió con pgup) entera, desplazable.
+/// `false` si todavía no hay ninguna que leer.
+fn lectura(f: &mut Frame, app: &App) -> bool {
+    let said: Vec<(usize, &crate::Msg)> = app
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none())
+        .collect();
+    let skip = (app.scroll / 5).min(said.len().saturating_sub(1));
+    let Some((i, m)) = said.iter().rev().skip(skip).find(|(_, m)| m.role == Role::Assistant).copied() else {
+        return false;
+    };
+    app.reading.set(true);
+    let t = app.started.elapsed().as_secs_f64();
+    let state = app.state();
+    let a = f.area();
+    f.render_widget(Clear, a);
+    let w = a.width.saturating_sub(6).min(110);
+    let x = a.x + (a.width - w) / 2;
+    put(f.buffer_mut(), x, a.y + 1, &spaced("RESPUESTA"), Style::new().fg(theme::accent()).bold(), w);
+    let panel = Rect { x, y: a.y + 2, width: w, height: a.height.saturating_sub(8) };
+    let files = app.adjuntos(i, &m.text);
+    if files.is_empty() {
+        read_panel(f, panel, app, i, &m.text);
+    } else {
+        read_panel(f, Rect { height: panel.height.saturating_sub(1), ..panel }, app, i, &m.text);
+        chips(f, Rect { y: panel.bottom().saturating_sub(1), height: 1, ..panel }, app, &files);
+    }
+    orden_y_teclas(f, app, a, panel.bottom() + 1, state, t, "^O", &[("↑↓ pgup/pgdn", "recorre"), ("arrastra", "para copiar")]);
+    if let Some(sel) = &app.sel {
+        let view = app.view.borrow();
+        let buf = f.buffer_mut();
+        for (x, y) in sel.cells(&view) {
+            buf[(x, y)].set_bg(theme::dim()).set_fg(Color::White);
+        }
+    }
+    true
+}
+
+/// Debajo de ^T y ^O: la orden, y en la fila de abajo cómo volver al estilo (o el aviso).
+fn orden_y_teclas(f: &mut Frame, app: &App, area: Rect, y: u16, state: State, t: f64, tecla: &str, mas: &[(&str, &str)]) {
+    let line = Rect { x: area.x + 4, y, width: area.width.saturating_sub(8), height: 1 };
+    let mut spans = vec![Span::styled("› ", Style::new().fg(theme::accent()).bold())];
+    spans.extend(input_spans(app, state, t, line.width.saturating_sub(2) as usize, theme::accent()));
+    f.render_widget(Paragraph::new(Line::from(spans)), line);
+    let hint = flash(app).unwrap_or_else(|| {
+        let volver = format!(" vuelve a {}   ", app.estilo.nombre());
+        let mut v = vec![
+            Span::styled(tecla.to_string(), Style::new().fg(theme::accent())),
+            Span::styled(" o ", Style::new().fg(theme::faint())),
+            Span::styled("esc", Style::new().fg(theme::accent())),
+            Span::styled(volver, Style::new().fg(theme::faint())),
+        ];
+        for (k, d) in mas {
+            v.push(Span::styled(k.to_string(), Style::new().fg(theme::accent())));
+            v.push(Span::styled(format!(" {d}   "), Style::new().fg(theme::faint())));
+        }
+        Line::from(v)
+    });
+    let hr = Rect { y: line.y + 1, ..line };
+    f.render_widget(Paragraph::new(hint).alignment(Alignment::Center), hr);
 }
 
 /// Los archivos que entregó Claude en una fila, centrados: un clic copia cada uno.
