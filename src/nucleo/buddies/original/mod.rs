@@ -289,6 +289,7 @@ impl<C: Centro + 'static> Buddy for Original<C> {
         self.animo.red
     }
 
+    #[cfg(test)]
     fn hijos(&self) -> usize {
         self.hijos.len()
     }

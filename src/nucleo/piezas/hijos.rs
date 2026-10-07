@@ -56,6 +56,7 @@ impl Hijos {
     }
 
     /// Cuántos hay (vivos o despidiéndose).
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.kids.len()
     }

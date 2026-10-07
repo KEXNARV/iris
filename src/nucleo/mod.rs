@@ -106,6 +106,7 @@ impl Core {
     }
 
     /// Cuántos hijos hay (vivos o despidiéndose).
+    #[cfg(test)]
     pub fn kid_count(&self) -> usize {
         self.activo().hijos()
     }

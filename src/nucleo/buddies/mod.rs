@@ -32,6 +32,7 @@ pub(crate) trait Buddy {
     fn alarma(&self) -> f64;
 
     /// Cuántos subagentes tiene a la vista.
+    #[cfg(test)]
     fn hijos(&self) -> usize;
 
     /// Para que las pruebas miren adentro.
