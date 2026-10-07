@@ -149,7 +149,29 @@ impl State {
             Web => [255.0, 110.0, 170.0],
             Offline => return [90.0, 110.0, 125.0],
         };
-        apart(c, accent_rgb())
+        apart(self.del_tema().unwrap_or(c), accent_rgb())
+    }
+
+    /// Con Baymax, el color del estado sale de los colores con nombre del tema (los que arma
+    /// Aether desde el fondo de pantalla), para que todo combine. Las mismas familias que los
+    /// fijos: la mente en azules y morados, leer y buscar en cian, editar y probar en verde,
+    /// ejecutar en amarillo, git en naranja, la red en rojo.
+    fn del_tema(self) -> Option<[f64; 3]> {
+        use crate::theme::ansi;
+        use State::*;
+        match self {
+            Listening | Asking | Running => ansi("yellow"),
+            NoVoice => ansi("yellow").map(|c| mix(c, [0.0; 3], 0.35)),
+            Transcribing | Delegating => ansi("magenta"),
+            Thinking => ansi("blue"),
+            Planning => Some(mix(ansi("blue")?, ansi("magenta")?, 0.5)),
+            Compacting => ansi("muted"),
+            Searching | Reading => ansi("cyan"),
+            Editing | Testing => ansi("green"),
+            Git => ansi("orange"),
+            Web => ansi("red"),
+            _ => None,
+        }
     }
 
     pub fn color(self) -> Color {
@@ -933,12 +955,23 @@ impl Core {
     fn palette(&self) -> Vec<[[f64; 3]; 4]> {
         let dim = crate::theme::dim_rgb();
         let tones = |c: [f64; 3]| [dim, dim, mix(c, dim, 0.38), c];
-        let mut pal: Vec<_> = [self.col, GREEN, RED, WARM, crate::theme::accent_rgb()].into_iter().map(tones).collect();
-        // Baymax, con los tonos apagados hacia el fondo.
-        let (fondo, c) = (crate::theme::fondo_rgb(), crate::baymax::nucleo().color(crate::theme::acento_u32()));
+        // Listo, error y aviso: con los colores del tema si los trae (estilos Baymax).
+        let tema = |n: &str, c: [f64; 3]| crate::theme::ansi(n).unwrap_or(c);
+        let mut pal: Vec<_> =
+            [self.col, tema("green", GREEN), tema("red", RED), tema("yellow", WARM), crate::theme::accent_rgb()].into_iter().map(tones).collect();
+        // Baymax, con los tonos apagados hacia el fondo. Si su color casi no se distingue del
+        // fondo (un tema claro con acento claro), va en el color del texto.
+        let fondo = crate::theme::fondo_rgb();
+        let mut c = crate::baymax::nucleo().color(crate::theme::acento_u32());
+        if crate::theme::contraste(c, fondo) < 2.5 {
+            c = crate::theme::texto_u32();
+        }
         let full = crate::baymax::hacia(c, fondo, 0.0);
-        // El relleno de la cara va claro (es blanca); al hablar, más todavía.
-        pal.push([full, crate::baymax::hacia(c, fondo, 0.38), crate::baymax::hacia(c, fondo, 0.15), full]);
+        // El relleno de la cara va claro (es blanca); al hablar, más todavía. Sobre un fondo claro
+        // Baymax va oscuro y su relleno casi del color del fondo, para que se lean el borde y
+        // los ojos.
+        let (r1, r2) = if crate::theme::claro() { (0.82, 0.68) } else { (0.38, 0.15) };
+        pal.push([full, crate::baymax::hacia(c, fondo, r1), crate::baymax::hacia(c, fondo, r2), full]);
         pal.extend(self.kids.iter().take(MAX_KID_INKS).map(|k| tones(k.core.col)));
         pal
     }
@@ -1266,8 +1299,8 @@ impl Core {
             }
         }
 
-        // Zetas (en reposo).
-        if p.zzz > 0.01 && !low {
+        // Zetas (en reposo). Con Baymax van las suyas, más grandes.
+        if p.zzz > 0.01 && !low && !baymax {
             for k in 0..3 {
                 let u = (t * 0.22 + k as f64 / 3.0).fract();
                 let s = 0.03 + u * 0.04;
@@ -1479,11 +1512,19 @@ impl Core {
     fn paint_baymax(&self, g: &mut Grid, [cx, cy]: [f64; 2], half: f64, [sx, sy]: [f64; 2], blink: bool, open: f64, scan_y: f64, lupa: Option<(f64, f64, f64)>) {
         let p = &self.p;
         let lim = (p.blob_r * 0.42).max(1e-3);
+        let t = self.t;
         let gesto = crate::baymax::Gesto {
             cerrados: blink || p.pupil < 0.3,
             mirada: [(self.gaze[0] / lim).clamp(-1.0, 1.0), (self.gaze[1] / lim).clamp(-1.0, 1.0)],
+            // Contento al terminar bien: pasaron las pruebas o se acaba de cerrar una tarea.
+            feliz: self.pass > 0.3 || self.blooms.iter().any(|b| (0.0..1.4).contains(&(t - b))),
+            // Más abiertos al escuchar, menos al concentrarse (la misma «pupila» del original).
+            abertura: p.dilate.powf(0.6).clamp(0.8, 1.3),
+            entornados: self.red > 0.35,
         };
         let ink = if self.red > 0.35 { INK_RED } else { INK_BAYMAX };
+        // Sobre un fondo claro los ojos huecos se verían claros: ahí se pintan.
+        let claro = crate::theme::claro();
         let relleno = if open > 0.4 { 2 } else { 1 };
         let du = g.du / half;
         for j in 0..g.dh {
@@ -1505,8 +1546,20 @@ impl Core {
                     _ if p.scan > 0.01 && (y - scan_y).abs() < 0.025 => g.dot(i, j, 3, INK_MAIN),
                     _ if lupa.is_some_and(|(lx, ly, lr)| ((x - lx).hypot(y - ly) - lr).abs() < 1.5 * g.du) => g.dot(i, j, 3, INK_MAIN),
                     3 => g.dot(i, j, 3, ink),
+                    2 if claro => g.dot(i, j, 3, ink),
+                    2 => {}
                     _ => g.dot(i, j, relleno, ink),
                 }
+            }
+        }
+        // Dormido: tres Z que suben desde arriba a la derecha, creciendo y apagándose.
+        if p.zzz > 0.01 && p.dashed < 0.5 {
+            for k in 0..3 {
+                let u = (t * 0.22 + k as f64 / 3.0).fract();
+                let tone = if u < 0.55 { 3 } else if u < 0.8 { 2 } else { 1 };
+                let s = half * (0.05 + u * 0.09);
+                let (zx, zy) = (cx + half * (0.62 + u * 0.42), cy + half * (0.40 + u * 0.75));
+                crate::baymax::zeta(zx, zy, s, g.du * 0.6, &mut |x, y| g.plot(x, y, tone, ink));
             }
         }
     }
@@ -1974,14 +2027,31 @@ mod tests {
         if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
             return;
         }
+        // `JARVIS_SNAP_PALETA` prueba otra paleta (un tema claro, por ejemplo).
         let home = std::env::var("HOME").unwrap();
-        crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-baymax.toml").into()));
+        let paleta = std::env::var("JARVIS_SNAP_PALETA").unwrap_or(format!("{home}/.config/jarvis/colores-baymax.toml"));
+        crate::theme::usar(Some(paleta.into()));
         let dir = std::path::Path::new("target/baymax");
         std::fs::create_dir_all(dir).unwrap();
         let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);
         let sig = Signals::default();
-        for (s, secs) in [(State::Idle, 3.0), (State::Thinking, 2.6), (State::Speaking, 2.6), (State::Sleeping, 3.0), (State::Searching, 2.6), (State::Offline, 2.6)] {
-            let c = run(s, secs, &sig);
+        // (nombre, estado, segundos, evento a mitad de camino)
+        let casos = [
+            ("1-espera", State::Idle, 3.0, None),
+            ("2-escuchando", State::Listening, 2.6, None),
+            ("3-pensando", State::Thinking, 2.6, None),
+            ("4-contento", State::Idle, 2.0, Some(Event::Done)),
+            ("5-error", State::Running, 2.0, Some(Event::Error)),
+            ("6-dormido", State::Sleeping, 3.4, None),
+        ];
+        for (nombre, s, secs, ev) in casos {
+            let mut c = run(s, secs, &sig);
+            if let Some(ev) = ev {
+                c.fire(ev);
+                for _ in 0..8 {
+                    c.step(0.04, s, &sig);
+                }
+            }
             let (w, h) = (480, 400);
             let (img, colors) = c.pixels(w, h, 4);
             let mut out = format!("P6 {w} {h} 255\n").into_bytes();
@@ -1989,7 +2059,7 @@ mod tests {
                 let c = if i == 0 { bg } else { colors[i as usize - 1] };
                 out.extend(c.map(|v| v.round() as u8));
             }
-            std::fs::write(dir.join(format!("{:?}.ppm", s)), out).unwrap();
+            std::fs::write(dir.join(format!("{nombre}.ppm")), out).unwrap();
         }
     }
 

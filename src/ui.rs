@@ -886,7 +886,7 @@ fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::update::Info) {
     for l in wrap(&what, w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()).bold())));
     }
-    for l in wrap("Se baja, se compila y Jarvis se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
+    for l in wrap("Claude lo mezcla con lo tuyo, resuelve lo que choque y lo instala; Jarvis se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::faint()))));
     }
     if !info.commits.is_empty() {

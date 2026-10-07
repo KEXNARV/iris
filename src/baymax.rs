@@ -1,6 +1,6 @@
-//! Baymax: la cara que reemplaza al cuerpo del núcleo con el buddy Baymax. Un óvalo relleno de un color (el del tema o uno elegido) con los ojos huecos:
-//! dos puntos unidos por una línea, por donde se ve el fondo, como sus ojos negros en la cara
-//! blanca.
+//! Baymax: la cara que reemplaza al cuerpo del núcleo con el buddy Baymax. Un óvalo relleno de
+//! un color (el del tema o uno elegido) con dos ojos unidos por una línea: huecos sobre un fondo
+//! oscuro, como sus ojos negros en la cara blanca, y pintados sobre uno claro.
 //!
 //! El color sale de `nucleo` en la paleta (`colores-baymax.toml`), o de `JARVIS_NUCLEO`, que
 //! manda al arrancar: `auto` (el del tema) o un `#rrggbb`.
@@ -13,14 +13,28 @@ const CABEZA: (f64, f64) = (0.80, 0.52);
 const OJO_X: f64 = 0.38;
 const OJO_R: f64 = 0.12;
 
-/// Lo que se mueve: ojos cerrados (parpadeo, sueño) y hacia dónde miran (-1..1, y hacia arriba).
+/// Lo que se mueve: ojos cerrados (parpadeo, sueño), hacia dónde miran (-1..1, y hacia
+/// arriba) y la expresión.
 pub struct Gesto {
     pub cerrados: bool,
     pub mirada: [f64; 2],
+    /// Contento (terminó algo bien): los ojos se vuelven `^ ^`.
+    pub feliz: bool,
+    /// Qué tan abiertos: 1 normal, más al escuchar, menos al concentrarse.
+    pub abertura: f64,
+    /// Un error: los ojos se entrecierran.
+    pub entornados: bool,
 }
 
-/// Qué va en el punto (`x`, `y`) de la cara: 0 nada (fuera, o en los ojos), 1 la cara, 3 el
-/// borde. `du` es lo que mide un punto, para que el borde y la línea no se pierdan.
+#[cfg(test)]
+impl Gesto {
+    pub const QUIETO: Gesto = Gesto { cerrados: false, mirada: [0.0, 0.0], feliz: false, abertura: 1.0, entornados: false };
+}
+
+/// Qué va en el punto (`x`, `y`) de la cara: 0 nada (fuera), 1 la cara, 2 los ojos y la línea,
+/// 3 el borde. `du` es lo que mide un punto, para que el borde y la línea no se pierdan. Sobre un
+/// fondo oscuro los ojos van huecos (se ve el fondo, negro como sus ojos); sobre uno claro el
+/// núcleo los pinta.
 pub fn cara(x: f64, y: f64, du: f64, g: &Gesto) -> u8 {
     let (rx, ry) = CABEZA;
     let e = ((x / rx).powi(2) + (y / ry).powi(2)).sqrt();
@@ -31,18 +45,41 @@ pub fn cara(x: f64, y: f64, du: f64, g: &Gesto) -> u8 {
     let (mx, my) = (g.mirada[0] * 0.12, g.mirada[1] * 0.08);
     let (ex, ey) = (x - mx, y - my);
     let linea = ey.abs() < (1.3 * du).max(0.012) && ex.abs() < OJO_X;
+    // Cada ojo, con su centro en el origen.
+    let (ox, oy) = (ex.abs() - OJO_X, ey);
+    let r = OJO_R * g.abertura;
     let ojo = if g.cerrados {
         // Cerrados: los puntos se aplastan en una raya un poco más gruesa que la línea.
-        ey.abs() < (2.0 * du).max(0.02) && (ex.abs() - OJO_X).abs() < OJO_R
+        oy.abs() < (2.0 * du).max(0.02) && ox.abs() < OJO_R
+    } else if g.feliz {
+        // Contento: una «^» por ojo, ancha y gruesa para que se lea.
+        let grosor = (3.0 * du).max(0.04);
+        let pico = |px: f64| OJO_R * 0.7 - px.abs() * 1.05;
+        ox.abs() < OJO_R * 1.1 && (oy - pico(ox)).abs() < grosor
+    } else if g.entornados {
+        (ox / r).powi(2) + (oy / (r * 0.5)).powi(2) < 1.0
     } else {
-        (ex.abs() - OJO_X).hypot(ey) < OJO_R
+        ox.hypot(oy) < r
     };
     if ojo || linea {
-        0
+        2
     } else if e > 1.0 - 2.6 * du / ry {
         3
     } else {
         1
+    }
+}
+
+/// Las «Z» que salen al dormir: dónde va cada punto de una Z de semiancho `s` centrada en
+/// (`cx`, `cy`). Arriba, la diagonal y abajo, como se escribe.
+pub fn zeta(cx: f64, cy: f64, s: f64, paso: f64, plot: &mut impl FnMut(f64, f64)) {
+    let trazos = [((-s, s), (s, s)), ((s, s), (-s, -s)), ((-s, -s), (s, -s))];
+    for ((x0, y0), (x1, y1)) in trazos {
+        let n = (((x1 - x0) as f64).hypot(y1 - y0) / paso.max(1e-3)).ceil().max(2.0) as usize;
+        for i in 0..=n {
+            let u = i as f64 / n as f64;
+            plot(cx + x0 + (x1 - x0) * u, cy + y0 + (y1 - y0) * u);
+        }
     }
 }
 
@@ -147,29 +184,54 @@ pub fn leer(toml: &str) {
 mod tests {
     use super::*;
 
-    const ABIERTOS: Gesto = Gesto { cerrados: false, mirada: [0.0, 0.0] };
+    const ABIERTOS: Gesto = Gesto::QUIETO;
 
     #[test]
-    fn la_cara_tiene_borde_relleno_y_ojos_huecos() {
+    fn la_cara_tiene_borde_relleno_y_ojos() {
         let du = 0.02;
         assert_eq!(cara(0.0, 0.3, du, &ABIERTOS), 1, "la frente es cara");
         assert_eq!(cara(0.0, 0.515, du, &ABIERTOS), 3, "arriba de todo, el borde");
         assert_eq!(cara(0.0, 0.6, du, &ABIERTOS), 0, "fuera del óvalo, nada");
-        assert_eq!(cara(-OJO_X, 0.0, du, &ABIERTOS), 0, "el ojo es hueco");
-        assert_eq!(cara(0.0, 0.0, du, &ABIERTOS), 0, "la línea entre los ojos también");
+        assert_eq!(cara(-OJO_X, 0.0, du, &ABIERTOS), 2, "el ojo");
+        assert_eq!(cara(0.0, 0.0, du, &ABIERTOS), 2, "la línea entre los ojos también");
         assert_eq!(cara(0.0, 0.06, du, &ABIERTOS), 1, "pero es fina");
     }
 
     #[test]
     fn los_ojos_miran_y_se_cierran() {
         let du = 0.02;
-        let derecha = Gesto { cerrados: false, mirada: [1.0, 0.0] };
+        let derecha = Gesto { mirada: [1.0, 0.0], ..Gesto::QUIETO };
         // Mirando a la derecha, el ojo izquierdo se corre: donde estaba ya hay cara.
         assert_eq!(cara(-OJO_X - 0.08, 0.0, du, &derecha), 1);
-        assert_eq!(cara(-OJO_X + 0.12, 0.0, du, &derecha), 0);
-        let cerrados = Gesto { cerrados: true, mirada: [0.0, 0.0] };
+        assert_eq!(cara(-OJO_X + 0.12, 0.0, du, &derecha), 2);
+        let cerrados = Gesto { cerrados: true, ..Gesto::QUIETO };
         assert_eq!(cara(-OJO_X, 0.08, du, &cerrados), 1, "cerrado, el ojo es solo una raya");
-        assert_eq!(cara(-OJO_X, 0.0, du, &cerrados), 0);
+        assert_eq!(cara(-OJO_X, 0.0, du, &cerrados), 2);
+    }
+
+    #[test]
+    fn expresiones() {
+        let du = 0.02;
+        // Contento: el pico de la «^» arriba del centro del ojo, y el centro libre.
+        let feliz = Gesto { feliz: true, ..Gesto::QUIETO };
+        assert_eq!(cara(-OJO_X, OJO_R * 0.55, du, &feliz), 2);
+        assert_eq!(cara(-OJO_X, -OJO_R * 0.6, du, &feliz), 1);
+        // Escuchando, más abiertos; con un error, entrecerrados.
+        let abiertos = Gesto { abertura: 1.3, ..Gesto::QUIETO };
+        assert_eq!(cara(-OJO_X, OJO_R * 1.15, du, &abiertos), 2);
+        assert_eq!(cara(-OJO_X, OJO_R * 1.15, du, &ABIERTOS), 1);
+        let error = Gesto { entornados: true, ..Gesto::QUIETO };
+        assert_eq!(cara(-OJO_X, OJO_R * 0.7, du, &error), 1);
+        assert_eq!(cara(-OJO_X + OJO_R * 0.8, 0.02, du, &error), 2);
+    }
+
+    #[test]
+    fn la_zeta_tiene_sus_tres_trazos() {
+        let mut v = vec![];
+        zeta(0.0, 0.0, 0.1, 0.01, &mut |x, y| v.push((x, y)));
+        assert!(v.iter().any(|p| (p.1 - 0.1).abs() < 1e-9 && p.0 < -0.09), "arriba a la izquierda");
+        assert!(v.iter().any(|p| (p.1 + 0.1).abs() < 1e-9 && p.0 > 0.09), "abajo a la derecha");
+        assert!(v.iter().any(|p| p.0.abs() < 0.01 && p.1.abs() < 0.01), "la diagonal pasa por el medio");
     }
 
     #[test]

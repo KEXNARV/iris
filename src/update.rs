@@ -1,6 +1,6 @@
 //! Actualizaciones desde GitHub: al arrancar y cada hora mira si `origin/master` tiene commits
-//! que este binario no tiene. Si los hay, Jarvis lo ofrece; al aceptar, baja el código, lo
-//! instala con cargo y se vuelve a abrir en la misma sesión.
+//! que este binario no tiene. Si los hay, Jarvis lo ofrece; al aceptar, Claude mezcla master
+//! (resolviendo conflictos), lo instala con cargo, y Jarvis se vuelve a abrir en la misma sesión.
 //!
 //! Dos formas de instalación: desde el repo clonado (`cargo install --path .`, la de Kevin) o
 //! directo de GitHub (`cargo install --git`). En la primera el código se trae con `git pull`.
@@ -83,11 +83,13 @@ fn check() -> Option<Info> {
     if is_repo() {
         git(&["fetch", "-q", "origin", "master"]).ok()?;
         let remote = git(&["rev-parse", "origin/master"]).ok()?;
-        // Igual, o con cambios locales que GitHub todavía no tiene: no hay nada que ofrecer.
-        if remote == BUILT || git(&["merge-base", "--is-ancestor", BUILT, &remote]).is_err() {
+        // Lo que GitHub tiene y este binario no. Los commits propios de la rama no cuentan: se
+        // mezclan con master al actualizar.
+        let range = format!("{BUILT}..{remote}");
+        if git(&["rev-list", "--count", &range]).ok()? == "0" {
             return None;
         }
-        let log = git(&["log", "--format=%s", &format!("{BUILT}..{remote}")]).ok()?;
+        let log = git(&["log", "--format=%s", &range]).ok()?;
         Some(Info { commit: remote[..7].into(), commits: log.lines().map(String::from).collect() })
     } else {
         let out = run(Command::new("git").args(["ls-remote", REPO, "refs/heads/master"])).ok()?;
@@ -96,17 +98,55 @@ fn check() -> Option<Info> {
     }
 }
 
+/// El encargo para Claude: que traiga master, resuelva lo que choque e instale. Solo con el
+/// repo clonado (sin repo no hay nada que mezclar: se usa `install`).
+pub fn prompt(info: &Info) -> Option<String> {
+    if !is_repo() {
+        return None;
+    }
+    let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    let commits = match info.commits.len() {
+        0 => String::new(),
+        _ => format!("\nLo nuevo:\n{}\n", info.commits.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n")),
+    };
+    Some(format!(
+        "Actualiza Jarvis (este programa) a la versión de GitHub ({commit}). El repo está en {SRC}, en la rama {branch}.\n{commits}\n\
+         1. `git -C {SRC} fetch origin master` y mezcla origin/master en {branch} con un merge (sin rebase, sin cambiar de rama, sin push). Si hay cambios sin commit, guárdalos con stash y devuélvelos al final.\n\
+         2. Si hay conflictos, resuélvelos conservando lo de los dos lados. Si para eso hay que decidir algo importante, para y explícamelo sin instalar.\n\
+         3. Corre `{cargo} test` en el repo; tiene que pasar.\n\
+         4. Instala con `{cargo} install --locked --path {SRC} --root {root}`.\n\
+         5. Termina con un resumen corto de lo que entró. No reinicies Jarvis: se reabre solo cuando termines.",
+        commit = info.commit,
+        cargo = cargo().display(),
+        root = root().display(),
+    ))
+}
+
+/// Cuándo se instaló el binario; si cambia, hay versión nueva que abrir.
+pub fn stamp() -> Option<std::time::SystemTime> {
+    std::fs::metadata(exe()).and_then(|m| m.modified()).ok()
+}
+
+/// Donde está instalado (`~/.local` para `~/.local/bin/jarvis`): ahí va el nuevo, que es el
+/// que se vuelve a abrir.
+fn root() -> PathBuf {
+    let exe = exe();
+    exe.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_else(|| ".".into())
+}
+
 fn install_now() -> Result<(), String> {
     if is_repo() {
-        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-        if branch != "master" {
-            return Err(format!("el repo está en la rama {branch}, no en master"));
-        }
+        // En cualquier rama: master se mezcla con lo que tengas (o solo la adelanta, si no hay
+        // commits propios). Con conflictos se deshace todo y queda como estaba.
         // --autostash: lo que estés editando en el repo se guarda y vuelve después.
-        git(&["pull", "-q", "--ff-only", "--autostash", "origin", "master"])?;
-        run(Command::new(cargo()).args(["install", "--path", SRC]))?;
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+        if let Err(e) = git(&["pull", "-q", "--no-rebase", "--no-edit", "--autostash", "origin", "master"]) {
+            let _ = git(&["merge", "--abort"]);
+            return Err(format!("master no se pudo mezclar solo con la rama {branch}: {e}"));
+        }
+        run(Command::new(cargo()).args(["install", "--path", SRC, "--root"]).arg(root()))?;
     } else {
-        run(Command::new(cargo()).args(["install", "--git", REPO, "--force"]))?;
+        run(Command::new(cargo()).args(["install", "--git", REPO, "--force", "--root"]).arg(root()))?;
     }
     Ok(())
 }
@@ -133,4 +173,19 @@ fn run(cmd: &mut Command) -> Result<String, String> {
     }
     let err = String::from_utf8_lossy(&out.stderr);
     Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("falló").trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_encargo_dice_donde_instalar() {
+        let info = Info { commit: "abc1234".into(), commits: vec!["Algo nuevo".into()] };
+        let Some(p) = prompt(&info) else { return }; // sin el repo clonado no hay encargo
+        println!("{p}");
+        assert!(p.contains("abc1234") && p.contains("- Algo nuevo"));
+        assert!(p.contains(&format!("--root {}", root().display())));
+        assert!(p.contains(SRC));
+    }
 }
