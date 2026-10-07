@@ -19,7 +19,8 @@ static SEEN: Mutex<String> = Mutex::new(String::new());
 /// la terminal, y guarda ahí lo que se elija (`nucleo`, `background`, `colores`).
 static PALETA: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// Con paleta propia, de dónde salen los colores. Se guarda como `colores = "sistema"`,
-/// `"transparente"` o `"defecto"`; sin nada, del sistema.
+/// `"transparente"` o `"defecto"`; sin nada, transparente: el mismo fondo que con el original,
+/// para que cambiar de buddy no cambie el fondo.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Colores {
     /// Del tema de Omarchy (Aether), y cambian con él.
@@ -42,8 +43,8 @@ impl Colores {
     fn de(s: &str) -> Colores {
         match s {
             "defecto" => Colores::Defecto,
-            "transparente" => Colores::Transparente,
-            _ => Colores::Sistema,
+            "sistema" => Colores::Sistema,
+            _ => Colores::Transparente,
         }
     }
 }
