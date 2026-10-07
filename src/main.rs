@@ -210,6 +210,8 @@ pub struct App {
     update: Option<update::Info>,
     /// Se instaló la versión nueva: al salir, Jarvis se vuelve a abrir con ella.
     reexec: bool,
+    /// Claude está actualizando; guarda cuándo se había instalado el binario de antes.
+    updating: Option<Option<std::time::SystemTime>>,
     /// El blob del panel NÚCLEO.
     pub nucleo: nucleo::Core,
     /// Tokens de contexto en uso y la ventana del modelo.
@@ -517,6 +519,14 @@ impl App {
                 if is_error && !std::mem::take(&mut self.interrupted) {
                     self.push(Role::Error, format!("el turno terminó con error ({secs:.1}s)"));
                 }
+                // Claude terminó de actualizar: si el binario cambió, se reabre con el nuevo.
+                if let Some(before) = self.updating.take() {
+                    if update::stamp() != before {
+                        self.reexec = true;
+                    } else {
+                        self.push(Role::Error, "la versión nueva no se instaló; Jarvis sigue como estaba");
+                    }
+                }
             }
             ClaudeEvent::Ask { request_id, tool, input } => {
                 if !self.focused && !self.flotante {
@@ -681,6 +691,7 @@ fn main() -> Result<()> {
         quit_armed: None,
         update: None,
         reexec: false,
+        updating: None,
         last_key: Instant::now(),
         last_voice: Instant::now(),
         noise_floor: 0.0,
@@ -967,10 +978,17 @@ fn run(
                             term.clear()?;
                         }
                         Flow::Redraw => term.clear()?,
-                        Flow::Update => {
-                            app.push(Role::System, "actualizando: bajando y compilando la versión nueva…");
-                            update::install(tx.clone());
-                        }
+                        Flow::Update(info) => match update::prompt(&info).filter(|_| app.alive && claude.is_some()) {
+                            // Claude mezcla, resuelve lo que choque e instala; al terminar, se reabre.
+                            Some(p) => {
+                                app.updating = Some(update::stamp());
+                                submit(app, claude, p);
+                            }
+                            None => {
+                                app.push(Role::System, "actualizando: bajando y compilando la versión nueva…");
+                                update::install(tx.clone());
+                            }
+                        },
                         Flow::Go => {}
                     }
                 }
@@ -985,7 +1003,10 @@ fn run(
         while let Ok(ev) = rx.try_recv() {
             match ev {
                 AppEvent::Claude(id, e) if claude.as_ref().is_some_and(|c| c.id == id) => {
-                    app.on_claude(e)
+                    app.on_claude(e);
+                    if app.reexec {
+                        return Ok(());
+                    }
                 }
                 AppEvent::Claude(..) => {}
                 AppEvent::Voice(e) => on_voice(app, e, claude),
@@ -1027,7 +1048,7 @@ enum Flow {
     Restart,
     Resume(String),
     /// Bajar e instalar la versión nueva.
-    Update,
+    Update(update::Info),
 }
 
 fn handle_key(
@@ -1446,11 +1467,12 @@ fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>) -> Option<
             }
             Some(Flow::Go)
         }
-        Modal::Update(_) => {
+        Modal::Update(info) => {
             match k.code {
                 KeyCode::Enter => {
+                    let info = info.clone();
                     app.modal = None;
-                    return Some(Flow::Update);
+                    return Some(Flow::Update(info));
                 }
                 KeyCode::Esc => app.modal = None,
                 _ => {}

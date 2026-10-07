@@ -36,6 +36,8 @@ pub(crate) struct Escena<'a> {
     /// Hacia dónde mira y hasta dónde puede mirar.
     pub mirada: [f64; 2],
     pub lim: f64,
+    /// Acaba de terminar algo bien: pasaron las pruebas o se cerró una tarea.
+    pub contento: bool,
     pub lupa: Donde,
     pub linea: Linea,
     pub yema: Option<(f64, f64, f64)>,
@@ -99,6 +101,7 @@ impl<'a> Escena<'a> {
             blink,
             mirada,
             lim: o.mirada.lim(p.blob_r),
+            contento: a.pass > 0.3 || o.ondas.listos.iter().any(|b| (0.0..1.4).contains(&(t - b))),
             lupa,
             linea: o.lectura.linea(ctx, &ancla, p.scan),
             yema: o.brote.yema(ctx, &brote::Pinta { ancla: &ancla, bud: p.bud, fase: a.phase }),

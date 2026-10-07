@@ -261,14 +261,31 @@ fn baymax_ppm() {
     if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
         return;
     }
+    // `JARVIS_SNAP_PALETA` prueba otra paleta (un tema claro, por ejemplo).
     let home = std::env::var("HOME").unwrap();
-    crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-baymax.toml").into()));
+    let paleta = std::env::var("JARVIS_SNAP_PALETA").unwrap_or(format!("{home}/.config/jarvis/colores-baymax.toml"));
+    crate::theme::usar(Some(paleta.into()));
     let dir = std::path::Path::new("target/baymax");
     std::fs::create_dir_all(dir).unwrap();
     let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);
     let sig = Signals::default();
-    for (s, secs) in [(State::Idle, 3.0), (State::Thinking, 2.6), (State::Speaking, 2.6), (State::Sleeping, 3.0), (State::Searching, 2.6), (State::Offline, 2.6)] {
-        let c = run(s, secs, &sig);
+    // (nombre, estado, segundos, evento a mitad de camino)
+    let casos = [
+        ("1-espera", State::Idle, 3.0, None),
+        ("2-escuchando", State::Listening, 2.6, None),
+        ("3-pensando", State::Thinking, 2.6, None),
+        ("4-contento", State::Idle, 2.0, Some(Event::Done)),
+        ("5-error", State::Running, 2.0, Some(Event::Error)),
+        ("6-dormido", State::Sleeping, 3.4, None),
+    ];
+    for (nombre, s, secs, ev) in casos {
+        let mut c = run(s, secs, &sig);
+        if let Some(ev) = ev {
+            c.fire(ev);
+            for _ in 0..8 {
+                c.step(0.04, s, &sig);
+            }
+        }
         let (w, h) = (480, 400);
         let (img, colors) = c.pixels(w, h, 4);
         let mut out = format!("P6 {w} {h} 255\n").into_bytes();
@@ -276,7 +293,7 @@ fn baymax_ppm() {
             let c = if i == 0 { bg } else { colors[i as usize - 1] };
             out.extend(c.map(|v| v.round() as u8));
         }
-        std::fs::write(dir.join(format!("{:?}.ppm", s)), out).unwrap();
+        std::fs::write(dir.join(format!("{nombre}.ppm")), out).unwrap();
     }
 }
 

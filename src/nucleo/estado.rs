@@ -129,7 +129,29 @@ impl State {
             Web => [255.0, 110.0, 170.0],
             Offline => return [90.0, 110.0, 125.0],
         };
-        apart(c, accent_rgb())
+        apart(self.del_tema().unwrap_or(c), accent_rgb())
+    }
+
+    /// Con Baymax, el color del estado sale de los colores con nombre del tema (los que arma
+    /// Aether desde el fondo de pantalla), para que todo combine. Las mismas familias que los
+    /// fijos: la mente en azules y morados, leer y buscar en cian, editar y probar en verde,
+    /// ejecutar en amarillo, git en naranja, la red en rojo.
+    fn del_tema(self) -> Option<[f64; 3]> {
+        use crate::theme::ansi;
+        use State::*;
+        match self {
+            Listening | Asking | Running => ansi("yellow"),
+            NoVoice => ansi("yellow").map(|c| mix(c, [0.0; 3], 0.35)),
+            Transcribing | Delegating => ansi("magenta"),
+            Thinking => ansi("blue"),
+            Planning => Some(mix(ansi("blue")?, ansi("magenta")?, 0.5)),
+            Compacting => ansi("muted"),
+            Searching | Reading => ansi("cyan"),
+            Editing | Testing => ansi("green"),
+            Git => ansi("orange"),
+            Web => ansi("red"),
+            _ => None,
+        }
     }
 
     pub fn color(self) -> Color {

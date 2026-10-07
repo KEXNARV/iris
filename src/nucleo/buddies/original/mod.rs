@@ -50,6 +50,11 @@ pub(crate) trait Centro {
 
     /// Los tonos de su tinta propia (`INK_CARA`), a partir del color del estado.
     fn tonos(&self, col: [f64; 3]) -> [[f64; 3]; 4];
+
+    /// Dibuja sus propias zetas al dormir (y no van las de siempre).
+    fn zetas_propias(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) struct Original<C: Centro> {
@@ -261,7 +266,9 @@ impl<C: Centro + 'static> Buddy for Original<C> {
         self.puntadas.paint(g, ctx, puntadas::Pinta { ancla, stitch: p.stitch });
         self.git.paint(g, ctx, git::Pinta { ancla, git: p.git });
         self.pregunta.paint(g, ctx, pregunta::Pinta { ancla, droop: p.droop });
-        self.zetas.paint(g, ctx, zetas::Pinta { ancla, zzz: p.zzz, low: e.low });
+        if !self.centro.zetas_propias() {
+            self.zetas.paint(g, ctx, zetas::Pinta { ancla, zzz: p.zzz, low: e.low });
+        }
         self.brote.paint(g, ctx, brote::Pinta { ancla, bud: p.bud, fase: a.phase });
         self.lupa.paint(g, ctx, lupa::Pinta { ancla, lens: p.lens, low: e.low });
         self.centro.pintar(g, ctx, &e);
@@ -275,7 +282,10 @@ impl<C: Centro + 'static> Buddy for Original<C> {
     /// Estado, verde, rojo, ámbar y acento; la tinta del centro; una por hijo.
     fn paleta(&self) -> Vec<[[f64; 3]; 4]> {
         let col = self.animo.col;
-        let mut pal: Vec<_> = [col, GREEN, RED, WARM, crate::theme::accent_rgb()].into_iter().map(tonos).collect();
+        // Listo, error y aviso: con los colores del tema si los trae (con Baymax).
+        let tema = |n: &str, c: [f64; 3]| crate::theme::ansi(n).unwrap_or(c);
+        let mut pal: Vec<_> =
+            [col, tema("green", GREEN), tema("red", RED), tema("yellow", WARM), crate::theme::accent_rgb()].into_iter().map(tonos).collect();
         pal.push(self.centro.tonos(col));
         pal.extend(self.hijos.tintas());
         pal

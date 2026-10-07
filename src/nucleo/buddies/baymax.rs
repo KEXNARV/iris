@@ -39,8 +39,14 @@ impl Centro for Cara {
         let gesto = crate::baymax::Gesto {
             cerrados: e.blink || p.pupil < 0.3,
             mirada: [(e.mirada[0] / lim).clamp(-1.0, 1.0), (e.mirada[1] / lim).clamp(-1.0, 1.0)],
+            feliz: e.contento,
+            // Más abiertos al escuchar, menos al concentrarse (la misma «pupila» del original).
+            abertura: p.dilate.powf(0.6).clamp(0.8, 1.3),
+            entornados: a.red > 0.35,
         };
         let ink = if a.red > 0.35 { INK_RED } else { INK_CARA };
+        // Sobre un fondo claro los ojos huecos se verían claros: ahí se pintan.
+        let claro = crate::theme::claro();
         let relleno = if open > 0.4 { 2 } else { 1 };
         let du = g.du / half;
         for j in 0..g.dh {
@@ -62,10 +68,26 @@ impl Centro for Cara {
                     _ if e.linea.cubre(y) => g.dot(i, j, 3, INK_MAIN),
                     _ if lupa.is_some_and(|l| ((x - l.x).hypot(y - l.y) - l.r).abs() < 1.5 * g.du) => g.dot(i, j, 3, INK_MAIN),
                     3 => g.dot(i, j, 3, ink),
+                    2 if claro => g.dot(i, j, 3, ink),
+                    2 => {}
                     _ => g.dot(i, j, relleno, ink),
                 }
             }
         }
+        // Dormido: tres Z que suben desde arriba a la derecha, creciendo y apagándose.
+        if p.zzz > 0.01 && p.dashed < 0.5 {
+            for k in 0..3 {
+                let u = (t * 0.22 + k as f64 / 3.0).fract();
+                let tone = if u < 0.55 { 3 } else if u < 0.8 { 2 } else { 1 };
+                let s = half * (0.05 + u * 0.09);
+                let (zx, zy) = (cx + half * (0.62 + u * 0.42), cy + half * (0.40 + u * 0.75));
+                crate::baymax::zeta(zx, zy, s, g.du * 0.6, &mut |x, y| g.plot(x, y, tone, ink));
+            }
+        }
+    }
+
+    fn zetas_propias(&self) -> bool {
+        true
     }
 
     /// Los tonos apagados van hacia el fondo. En Auto, el color del estado, como el núcleo de
@@ -74,8 +96,16 @@ impl Centro for Cara {
     fn tonos(&self, col: [f64; 3]) -> [[f64; 3]; 4] {
         let estado = col.map(|x| x.round().clamp(0.0, 255.0) as u32);
         let estado = estado[0] << 16 | estado[1] << 8 | estado[2];
-        let (fondo, c) = (crate::theme::fondo_rgb(), crate::baymax::nucleo().color(estado));
+        let (fondo, mut c) = (crate::theme::fondo_rgb(), crate::baymax::nucleo().color(estado));
+        // Si su color casi no se distingue del fondo (un tema claro con acento claro), va en el
+        // color del texto.
+        if crate::theme::contraste(c, fondo) < 2.5 {
+            c = crate::theme::texto_u32();
+        }
         let full = crate::baymax::hacia(c, fondo, 0.0);
-        [full, crate::baymax::hacia(c, fondo, 0.38), crate::baymax::hacia(c, fondo, 0.15), full]
+        // Sobre un fondo claro Baymax va oscuro y su relleno casi del color del fondo, para que
+        // se lean el borde y los ojos.
+        let (r1, r2) = if crate::theme::claro() { (0.82, 0.68) } else { (0.38, 0.15) };
+        [full, crate::baymax::hacia(c, fondo, r1), crate::baymax::hacia(c, fondo, r2), full]
     }
 }
