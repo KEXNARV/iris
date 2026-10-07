@@ -1,3 +1,4 @@
+mod adjunto;
 mod ask;
 mod baymax;
 mod buddy;
@@ -9,6 +10,7 @@ mod habla;
 mod estilo;
 mod md;
 mod musica;
+mod surco;
 mod miniatura;
 mod nucleo;
 mod select;
@@ -104,6 +106,26 @@ pub struct Agent {
     pub tools: usize,
     /// Cuándo terminó y si salió bien; se queda un momento para que se vea volver.
     pub ended: Option<(Instant, bool)>,
+    /// Todo lo que hizo, en orden: herramientas y lo que escribió. Para Ctrl+G, Agentes.
+    pub log: Vec<Paso>,
+}
+
+/// Abre Ctrl+G en una pestaña con lo último elegido; sin nada que mostrar, avisa y no abre.
+fn abrir_vista(app: &mut App, agentes: bool) -> Option<(usize, usize)> {
+    let n = if agentes { app.agents_done.len() + app.agents.len() } else { app.activity.len() };
+    if n == 0 {
+        let msg = if agentes { "todavía no lancé ningún subagente" } else { "todavía no usé ninguna herramienta" };
+        app.flash = Some((msg.into(), Instant::now()));
+        return None;
+    }
+    // Los agentes se leen desde el final, como una terminal; las herramientas, desde arriba.
+    Some((n - 1, if agentes { usize::MAX } else { 0 }))
+}
+
+/// Un paso de un subagente.
+pub enum Paso {
+    Herramienta(Activity),
+    Texto(String),
 }
 
 impl Agent {
@@ -132,10 +154,10 @@ pub enum Modal {
     Model { sel: usize },
     /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
     Estilo { sel: usize, antes: estilo::Estilo },
-    /// `/fondo`: igual que `/theme`, con los fondos de Baymax. Las filas 0 y 1 son
+    /// `/background`: igual que `/theme`, con los fondos de Baymax. Las filas 0 y 1 son
     /// los colores del sistema (opaco y transparente); las demás, `estilo::FONDOS`.
     Fondo { sel: usize, antes: (theme::Colores, u32) },
-    /// `/nucleo`: el color de la cara de Baymax.
+    /// `/core`: el color de la cara de Baymax.
     Color { sel: usize, antes: baymax::Modo },
     /// `/buddy`: como `/theme`, con quién vive en el núcleo.
     Buddy { sel: usize, antes: buddy::Buddy },
@@ -205,11 +227,13 @@ pub struct App {
     noise_floor: f32,
     /// Al arrancar o reiniciar, el núcleo se arma.
     booted: Instant,
-    /// `/calma`: menos movimiento en el núcleo.
+    /// `/calm`: menos movimiento en el núcleo.
     pub calm: bool,
     /// Markdown ya dibujado de cada mensaje, con el largo del texto y el ancho con que se hizo.
     /// A 60 fps no conviene volver a interpretar toda la conversación en cada cuadro.
     md_cache: std::cell::RefCell<Vec<Option<(usize, usize, Vec<md::Row>)>>>,
+    /// Los archivos que menciona cada respuesta, con el largo del texto del que salieron.
+    adjuntos_cache: std::cell::RefCell<Vec<Option<(usize, Vec<adjunto::Adjunto>)>>>,
     /// Imágenes pegadas que se van con el próximo mensaje.
     pub images: Vec<clip::Image>,
     /// Dónde está el cursor en la orden (en caracteres), y lo que ya enviaste.
@@ -236,6 +260,7 @@ pub struct App {
     tts_level: f32,
     /// Lo que suena en el equipo (cava), y la última vez que sonó algo.
     musica: musica::Musica,
+    surco: surco::Surco,
     music_at: std::cell::Cell<Option<Instant>>,
     /// Cómo se compone la pantalla (`/theme`).
     pub estilo: estilo::Estilo,
@@ -247,6 +272,10 @@ pub struct App {
     pub transcript: bool,
     /// Ctrl+G: el visor de herramientas abierto (cuál está elegida y cuánto se bajó su detalle).
     pub tools_view: Option<(usize, usize)>,
+    /// En Ctrl+G, la pestaña de subagentes en vez de la de herramientas (Tab alterna).
+    pub agents_tab: bool,
+    /// Hasta dónde se puede bajar el detalle de Ctrl+G (lo calcula el dibujo); PgUp parte de ahí.
+    pub tools_view_max: std::cell::Cell<usize>,
     /// ^O fuerza leer o volver al núcleo; un mensaje nuevo devuelve la decisión al dibujo.
     pub read_override: Option<bool>,
     /// Primera fila visible de la respuesta abierta, y qué mensaje era (al cambiar, vuelve arriba).
@@ -259,6 +288,9 @@ pub struct App {
     /// Miniaturas del chat: dónde va cada una en este cuadro (lo llena el dibujo del chat) y
     /// cuáles quedaron dibujadas (posición e identidad), para redibujar solo si se movieron.
     pub thumb_slots: std::cell::RefCell<Vec<(usize, u16, u16, u16, std::rc::Rc<miniatura::Thumb>)>>,
+    /// Los adjuntos del chat como las miniaturas: su fila, y dónde quedaron en pantalla para el clic.
+    pub file_slots: std::cell::RefCell<Vec<(usize, u16, u16, adjunto::Adjunto)>>,
+    pub file_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, adjunto::Adjunto)>>,
     /// (dónde, cuál, (desde, hasta, alto total) en filas de celda: el recorte visible).
     pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<miniatura::Thumb>, (u16, u16, u16))>>,
     thumbs_shown: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))>,
@@ -269,6 +301,8 @@ pub struct App {
     pub turn_from: usize,
     /// Subagentes, los hijos del núcleo.
     pub agents: Vec<Agent>,
+    /// Los subagentes que ya terminaron (los últimos 40), para Ctrl+G.
+    pub agents_done: Vec<Agent>,
     next_kid: u64,
 }
 
@@ -343,6 +377,21 @@ impl App {
                 let rows = md::render(text, width);
                 cache[i] = Some((text.len(), width, rows.clone()));
                 rows
+            }
+        }
+    }
+
+    pub fn adjuntos(&self, i: usize, text: &str) -> Vec<adjunto::Adjunto> {
+        let mut cache = self.adjuntos_cache.borrow_mut();
+        if cache.len() <= i {
+            cache.resize_with(i + 1, || None);
+        }
+        match &cache[i] {
+            Some((len, list)) if *len == text.len() => list.clone(),
+            _ => {
+                let list = adjunto::en_texto(text);
+                cache[i] = Some((text.len(), list.clone()));
+                list
             }
         }
     }
@@ -508,21 +557,46 @@ impl App {
                     last: None,
                     tools: 0,
                     ended: None,
+                    log: vec![],
                 });
             }
-            ClaudeEvent::AgentTool { tool, name, detail } => {
+            ClaudeEvent::AgentTool { tool, id, name, detail, input } => {
                 if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    a.log.push(Paso::Herramienta(Activity {
+                        id,
+                        name: name.clone(),
+                        detail: detail.clone(),
+                        status: ToolStatus::Running,
+                        started: Instant::now(),
+                        took: None,
+                        input,
+                        output: String::new(),
+                    }));
                     a.current = Some((name, detail));
                     a.tools += 1;
                     self.nucleo.kid_pulse(a.kid, false);
                 }
             }
-            ClaudeEvent::AgentToolResult { tool, is_error } => {
+            ClaudeEvent::AgentToolResult { tool, id, is_error, output } => {
                 if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    let paso = a.log.iter_mut().rev().find_map(|p| match p {
+                        Paso::Herramienta(t) if t.id == id => Some(t),
+                        _ => None,
+                    });
+                    if let Some(t) = paso {
+                        t.status = if is_error { ToolStatus::Err } else { ToolStatus::Ok };
+                        t.took = Some(t.started.elapsed());
+                        t.output = output;
+                    }
                     if let Some((name, detail)) = a.current.take() {
                         a.last = Some((name, detail, Instant::now()));
                     }
                     self.nucleo.kid_pulse(a.kid, is_error);
+                }
+            }
+            ClaudeEvent::AgentText { tool, text } => {
+                if let Some(a) = self.agents.iter_mut().find(|a| a.tool == tool && a.ended.is_none()) {
+                    a.log.push(Paso::Texto(text));
                 }
             }
             ClaudeEvent::AgentDone { tool, ok } => {
@@ -565,10 +639,12 @@ fn main() -> Result<()> {
     update::spawn(tx.clone());
 
     // `jarvis --resume <id>`: además de pasárselo al motor, se muestra la conversación.
-    let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::history(id));
+    let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::replay(id));
+    let (messages, activity, agents_done) = resumed.map(|r| (r.messages, r.activity, r.agents)).unwrap_or_default();
+    let turn_from = activity.len();
     let mut app = App {
-        messages: resumed.unwrap_or_default(),
-        activity: vec![],
+        messages,
+        activity,
         input: String::new(),
         scroll: 0,
         busy: false,
@@ -611,6 +687,7 @@ fn main() -> Result<()> {
         booted: Instant::now(),
         calm: std::env::var_os("JARVIS_CALM").is_some(),
         md_cache: Default::default(),
+        adjuntos_cache: Default::default(),
         images: vec![],
         cur: 0,
         historial: entrada::Historial::load(),
@@ -623,8 +700,8 @@ fn main() -> Result<()> {
         lector: habla::Lector::new(),
         voz_modo: match std::env::var("JARVIS_HABLA").as_deref() {
             _ if flotante => VozModo::Siempre,
-            Ok("siempre") => VozModo::Siempre,
-            Ok("nunca") | Ok("0") => VozModo::Nunca,
+            Ok("always") | Ok("siempre") => VozModo::Siempre,
+            Ok("never") | Ok("nunca") | Ok("0") => VozModo::Nunca,
             _ => VozModo::Auto,
         },
         spoken_next: false,
@@ -632,24 +709,30 @@ fn main() -> Result<()> {
         talking: false,
         tts_level: 0.0,
         musica: musica::Musica::spawn(),
+        surco: surco::Surco::spawn(),
         music_at: std::cell::Cell::new(None),
         estilo: estilo::cargar(),
         buddy: buddy::cargar(),
         reading: Default::default(),
         transcript: false,
         tools_view: None,
+        agents_tab: false,
+        tools_view_max: Default::default(),
         read_override: None,
         read_top: Default::default(),
         read_msg: std::cell::Cell::new(usize::MAX),
         sixel_cell: sixel_cell(),
         core_rect: Default::default(),
         thumb_slots: Default::default(),
+        file_slots: Default::default(),
+        file_targets: Default::default(),
         thumb_targets: Default::default(),
         thumbs_shown: vec![],
         sixel_shown: None,
         fondo_terminal: None,
-        turn_from: 0,
+        turn_from,
         agents: vec![],
+        agents_done,
         next_kid: 0,
     };
 
@@ -723,13 +806,19 @@ fn run(
     let mut teclado = teclado::Teclado::new();
     let mut theme_check = Instant::now();
     theme::poll();
+    // Los colores con que se dibujó el markdown guardado. /buddy, /background, /core y sus vistas
+    // previas los cambian sin pasar por `poll`, así que se compara en cada vuelta.
+    let mut colores = (theme::acento_u32(), theme::texto_u32(), theme::fondo_rgb());
     loop {
         // El tema puede cambiar en cualquier momento (Omarchy, Aether): se mira una vez por segundo.
         if theme_check.elapsed() >= Duration::from_secs(1) {
             theme_check = Instant::now();
-            if theme::poll() {
-                app.md_cache.borrow_mut().clear(); // el markdown guardado lleva los colores viejos
-            }
+            theme::poll();
+        }
+        let ahora = (theme::acento_u32(), theme::texto_u32(), theme::fondo_rgb());
+        if ahora != colores {
+            colores = ahora;
+            app.md_cache.borrow_mut().clear(); // el markdown guardado lleva los colores viejos
         }
         // La onda avanza aunque no haya audio, para que se vea viva.
         let lvl = if app.voice == VoiceState::Listening { voice::level_get(&app.level) } else { 0.0 };
@@ -739,6 +828,11 @@ fn run(
             hear(app, lvl);
         }
         flotante_tick(app, voice_tx);
+        // La música de surco calla mientras escucha, transcribe, piensa lo que va a decir o habla.
+        let quiet = matches!(app.voice, VoiceState::Listening | VoiceState::Transcribing)
+            || app.talking
+            || (app.busy && app.speak_turn);
+        app.surco.quiet(quiet);
         // La versión nueva se ofrece cuando no estorba: si apareciera mientras escribes, el
         // Enter de tu mensaje la aceptaría.
         if app.update.is_some()
@@ -754,7 +848,13 @@ fn run(
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
         // Los que terminaron se quedan unos segundos en ACTIVIDAD y luego se van.
-        app.agents.retain(|a| a.ended.is_none_or(|(t, _)| t.elapsed() < Duration::from_secs(4)));
+        // Los que terminaron hace rato dejan el núcleo, pero quedan para verlos en Ctrl+G.
+        let (viejos, vivos): (Vec<Agent>, Vec<Agent>) =
+            std::mem::take(&mut app.agents).into_iter().partition(|a| a.ended.is_some_and(|(t, _)| t.elapsed() >= Duration::from_secs(4)));
+        app.agents = vivos;
+        app.agents_done.extend(viejos);
+        let sobra = app.agents_done.len().saturating_sub(40);
+        app.agents_done.drain(..sobra);
         let (want, sig) = (app.state(), app.signals());
         app.nucleo.step(dt, want, &sig);
         // El teclado acompaña al núcleo: su estado, la voz y los eventos.
@@ -766,6 +866,8 @@ fn run(
         app.core_rect.set(None);
         app.thumb_slots.borrow_mut().clear();
         app.thumb_targets.borrow_mut().clear();
+        app.file_slots.borrow_mut().clear();
+        app.file_targets.borrow_mut().clear();
         // Lo que se dibujó en este cuadro: hace falta para reescribir el texto que tapaba una
         // miniatura que se movió.
         let snap = term.draw(|f| ui::draw(f, app))?.buffer.clone();
@@ -830,6 +932,7 @@ fn run(
                             app.modal = None;
                             app.messages.clear();
                             app.md_cache.borrow_mut().clear();
+                            app.adjuntos_cache.borrow_mut().clear();
                             app.activity.clear();
                             app.ctx_used = 0;
                             app.todos = (0, 0);
@@ -852,8 +955,14 @@ fn run(
                             app.booted = Instant::now();
                             app.nucleo.reboot();
                             app.agents.clear();
-                            app.messages = sessions::history(&id);
+                            // Chat, herramientas y subagentes de la sesión: Ctrl+G los vuelve a ver.
+                            let replay = sessions::replay(&id);
+                            app.messages = replay.messages;
+                            app.activity = replay.activity;
+                            app.agents_done = replay.agents;
+                            app.turn_from = app.activity.len();
                             app.md_cache.borrow_mut().clear();
+                            app.adjuntos_cache.borrow_mut().clear();
                             app.push(Role::System, format!("sesión {} retomada", &id[..8]));
                             term.clear()?;
                         }
@@ -931,24 +1040,27 @@ fn handle_key(
     app.sel = None;
     app.last_activity = Instant::now();
 
-    // Ctrl+G: qué hizo cada herramienta, entera. Mientras está abierto se lleva las flechas.
+    // Ctrl+G: qué hizo cada herramienta, entera, y en la otra pestaña qué hizo cada subagente.
+    // Mientras está abierto se lleva las flechas.
     if ctrl && k.code == KeyCode::Char('g') {
         app.tools_view = match app.tools_view {
             Some(_) => None,
-            None if app.activity.is_empty() => {
-                app.flash = Some(("todavía no usé ninguna herramienta".into(), Instant::now()));
-                None
-            }
-            None => Some((app.activity.len() - 1, 0)),
+            None => abrir_vista(app, app.agents_tab),
         };
         return Flow::Go;
     }
+    if app.tools_view.is_some() && k.code == KeyCode::Tab {
+        app.agents_tab = !app.agents_tab;
+        app.tools_view = abrir_vista(app, app.agents_tab).or(app.tools_view);
+        return Flow::Go;
+    }
     if let Some((sel, scroll)) = app.tools_view.as_mut() {
-        let n = app.activity.len().max(1);
+        let n = if app.agents_tab { app.agents_done.len() + app.agents.len() } else { app.activity.len() }.max(1);
+        let arriba = if app.agents_tab { usize::MAX } else { 0 };
         match k.code {
-            KeyCode::Up => (*sel, *scroll) = (sel.saturating_sub(1), 0),
-            KeyCode::Down => (*sel, *scroll) = ((*sel + 1).min(n - 1), 0),
-            KeyCode::PageUp => *scroll = scroll.saturating_sub(10),
+            KeyCode::Up => (*sel, *scroll) = (sel.saturating_sub(1), arriba),
+            KeyCode::Down => (*sel, *scroll) = ((*sel + 1).min(n - 1), arriba),
+            KeyCode::PageUp => *scroll = (*scroll).min(app.tools_view_max.get()).saturating_sub(10),
             KeyCode::PageDown => *scroll += 10,
             KeyCode::Home => *scroll = 0,
             KeyCode::End => *scroll = usize::MAX,
@@ -1093,10 +1205,10 @@ fn handle_key(
                     return Flow::Go;
                 }
                 "/restart" => return Flow::Restart,
-                "/voz" => {
+                "/voice" => {
                     app.voz_modo = match (arg.trim(), app.voz_modo) {
-                        ("siempre", _) => VozModo::Siempre,
-                        ("nunca", _) | ("no", _) => VozModo::Nunca,
+                        ("always", _) | ("on", _) => VozModo::Siempre,
+                        ("never", _) | ("off", _) => VozModo::Nunca,
                         ("auto", _) => VozModo::Auto,
                         (_, VozModo::Auto) => VozModo::Siempre,
                         (_, VozModo::Siempre) => VozModo::Nunca,
@@ -1113,13 +1225,13 @@ fn handle_key(
                     app.flash = Some((msg.into(), Instant::now()));
                     return Flow::Go;
                 }
-                "/calma" => {
+                "/calm" => {
                     app.calm = !app.calm;
                     let msg = if app.calm { "núcleo en calma" } else { "núcleo con todo su movimiento" };
                     app.flash = Some((msg.into(), Instant::now()));
                     return Flow::Go;
                 }
-                "/theme" | "/themes" | "/tema" | "/estilo" => {
+                "/theme" | "/themes" => {
                     theme(app, arg.trim());
                     return Flow::Go;
                 }
@@ -1127,12 +1239,17 @@ fn handle_key(
                     elegir_buddy(app, arg.trim());
                     return Flow::Go;
                 }
-                "/fondo" => {
+                "/background" | "/bg" => {
                     fondo(app, arg.trim());
                     return Flow::Go;
                 }
-                "/nucleo" | "/núcleo" => {
+                "/core" => {
                     color(app, arg.trim());
+                    return Flow::Go;
+                }
+                "/agents" => {
+                    app.agents_tab = true;
+                    app.tools_view = abrir_vista(app, true);
                     return Flow::Go;
                 }
                 "/quit" => return Flow::Quit,
@@ -1217,6 +1334,18 @@ fn on_mouse(app: &mut App, m: crossterm::event::MouseEvent) {
     let dragging = app.sel.as_ref().is_some_and(|s| s.pointer.is_some());
     match m.kind {
         MouseEventKind::Down(MouseButton::Left) => {
+            let hit = app.file_targets.borrow().iter().find(|(r, _)| r.contains(ratatui::layout::Position::new(m.column, m.row))).map(|(_, a)| a.clone());
+            if let Some(a) = hit {
+                app.sel = None;
+                let msg = if adjunto::copiar(&a) {
+                    app.nucleo.fire(Gesto::Copy);
+                    "archivo copiado · pégalo donde quieras".to_string()
+                } else {
+                    "no pude copiar el archivo al portapapeles".to_string()
+                };
+                app.flash = Some((msg, Instant::now()));
+                return;
+            }
             app.sel = inside.then(|| {
                 let p = app.view.borrow().locate(at);
                 select::Selection { anchor: p, head: p, pointer: Some(at) }
@@ -1293,6 +1422,7 @@ fn copied(app: &mut App, text: &str) {
 fn clear(app: &mut App) -> Flow {
     app.messages.clear();
     app.md_cache.borrow_mut().clear();
+    app.adjuntos_cache.borrow_mut().clear();
     app.activity.clear();
     app.turn_from = 0;
     Flow::Redraw
@@ -1537,7 +1667,7 @@ fn set_buddy(app: &mut App, b: buddy::Buddy) {
     app.flash = Some((msg, Instant::now()));
 }
 
-/// `/fondo`: el fondo de Baymax. Sin argumento, la lista con vista previa; con uno
+/// `/background`: el fondo de Baymax. Sin argumento, la lista con vista previa; con uno
 /// (`3`, `drum`, `#301830`) lo aplica.
 fn fondo(app: &mut App, arg: &str) {
     if app.buddy.paleta().is_none() {
@@ -1558,8 +1688,8 @@ fn fondo(app: &mut App, arg: &str) {
     // en el 3.
     let q = arg.trim().to_lowercase();
     match q.as_str() {
-        "1" | "sistema" | "del sistema" | "omarchy" => return set_colores(app, theme::Colores::Sistema),
-        "2" | "transparente" => return set_colores(app, theme::Colores::Transparente),
+        "1" | "system" | "omarchy" => return set_colores(app, theme::Colores::Sistema),
+        "2" | "transparent" => return set_colores(app, theme::Colores::Transparente),
         _ => {}
     }
     let q = match q.parse::<usize>() {
@@ -1570,12 +1700,12 @@ fn fondo(app: &mut App, arg: &str) {
         Some(v) => set_fondo(app, v),
         None => {
             let ids: Vec<&str> = estilo::FONDOS.iter().map(|f| f.0).collect();
-            app.push(Role::Error, format!("no conozco el fondo Baymax «{arg}» · hay sistema, transparente, {}, del 1 al {} o un #rrggbb", ids.join(", "), ids.len() + FILAS_SISTEMA));
+            app.push(Role::Error, format!("no conozco el fondo Baymax «{arg}» · hay system, transparent, {}, del 1 al {} o un #rrggbb", ids.join(", "), ids.len() + FILAS_SISTEMA));
         }
     }
 }
 
-/// En `/fondo`, las filas de los colores del sistema (opaco y transparente), antes de los fondos.
+/// En `/background`, las filas de los colores del sistema (opaco y transparente), antes de los fondos.
 const FILAS_SISTEMA: usize = 2;
 
 /// Los colores del tema del sistema: cambian cuando cambia el tema de Omarchy.
@@ -1600,7 +1730,7 @@ fn set_fondo(app: &mut App, v: u32) {
     app.flash = Some((msg, Instant::now()));
 }
 
-/// `/nucleo`: sin argumento, la lista con vista previa; con uno (`auto`, `rosa`, `#ffd84a`) lo
+/// `/core`: sin argumento, la lista con vista previa; con uno (`auto`, `rosa`, `#ffd84a`) lo
 /// aplica.
 fn color(app: &mut App, arg: &str) {
     if app.buddy.paleta().is_none() {
@@ -1942,6 +2072,8 @@ fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut 
         if target.is_none() {
             app.thumb_slots.borrow_mut().clear();
             app.thumb_targets.borrow_mut().clear();
+            app.file_slots.borrow_mut().clear();
+            app.file_targets.borrow_mut().clear();
             term.draw(|f| ui::draw(f, app))?;
         }
     }
@@ -1960,9 +2092,15 @@ fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, frames: &mut 
     // dentro de una actualización sincronizada (modo 2026) borrar y dibujar se ven juntos.
     let mut seq = String::with_capacity(img.len() + 32 * r.height as usize);
     seq.push_str("\x1b[?2026h\x1b7");
+    // ECH borra con el fondo activo: con paleta propia (Baymax) tiene que ser el que Iris pinta en
+    // el resto de la pantalla, o el panel queda como un recuadro del fondo de la terminal.
+    if let Some(ratatui::style::Color::Rgb(r_, g_, b_)) = theme::fondo() {
+        seq.push_str(&format!("\x1b[48;2;{r_};{g_};{b_}m"));
+    }
     for y in r.y..r.bottom() {
         seq.push_str(&format!("\x1b[{};{}H\x1b[{}X", y + 1, r.x + 1, r.width));
     }
+    seq.push_str("\x1b[49m");
     seq.push_str(&format!("\x1b[{};{}H", r.y + 1, r.x + 1));
     seq.push_str(&img);
     seq.push_str("\x1b8\x1b[?2026l");

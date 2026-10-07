@@ -16,12 +16,13 @@ const LOCAL: &[(&str, &str)] = &[
     ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
     ("clear", "conversación nueva; la anterior queda en /resume (^L solo limpia la pantalla)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
-    ("calma", "menos movimiento en el núcleo (alterna)"),
-    ("voz", "cuándo contesta hablando: auto (si le hablas), siempre o nunca"),
+    ("calm", "menos movimiento en el núcleo (alterna)"),
+    ("voice", "cuándo contesta hablando: auto (si le hablas), always o never"),
     ("theme", "elegir el estilo de la pantalla · /theme cabina"),
     ("buddy", "quién vive en el núcleo: original o Baymax · /buddy baymax"),
-    ("fondo", "fondos de Baymax (con /buddy baymax) · /fondo sistema · /fondo defecto"),
-    ("nucleo", "color de la cara de Baymax en el núcleo · /nucleo blanco"),
+    ("background", "fondos de Baymax (con /buddy baymax) · /background system · /background defecto"),
+    ("core", "color de la cara de Baymax en el núcleo · /core blanco"),
+    ("agents", "qué hace cada subagente, paso a paso (también ^G y Tab)"),
     ("quit", "salir de Jarvis (^C)"),
 ];
 

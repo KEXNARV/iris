@@ -97,7 +97,7 @@ pub fn transparente() -> bool {
     baymax() && colores() == Colores::Transparente
 }
 
-/// Pasa a otros colores solo en pantalla (la vista previa de `/fondo`); `guardar_colores`
+/// Pasa a otros colores solo en pantalla (la vista previa de `/background`); `guardar_colores`
 /// además lo deja escrito.
 pub fn probar_colores(c: Colores) {
     if poner(c) {
@@ -111,8 +111,10 @@ pub fn guardar_colores(c: Colores) -> std::io::Result<()> {
 }
 
 /// ¿El fondo es claro? (un tema claro de Aether)
+/// ¿Fondo claro? Solo cuenta con paleta propia: sin ella el fondo de la selección es el azul
+/// oscuro de siempre y el texto encima tiene que seguir siendo blanco.
 pub fn claro() -> bool {
-    luz(BG.load(Ordering::Relaxed)) > 0.4
+    baymax() && luz(BG.load(Ordering::Relaxed)) > 0.4
 }
 
 /// Un color con nombre del tema (`red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`,
@@ -190,7 +192,7 @@ pub fn fondo_rgb() -> u32 {
     BG.load(Ordering::Relaxed)
 }
 
-/// Cambia el fondo solo en pantalla (la vista previa de `/fondo`).
+/// Cambia el fondo solo en pantalla (la vista previa de `/background`).
 pub fn probar_fondo(v: u32) {
     BG.store(v, Ordering::Relaxed);
 }
@@ -216,7 +218,12 @@ pub fn acento_u32() -> u32 {
 /// Escribe `clave = "valor"` en la paleta del buddy (sin paleta, no hace nada).
 pub fn guardar(clave: &str, valor: &str) -> std::io::Result<()> {
     let Some(p) = PALETA.lock().unwrap().clone() else { return Ok(()) };
-    let text = std::fs::read_to_string(&p).unwrap_or_default();
+    // Sin archivo todavía se parte de la paleta de fábrica: si no, el archivo quedaba sin
+    // `accent`, `apply` lo descartaba al arrancar y el fondo elegido se perdía.
+    let text = std::fs::read_to_string(&p).unwrap_or_else(|_| crate::baymax::PALETA.to_string());
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
     let nueva = con_clave(&text, clave, valor);
     std::fs::write(&p, &nueva)?;
     // Lo leído es la paleta solo si los colores salen de ella.
@@ -361,11 +368,33 @@ pub fn accent_darker(f: f64) -> [f64; 3] {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    /// Los colores son globales: las pruebas que los tocan se turnan.
+    pub(crate) static TURNO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+
+    /// El fondo elegido con /background sobrevive al reinicio aunque no hubiera paleta guardada.
+    #[test]
+    fn fondo_sin_paleta_previa_se_conserva() {
+        let _turno = TURNO.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("jarvis-fondo-{}", std::process::id()));
+        let file = dir.join("colores-baymax.toml");
+        let _ = std::fs::remove_dir_all(&dir);
+        usar(Some(file.clone()));
+        guardar_fondo(0x10233F).unwrap();
+        // Lo que pasa al arrancar de nuevo: soltar la paleta y volver a tomarla del disco.
+        usar(None);
+        usar(Some(file.clone()));
+        assert_eq!(fondo_rgb(), 0x10233F, "{}", std::fs::read_to_string(&file).unwrap());
+        usar(None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]
     fn lee_el_acento_del_tema() {
+        let _turno = TURNO.lock().unwrap_or_else(|e| e.into_inner());
         let toml = "mode = \"dark\"\naccent = \"#e68e0d\"\nforeground = \"#bebebe\"\nbackground = \"#121212\"\n";
         assert_eq!(parse_hex("#e68e0d"), Some(0xe68e0d));
         assert_eq!(parse_hex("e68e0d"), None);
