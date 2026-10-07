@@ -53,11 +53,14 @@ fn limpiar(f: &mut Frame, area: Rect) {
 /// Ctrl+G: la lista de herramientas a la izquierda y la elegida entera a la derecha.
 fn tools_overlay(f: &mut Frame, app: &App) {
     use crate::ToolStatus;
+    if app.agents_tab {
+        return agents_overlay(f, app);
+    }
     let Some((sel, scroll)) = app.tools_view else { return };
     let a = f.area();
     let area = Rect { x: a.x + 2, y: a.y + 1, width: a.width.saturating_sub(4), height: a.height.saturating_sub(2) };
     limpiar(f, area);
-    let block = panel("HERRAMIENTAS · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
+    let block = panel("HERRAMIENTAS · tab agentes · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
     let inner = block.inner(area);
     f.render_widget(block, area);
     let list_w = (inner.width / 3).clamp(28, 44);
@@ -167,6 +170,138 @@ fn tools_overlay(f: &mut Frame, app: &App) {
     }
     let dh = detail.height as usize;
     let max = lines.len().saturating_sub(dh);
+    app.tools_view_max.set(max);
+    let top = scroll.min(max);
+    let shown: Vec<Line> = lines.into_iter().skip(top).take(dh).collect();
+    f.render_widget(Paragraph::new(shown), detail);
+    if top < max {
+        let tag = Span::styled(format!(" ↓ pgdn · {}% ", (top + dh) * 100 / (max + dh).max(1)), Style::new().fg(Color::Black).bg(theme::dim()));
+        let r = Rect { y: detail.bottom().saturating_sub(1), height: 1, ..detail };
+        f.render_widget(Paragraph::new(tag).alignment(Alignment::Right), r);
+    }
+}
+
+/// Ctrl+G, pestaña de subagentes: la lista a la izquierda y, del elegido, todo lo que hizo en
+/// orden (herramientas con su salida y lo que escribió) y al final lo que respondió.
+fn agents_overlay(f: &mut Frame, app: &App) {
+    use crate::{Paso, ToolStatus};
+    let Some((sel, scroll)) = app.tools_view else { return };
+    let a = f.area();
+    let area = Rect { x: a.x + 2, y: a.y + 1, width: a.width.saturating_sub(4), height: a.height.saturating_sub(2) };
+    limpiar(f, area);
+    let block = panel("AGENTES · tab herramientas · ↑↓ elegir · pgup/pgdn recorrer · esc cierra");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    let list_w = (inner.width / 3).clamp(28, 44);
+    let [list, _, detail] =
+        Layout::horizontal([Constraint::Length(list_w), Constraint::Length(2), Constraint::Min(20)]).areas(inner);
+
+    // Los terminados primero y los vivos al final, como llegaron.
+    let todos: Vec<&crate::Agent> = app.agents_done.iter().chain(app.agents.iter()).collect();
+    let n = todos.len();
+    let sel = sel.min(n.saturating_sub(1));
+    let h = list.height as usize;
+    let first = (sel + 1).saturating_sub(h);
+    let rows: Vec<Line> = todos
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(h)
+        .map(|(i, ag)| {
+            let (icon, col) = match ag.ended {
+                None => ("◐", ag.state().color()),
+                Some((_, true)) => ("✓", GREEN),
+                Some((_, false)) => ("✗", RED),
+            };
+            let secs = ag.ended.map_or_else(|| ag.started.elapsed(), |(t, _)| t.duration_since(ag.started)).as_secs_f64();
+            let label = truncate(&ag.description, (list.width as usize).saturating_sub(10));
+            let st = if i == sel { Style::new().fg(Color::Black).bg(theme::accent()) } else { Style::new().fg(theme::text()) };
+            Line::from(vec![
+                Span::styled(format!("{icon} "), if i == sel { st } else { Style::new().fg(col) }),
+                Span::styled(format!("{label:<w$}", w = (list.width as usize).saturating_sub(9)), st),
+                Span::styled(format!("{secs:>5.0}s"), if i == sel { st } else { Style::new().fg(theme::dim()) }),
+            ])
+        })
+        .collect();
+    f.render_widget(Paragraph::new(rows), list);
+
+    let Some(ag) = todos.get(sel) else { return };
+    let w = detail.width as usize;
+    let mut lines: Vec<Line> = vec![];
+    let head = |s: &str| Line::from(Span::styled(s.to_string(), Style::new().fg(theme::accent()).bold()));
+    let push_wrapped = |lines: &mut Vec<Line>, text: &str, st: Style, prefix: &str| {
+        for raw in text.lines() {
+            let raw = raw.replace('\t', "    ");
+            for piece in wrap(&raw, w.saturating_sub(prefix.chars().count()).max(10)) {
+                lines.push(Line::from(Span::styled(format!("{prefix}{piece}"), st)));
+            }
+        }
+    };
+    let (estado, col) = match ag.ended {
+        None => (ag.state().label().to_lowercase(), ag.state().color()),
+        Some((_, true)) => ("terminó bien".to_string(), GREEN),
+        Some((_, false)) => ("terminó con error".to_string(), RED),
+    };
+    let secs = ag.ended.map_or_else(|| ag.started.elapsed(), |(t, _)| t.duration_since(ag.started)).as_secs_f64();
+    lines.push(Line::from(Span::styled(ag.description.clone(), Style::new().fg(theme::text()).bold())));
+    lines.push(Line::from(vec![
+        Span::styled(format!("{}  ·  ", if ag.kind.is_empty() { "agente" } else { &ag.kind }), Style::new().fg(theme::faint())),
+        Span::styled(estado, Style::new().fg(col)),
+        Span::styled(format!("  ·  {secs:.0}s  ·  {} herramientas", ag.tools), Style::new().fg(theme::faint())),
+    ]));
+    // Lo que se le pidió: la entrada de la llamada a Agent en el hilo principal.
+    let llamada = app.activity.iter().find(|t| t.id == ag.tool);
+    if let Some(prompt) = llamada.and_then(|t| t.input.get("prompt")).and_then(|v| v.as_str()) {
+        lines.push(Line::default());
+        lines.push(head("ENCARGO"));
+        push_wrapped(&mut lines, prompt, Style::new().fg(theme::faint()), "");
+    }
+    lines.push(Line::default());
+    lines.push(head("PASOS"));
+    if ag.log.is_empty() {
+        lines.push(Line::from(Span::styled("todavía no hizo nada…", Style::new().fg(theme::dim()))));
+    }
+    for paso in &ag.log {
+        match paso {
+            Paso::Texto(t) => {
+                lines.push(Line::default());
+                push_wrapped(&mut lines, t.trim(), Style::new().fg(theme::text()), "");
+            }
+            Paso::Herramienta(t) => {
+                let (icon, c) = match t.status {
+                    ToolStatus::Running => ("◐", WARM),
+                    ToolStatus::Ok => ("✓", GREEN),
+                    ToolStatus::Err => ("✗", RED),
+                };
+                let secs = t.took.unwrap_or_else(|| t.started.elapsed()).as_secs_f64();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{icon} "), Style::new().fg(c)),
+                    Span::styled(t.name.clone(), Style::new().fg(theme::text()).bold()),
+                    Span::styled(format!(" {}", truncate(&t.detail, w.saturating_sub(t.name.len() + 12))), Style::new().fg(theme::faint())),
+                    Span::styled(format!("  {secs:.1}s"), Style::new().fg(theme::dim())),
+                ]));
+                // De la salida, las primeras líneas: lo entero está en la pestaña de herramientas
+                // de un agente cuando se abra, aquí basta para seguirle el hilo.
+                let out: Vec<&str> = t.output.lines().filter(|l| !l.trim().is_empty()).collect();
+                let st = Style::new().fg(if t.status == ToolStatus::Err { RED } else { theme::dim() });
+                for l in out.iter().take(4) {
+                    lines.push(Line::from(Span::styled(format!("  │ {}", truncate(l, w.saturating_sub(4))), st)));
+                }
+                if out.len() > 4 {
+                    lines.push(Line::from(Span::styled(format!("  │ … {} líneas más", out.len() - 4), Style::new().fg(theme::dim()))));
+                }
+            }
+        }
+    }
+    if let Some(t) = llamada.filter(|t| t.status != ToolStatus::Running && !t.output.trim().is_empty()) {
+        lines.push(Line::default());
+        lines.push(head("RESPUESTA"));
+        push_wrapped(&mut lines, &t.output, Style::new().fg(theme::text()), "");
+    }
+    let dh = detail.height as usize;
+    let max = lines.len().saturating_sub(dh);
+    // Abre en el final (scroll = MAX) y lo sigue mientras el agente trabaja.
+    app.tools_view_max.set(max);
     let top = scroll.min(max);
     let shown: Vec<Line> = lines.into_iter().skip(top).take(dh).collect();
     f.render_widget(Paragraph::new(shown), detail);
@@ -485,6 +620,23 @@ fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'static>, usize, bo
                         rows.extend(md);
                     }
                 }
+                // Los archivos que entrega: un clic los copia al portapapeles.
+                let adjuntos = app.adjuntos(i, &m.text);
+                if !adjuntos.is_empty() {
+                    rows.push(blank());
+                }
+                let x = if voz == Voz::Guion { GUION } else { pad };
+                for a in adjuntos {
+                    let label = truncate(&format!(" ⎘ {} ", a.label()), width.saturating_sub(18).max(8));
+                    let w = label.chars().count() + 1 + "clic para copiar".len();
+                    let line = Line::from(vec![
+                        Span::raw(" ".repeat(x)),
+                        Span::styled(label, Style::new().fg(Color::Black).bg(theme::accent()).bold()),
+                        Span::styled(" clic para copiar", Style::new().fg(theme::faint())),
+                    ]);
+                    app.file_slots.borrow_mut().push((rows.len(), x as u16, w as u16, a));
+                    rows.push((line, usize::MAX, false));
+                }
             }
             Role::System => {
                 for (k, (l, cont)) in wrap_cont(&m.text, width).into_iter().enumerate() {
@@ -600,6 +752,13 @@ fn render_chat(f: &mut Frame, inner: Rect, app: &App, rows: Vec<(Line<'static>, 
                 let crop = ((top - row) as u16, (bottom - row) as u16, *h);
                 app.thumb_targets.borrow_mut().push((r, t.clone(), crop));
             }
+        }
+    }
+
+    for (row, x, w, a) in app.file_slots.borrow().iter() {
+        if *row >= start && *row < start + h {
+            let r = Rect { x: inner.x + x, y: inner.y + (row - start) as u16, width: (*w).min(inner.width.saturating_sub(*x)), height: 1 };
+            app.file_targets.borrow_mut().push((r, a.clone()));
         }
     }
 
@@ -1526,17 +1685,7 @@ fn cine(f: &mut Frame, app: &App) {
     let reading = !hear && pick.is_some() && app.read_override.unwrap_or(!app.busy && long);
     app.reading.set(reading);
 
-    let rails = inner.width >= 110;
-    let (center_w, rail_w) = if reading && rails {
-        // Leyendo, el centro se lleva el ancho y los rieles se angostan.
-        let rail = (inner.width / 5).clamp(30, 40);
-        (inner.width - 2 * (rail + 3), rail)
-    } else if rails {
-        let c = (inner.width * 40 / 100).clamp(52, 64);
-        (c, ((inner.width - c) / 2).saturating_sub(4).min(44))
-    } else {
-        (inner.width.min(if reading { 110 } else { 72 }), 0)
-    };
+    let center_w = inner.width.min(if reading { 110 } else { 72 });
     let center = Rect { x: inner.x + (inner.width - center_w) / 2, width: center_w, ..inner };
 
     // Centro: núcleo, estado, subtítulo (o la respuesta entera) y la orden.
@@ -1570,14 +1719,25 @@ fn cine(f: &mut Frame, app: &App) {
     }
 
     if let (true, Some((i, m))) = (reading, pick) {
-        read_panel(f, caption, app, i, &m.text);
+        // Los archivos que entrega van en la última fila, debajo de la respuesta.
+        let files = app.adjuntos(i, &m.text);
+        if files.is_empty() {
+            read_panel(f, caption, app, i, &m.text);
+        } else {
+            read_panel(f, Rect { height: caption.height.saturating_sub(1), ..caption }, app, i, &m.text);
+            chips(f, Rect { y: caption.bottom().saturating_sub(1), height: 1, ..caption }, app, &files);
+        }
     }
     let mut subtitle: Option<crate::select::View> = None;
     // El subtítulo: lo último que se dijo, con el final a la vista mientras llega.
-    let last = app.messages.iter().rev().find(|m| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none());
+    let last = app.messages.iter().enumerate().rev().find(|(_, m)| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none());
     let last = if reading { None } else { last };
-    let cap_lines = if hear { 2 } else { (caption.height as usize).saturating_sub(1) };
-    if let Some(m) = last {
+    let files = match last {
+        Some((i, m)) if m.role == Role::Assistant && !hear => app.adjuntos(i, &m.text),
+        _ => vec![],
+    };
+    let cap_lines = if hear { 2 } else { (caption.height as usize).saturating_sub(1 + (!files.is_empty()) as usize).max(1) };
+    if let Some((_, m)) = last {
         let text = plain(&m.text);
         let ls = wrap(&text, caption.width.saturating_sub(4) as usize);
         let tail = &ls[ls.len().saturating_sub(cap_lines)..];
@@ -1598,6 +1758,10 @@ fn cine(f: &mut Frame, app: &App) {
             view.rows.push(crate::select::Row { text: format!("{}{l}", " ".repeat(pad)), skip: pad, cont: i > 0 });
         }
         subtitle = Some(view);
+        if !files.is_empty() {
+            let row = Rect { y: caption.y + 1 + tail.len() as u16, height: 1, ..caption };
+            chips(f, row, app, &files);
+        }
     } else if !reading {
         let buf = f.buffer_mut();
         put_center(buf, caption, caption.y + 1, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold());
@@ -1670,15 +1834,26 @@ fn cine(f: &mut Frame, app: &App) {
         }
     }
 
-    if rails {
-        let left = Rect { x: inner.x, width: rail_w, height: orden.bottom() - inner.y, ..inner };
-        let right = Rect { x: inner.right() - rail_w, width: rail_w, height: orden.bottom() - inner.y, ..inner };
-        cine_history(f.buffer_mut(), left, app);
-        cine_now(f.buffer_mut(), right, app, t, tone);
-    }
-
     if !hear {
         draw_modal(f, Rect { y: orden.y, height: 1, ..center }, app);
+    }
+}
+
+/// Los archivos que entregó Claude en una fila, centrados: un clic copia cada uno.
+fn chips(f: &mut Frame, r: Rect, app: &App, files: &[crate::adjunto::Adjunto]) {
+    let max = (r.width as usize / files.len().max(1)).saturating_sub(2).max(8);
+    let labels: Vec<String> = files.iter().map(|a| truncate(&format!(" ⎘ {} ", a.label()), max)).collect();
+    let total: usize = labels.iter().map(|l| l.width() + 2).sum::<usize>().saturating_sub(2);
+    let mut x = r.x + (r.width as usize).saturating_sub(total) as u16 / 2;
+    let buf = f.buffer_mut();
+    for (a, l) in files.iter().zip(labels) {
+        let w = (l.width() as u16).min(r.right().saturating_sub(x));
+        if w == 0 {
+            break;
+        }
+        put(buf, x, r.y, &l, Style::new().fg(Color::Black).bg(theme::accent()).bold(), w);
+        app.file_targets.borrow_mut().push((Rect { x, y: r.y, width: w, height: 1 }, a.clone()));
+        x += w + 2;
     }
 }
 
@@ -1737,130 +1912,6 @@ fn plain(s: &str) -> String {
         // Negrita y cursiva (** y *); los guiones bajos se quedan: son parte de nombres como ghub_palette.
         .replace('*', "")
         .replace('`', "")
-}
-
-/// Riel izquierdo: lo dicho, apilado desde abajo y apagándose hacia arriba.
-fn cine_history(buf: &mut Buffer, r: Rect, app: &App) {
-    let x1 = r.right() - 1;
-    section(buf, r.x, x1, r.y, "HISTORIAL");
-    let w = r.width.saturating_sub(1) as usize;
-    let msgs: Vec<_> = app
-        .messages
-        .iter()
-        .filter(|m| matches!(m.role, Role::User | Role::Assistant) && m.waiting.is_none())
-        .collect();
-    let bottom = r.bottom().saturating_sub(3);
-    if msgs.is_empty() {
-        put(buf, r.x, r.y + 2, "todavía no hay conversación", Style::new().fg(theme::dim()), r.width);
-    }
-    // pgup/pgdn recorren el historial: cada 10 líneas de desplazamiento, 2 mensajes.
-    let skip = (app.scroll / 5).min(msgs.len().saturating_sub(1));
-    let mut y = bottom;
-    for (k, m) in msgs.iter().rev().skip(skip).enumerate() {
-        let mut ls = wrap(&plain(&m.text), w);
-        if ls.len() > 2 {
-            ls.truncate(2);
-            ls[1] = format!("{}…", truncate(&ls[1], w.saturating_sub(1)));
-        }
-        let h = ls.len() as u16 + 1;
-        if y < r.y + 2 + h {
-            break;
-        }
-        // Lo más nuevo se lee claro; hacia arriba se va apagando.
-        let fade = (k as f64 / 4.0).min(1.0);
-        let tone = mix(theme::text(), theme::dim(), fade);
-        let (name, wc) = match m.role {
-            Role::User => ("tú", if k == 0 { theme::text() } else { tone }),
-            _ => ("jarvis", if k == 0 { theme::accent() } else { tone }),
-        };
-        let top = y + 1 - h;
-        put(buf, r.x, top, name, Style::new().fg(wc).bold(), r.width);
-        for (j, l) in ls.iter().enumerate() {
-            put(buf, r.x + 1, top + 1 + j as u16, l, Style::new().fg(tone), r.width.saturating_sub(1));
-        }
-        y = top.saturating_sub(2);
-    }
-    let x = put(buf, r.x, r.bottom() - 1, "^T", Style::new().fg(theme::accent()), 2);
-    let what = if skip > 0 { format!("ver todo · {skip} más recientes ocultos") } else { "ver todo".into() };
-    put(buf, x + 1, r.bottom() - 1, &what, Style::new().fg(theme::dim()), r.width.saturating_sub(3));
-}
-
-/// Riel derecho: lo que está haciendo ahora, el turno, la línea de tiempo, el plan y la cola.
-fn cine_now(buf: &mut Buffer, r: Rect, app: &App, t: f64, tone: Color) {
-    let x1 = r.right() - 1;
-    let mut y = r.y;
-    section(buf, r.x, x1, y, "AHORA");
-    y += 2;
-    match app.current_tool() {
-        Some(a) => {
-            let (icon, c) = act_icon(a, t);
-            put(buf, r.x, y, icon, Style::new().fg(c).bold(), 1);
-            put(buf, r.x + 2, y, &a.name, Style::new().fg(theme::text()).bold(), r.width / 2);
-            put_right(buf, x1, y, &format!("{:.1}s", act_secs(a)), Style::new().fg(theme::accent()));
-            put(buf, r.x + 2, y + 1, &a.detail, Style::new().fg(theme::faint()), r.width.saturating_sub(2));
-            if matches!(app.modal, Some(Modal::Ask(_))) {
-                put(buf, r.x + 2, y + 2, "espera tu permiso", Style::new().fg(tone), r.width);
-            }
-        }
-        None => {
-            let what = match app.state() {
-                State::Thinking => "pensando",
-                State::Speaking => "respondiendo",
-                State::Listening | State::NoVoice => "escuchando",
-                State::Transcribing => "transcribiendo",
-                State::Offline => "motor detenido · ^R",
-                _ if app.busy => "trabajando",
-                _ => "nada en curso",
-            };
-            put(buf, r.x, y, if app.busy { SPIN[(t * 8.0) as usize % 4] } else { "·" }, Style::new().fg(tone), 1);
-            put(buf, r.x + 2, y, what, Style::new().fg(if app.busy { theme::text() } else { theme::faint() }), r.width);
-            put(buf, r.x + 2, y + 1, &voice_label(app), Style::new().fg(theme::dim()), r.width);
-        }
-    }
-    y += 4;
-
-    let acts = turn_acts(app);
-    section(buf, r.x, x1, y, "ESTE TURNO");
-    y += 2;
-    let room = 5usize;
-    if acts.is_empty() {
-        put(buf, r.x, y, "sin herramientas todavía", Style::new().fg(theme::dim()), r.width);
-        y += 1;
-    }
-    for a in acts.iter().rev().take(room).collect::<Vec<_>>().into_iter().rev() {
-        let (icon, c) = act_icon(a, t);
-        put(buf, r.x, y, icon, Style::new().fg(c).bold(), 1);
-        let x = put(buf, r.x + 2, y, &a.name, Style::new().fg(theme::text()).bold(), 10);
-        let secs = format!("{:.1}s", act_secs(a));
-        put(buf, x + 1, y, &a.detail, Style::new().fg(theme::dim()), x1.saturating_sub(x + 2 + secs.len() as u16));
-        let sc = if a.status == ToolStatus::Err { RED } else { theme::dim() };
-        put_right(buf, x1, y, &secs, Style::new().fg(sc));
-        y += 1;
-    }
-    y += 1;
-    timeline(buf, Rect { x: r.x, y, width: r.width, height: 1 }, acts, false);
-    y += 3;
-
-    if app.todos.0 > 0 && y + 2 < r.bottom() {
-        section(buf, r.x, x1, y, &format!("PLAN {}/{}", app.todos.1, app.todos.0));
-        y += 2;
-        meter(buf, r.x, y, r.width.min(30), app.todos.1 as f64 / app.todos.0 as f64, tone);
-        y += 3;
-    }
-
-    let cola: Vec<_> = app.messages.iter().filter(|m| m.waiting.is_some()).collect();
-    if !cola.is_empty() && y + 2 < r.bottom() {
-        section(buf, r.x, x1, y, "EN COLA");
-        y += 2;
-        for (i, m) in cola.iter().enumerate() {
-            if y >= r.bottom() {
-                break;
-            }
-            put(buf, r.x, y, &(i + 1).to_string(), Style::new().fg(theme::accent()).bold(), 2);
-            put(buf, r.x + 2, y, &plain(&m.text), Style::new().fg(theme::faint()), r.width.saturating_sub(2));
-            y += 1;
-        }
-    }
 }
 
 fn mix(a: Color, b: Color, f: f64) -> Color {

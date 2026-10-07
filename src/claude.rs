@@ -32,9 +32,11 @@ pub enum ClaudeEvent {
     /// Nació un subagente (`task_started` de tipo agente). `tool` es el id de la llamada a
     /// `Agent` que lo lanzó: con eso se le atribuyen sus mensajes (`parent_tool_use_id`).
     AgentStarted { tool: String, description: String, kind: String },
-    /// Un subagente pidió una herramienta, o recibió su resultado.
-    AgentTool { tool: String, name: String, detail: String },
-    AgentToolResult { tool: String, is_error: bool },
+    /// Un subagente pidió una herramienta (`id` es el de esa llamada), o recibió su resultado.
+    AgentTool { tool: String, id: String, name: String, detail: String, input: Value },
+    AgentToolResult { tool: String, id: String, is_error: bool, output: String },
+    /// Lo que escribió un subagente entre herramientas (llega por mensaje completo, no en vivo).
+    AgentText { tool: String, text: String },
     /// Terminó un subagente: `ok` si completó, no si falló o lo mataron.
     AgentDone { tool: String, ok: bool },
     Stderr(String),
@@ -70,6 +72,12 @@ impl Claude {
                 // nosotros por stdout (`control_request` `can_use_tool`) y espera la respuesta.
                 "--permission-prompt-tool",
                 "stdio",
+                // La interfaz convierte en adjunto toda ruta a un archivo que exista (adjunto.rs).
+                "--append-system-prompt",
+                "Hablas con el usuario a través de Iris, una TUI propia. Cuando le entregues un archivo \
+                 (un reporte, un Excel, una imagen…), escribe su ruta completa en la respuesta: Iris la \
+                 muestra como adjunto y un clic lo copia al portapapeles para pegarlo donde quiera. \
+                 No digas que no puedes pasarle archivos.",
             ])
             .args(extra_args)
             .stdin(Stdio::piped())
@@ -219,19 +227,32 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
         Some("system") if v["subtype"] == "task_notification" && !v["tool_use_id"].is_null() => {
             vec![ClaudeEvent::AgentDone { tool: s(v, "tool_use_id"), ok: v["status"] == "completed" }]
         }
-        // Lo de un subagente llega con el id de la llamada que lo lanzó. Solo interesan sus
-        // herramientas: es lo que el núcleo muestra en el hijo.
-        Some("assistant") if !v["parent_tool_use_id"].is_null() => blocks(v, "tool_use")
-            .map(|b| ClaudeEvent::AgentTool {
-                tool: s(v, "parent_tool_use_id"),
-                name: s(b, "name"),
-                detail: tool_detail(&b["input"]),
+        // Lo de un subagente llega con el id de la llamada que lo lanzó: sus herramientas (el
+        // núcleo las muestra en el hijo) y lo que escribe (para verlo en Ctrl+G, Agentes).
+        Some("assistant") if !v["parent_tool_use_id"].is_null() => v["message"]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| match b["type"].as_str() {
+                Some("tool_use") => Some(ClaudeEvent::AgentTool {
+                    tool: s(v, "parent_tool_use_id"),
+                    id: s(b, "id"),
+                    name: s(b, "name"),
+                    detail: tool_detail(&b["input"]),
+                    input: b["input"].clone(),
+                }),
+                Some("text") if !s(b, "text").trim().is_empty() => {
+                    Some(ClaudeEvent::AgentText { tool: s(v, "parent_tool_use_id"), text: s(b, "text") })
+                }
+                _ => None,
             })
             .collect(),
         Some("user") if !v["parent_tool_use_id"].is_null() => blocks(v, "tool_result")
             .map(|b| ClaudeEvent::AgentToolResult {
                 tool: s(v, "parent_tool_use_id"),
+                id: s(b, "tool_use_id"),
                 is_error: b["is_error"].as_bool().unwrap_or(false),
+                output: tool_output(&b["content"]),
             })
             .collect(),
         // El texto ya llegó por deltas; de los mensajes completos solo interesan las herramientas.
@@ -328,7 +349,7 @@ pub fn tool_detail(input: &Value) -> String {
 
 /// El texto que devolvió una herramienta: viene como texto o como bloques; se corta en
 /// 40 000 caracteres para no guardar salidas enormes.
-fn tool_output(c: &Value) -> String {
+pub fn tool_output(c: &Value) -> String {
     let text = match c {
         Value::String(s) => s.clone(),
         Value::Array(blocks) => blocks
@@ -369,8 +390,16 @@ mod tests {
         assert!(matches!(&evs[0], ClaudeEvent::AgentStarted { tool, kind, .. } if tool == "toolu_A" && kind == "general-purpose"));
         // El bash de fondo no es un hijo.
         assert!(matches!(&evs[1], ClaudeEvent::AgentTool { tool, name, .. } if tool == "toolu_A" && name == "Bash"));
-        assert!(matches!(&evs[2], ClaudeEvent::AgentToolResult { tool, is_error: false } if tool == "toolu_A"));
+        assert!(matches!(&evs[2], ClaudeEvent::AgentToolResult { tool, id, is_error: false, output } if tool == "toolu_A" && id == "toolu_C" && output == "x"));
         assert!(matches!(&evs[3], ClaudeEvent::AgentDone { tool, ok: true } if tool == "toolu_A"));
         assert_eq!(evs.len(), 4);
+    }
+
+    #[test]
+    fn texto_de_un_subagente() {
+        let v: Value = serde_json::from_str(r#"{"type":"assistant","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"text","text":"Reviso los logs."},{"type":"tool_use","id":"toolu_D","name":"Read","input":{"file_path":"/x"}}]}}"#).unwrap();
+        let evs = parse(&v);
+        assert!(matches!(&evs[0], ClaudeEvent::AgentText { tool, text } if tool == "toolu_A" && text == "Reviso los logs."));
+        assert!(matches!(&evs[1], ClaudeEvent::AgentTool { id, name, .. } if id == "toolu_D" && name == "Read"));
     }
 }

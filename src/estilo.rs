@@ -42,7 +42,7 @@ pub const TODOS: [(Estilo, &str, &str, &str); 10] = [
     (Estilo::Tablero, "tablero", "Tablero", "mosaicos: contexto, costo, herramientas y sesión"),
 ];
 
-/// Fondos de Baymax para `/fondo`: (id, nombre, color).
+/// Fondos de Baymax para `/background`: (id, nombre, color).
 pub const FONDOS: [(&str, &str, u32); 13] = [
     // El de la paleta de fábrica de Baymax (`baymax::PALETA`).
     ("defecto", "Por defecto (negro)", 0x000000),

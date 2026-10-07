@@ -94,7 +94,7 @@ accent = \"#FFFFFF\"
 foreground = \"#F2F2F2\"
 # Texto apagado.
 light_foreground = \"#8C8C8C\"
-# Fondo negro: sus ojos huecos se ven negros (cambia con /fondo).
+# Fondo negro: sus ojos huecos se ven negros (cambia con /background).
 background = \"#000000\"
 ";
 
@@ -105,7 +105,7 @@ pub enum Modo {
     Color(u32),
 }
 
-/// Lo que se ofrece en `/nucleo`: (id, nombre, modo).
+/// Lo que se ofrece en `/core`: (id, nombre, modo).
 pub const OPCIONES: [(&str, &str, Modo); 7] = [
     ("auto", "Auto (el del tema)", Modo::Auto),
     ("blanco", "Blanco", Modo::Color(0xffffff)),

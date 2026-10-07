@@ -15,7 +15,7 @@ pub enum Buddy {
 /// (buddy, id, nombre, para qué)
 pub const TODOS: [(Buddy, &str, &str, &str); 2] = [
     (Buddy::Original, "original", "Original", "el núcleo de siempre, con sus arcos"),
-    (Buddy::Baymax, "baymax", "Baymax", "su cara en el núcleo · /fondo y /nucleo para sus colores"),
+    (Buddy::Baymax, "baymax", "Baymax", "su cara en el núcleo · /background y /core para sus colores"),
 ];
 
 impl Buddy {

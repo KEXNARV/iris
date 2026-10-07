@@ -22,7 +22,7 @@ JARVIS y se copia solo a `~/.local/share/jarvis/hablar.py`.
 ## Uso
 
 - Contesta hablando cuando le hablas (mantén espacio); si escribes, en silencio.
-- `/voz` cambia el modo: `auto`, `siempre` o `nunca`. También `JARVIS_HABLA=siempre|nunca`.
+- `/voice` cambia el modo: `auto`, `always` o `never`. También `JARVIS_HABLA=always|never`.
 - Esc o espacio lo callan.
 - `JARVIS_VOZ` elige otra voz de Kokoro (`em_santa`, `ef_dora`) y `JARVIS_VOZ_VELOCIDAD` la
   velocidad (1.0 normal).
