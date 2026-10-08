@@ -650,7 +650,7 @@ fn snapshot() {
 | Estado | Qué hace | Cuándo, en Iris |\n|---|---|---|\n| En reposo | Respira lento, sin arcos, le salen «z» | más de 2 min sin actividad |\n| Te leo | Mira hacia la entrada y da un respingo con cada tecla | mientras escribes |\n| Git | Crece un grafo de commits | Bash con `git` |\n\n\
 ```rust\nlet tick = Duration::from_millis(16); // 60 fps: lo que más se mueve es el núcleo, y conviene que no se trabe\n```\n\n\
 > Ojo: los cambios no están commiteados.\n\n---\n\n\
-- [x] markdown nuevo\n- [ ] commit\n\nMás en [el repo](https://github.com/KEXNARV/jarvis) y ~~nada más~~.";
+- [x] markdown nuevo\n- [ ] commit\n\nMás en [el repo](https://github.com/KEXNARV/iris) y ~~nada más~~.";
     let rows = render(sample, 78);
     let mut html = String::from("<!doctype html><meta charset=utf-8><body style='background:#0b1218;padding:16px'><pre style='font-family:\"JetBrainsMono Nerd Font\",monospace;font-size:15px;line-height:1.35;color:#cde1eb'>");
     for (l, _, _) in rows {

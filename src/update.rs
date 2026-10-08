@@ -12,7 +12,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-const REPO: &str = "https://github.com/KEXNARV/jarvis";
+const REPO: &str = "https://github.com/KEXNARV/iris";
 /// El commit con que se compiló (lo pone `build.rs`).
 const BUILT: &str = env!("IRIS_COMMIT");
 const SRC: &str = env!("CARGO_MANIFEST_DIR");
@@ -76,7 +76,11 @@ pub fn exe() -> PathBuf {
 
 /// Clonado del repo de Iris (y no, por ejemplo, la copia temporal de `cargo install --git`).
 fn is_repo() -> bool {
-    git(&["remote", "get-url", "origin"]).is_ok_and(|url| url.trim_end_matches(".git").ends_with("KEXNARV/jarvis"))
+    // Los clones de antes del cambio de nombre siguen apuntando a KEXNARV/jarvis (GitHub redirige).
+    git(&["remote", "get-url", "origin"]).is_ok_and(|url| {
+        let url = url.trim().trim_end_matches(".git");
+        url.ends_with("KEXNARV/iris") || url.ends_with("KEXNARV/jarvis")
+    })
 }
 
 fn check() -> Option<Info> {
