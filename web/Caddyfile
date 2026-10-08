@@ -1,6 +1,5 @@
 # Iris en el VPS: la página, los instaladores y, más adelante, la API de la tienda.
-# Mientras no haya dominio propio, sslip.io da un nombre con HTTPS real para la IP.
-167-86-91-183.sslip.io {
+iris.knarvaez.com {
 	root * /var/www/iris
 	encode zstd gzip
 	# Los instaladores se piden con curl o irm: texto plano y sin caché, que cambian con cada versión.
@@ -14,7 +13,7 @@
 	file_server
 }
 
-# La IP sola lleva al nombre con HTTPS.
-http://167.86.91.183 {
-	redir https://167-86-91-183.sslip.io{uri} permanent
+# El nombre provisional de antes y la IP sola llevan al dominio.
+167-86-91-183.sslip.io, http://167.86.91.183 {
+	redir https://iris.knarvaez.com{uri} permanent
 }
