@@ -348,7 +348,7 @@ pub fn tool_detail(input: &Value) -> String {
         .find_map(|k| input.get(*k).and_then(Value::as_str))
         .or_else(|| input.as_object()?.values().find_map(Value::as_str))
         .unwrap_or("");
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::rutas::home().map(|h| h.display().to_string()).unwrap_or_default();
     let line = raw.lines().next().unwrap_or("");
     if !home.is_empty() && line.contains(&home) {
         line.replace(&home, "~")

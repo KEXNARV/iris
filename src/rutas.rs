@@ -25,6 +25,12 @@ pub fn estado() -> Option<PathBuf> {
     Some(dirs::state_dir().or_else(dirs::data_local_dir)?.join(NOMBRE))
 }
 
+/// La carpeta del usuario. En Windows no hay `HOME` (es `%USERPROFILE%`): leerla a mano
+/// dejaba a Iris sin `~/.claude` y `/resume` no encontraba ninguna sesión.
+pub fn home() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
 /// `IRIS_<nombre>`, o `JARVIS_<nombre>` si solo está la vieja.
 pub fn var(nombre: &str) -> Option<String> {
     std::env::var(format!("IRIS_{nombre}")).or_else(|_| std::env::var(format!("JARVIS_{nombre}"))).ok()

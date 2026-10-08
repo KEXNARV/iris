@@ -261,8 +261,7 @@ fn baymax_ppm() {
     if !crate::rutas::hay_var("SNAPSHOT") {
         return;
     }
-    let home = std::env::var("HOME").unwrap();
-    crate::theme::usar(Some(format!("{home}/.config/iris/colores-baymax.toml").into()));
+    crate::theme::usar(Some(crate::rutas::config().unwrap().join("colores-baymax.toml")));
     let dir = std::path::Path::new("target/baymax");
     std::fs::create_dir_all(dir).unwrap();
     let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);

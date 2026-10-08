@@ -26,7 +26,7 @@ fn project_dir() -> Option<PathBuf> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    Some(PathBuf::from(std::env::var("HOME").ok()?).join(".claude/projects").join(flat))
+    Some(crate::rutas::home()?.join(".claude").join("projects").join(flat))
 }
 
 /// Las más recientes primero, sin la sesión en curso ni las que no tienen ningún mensaje.

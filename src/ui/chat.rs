@@ -210,7 +210,7 @@ pub(in crate::ui) fn tool_rows(a: &crate::Activity, indent: &str, pad: usize, wi
 /// Lo que hizo una herramienta, en una línea: el comando, el archivo y el cambio, lo buscado…
 pub(crate) fn tool_summary(a: &crate::Activity) -> String {
     let s = |k: &str| a.input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::rutas::home().map(|h| h.display().to_string()).unwrap_or_default();
     let short = |p: String| if home.is_empty() { p } else { p.replace(&home, "~") };
     match a.name.as_str() {
         "Bash" => s("command").lines().next().unwrap_or("").to_string(),

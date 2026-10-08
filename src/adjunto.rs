@@ -25,11 +25,11 @@ impl Adjunto {
 
 /// Las rutas absolutas (o con `~/`) del texto que son archivos de verdad, sin repetir.
 pub fn en_texto(text: &str) -> Vec<Adjunto> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::rutas::home().unwrap_or_default();
     let mut out: Vec<Adjunto> = vec![];
     for raw in candidatos(text) {
-        let p = match raw.strip_prefix("~/") {
-            Some(rest) => PathBuf::from(&home).join(rest),
+        let p = match raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+            Some(rest) => home.join(rest),
             None => PathBuf::from(&raw),
         };
         let Ok(meta) = std::fs::metadata(&p) else { continue };
@@ -41,7 +41,8 @@ pub fn en_texto(text: &str) -> Vec<Adjunto> {
 }
 
 /// Lo que puede ser una ruta: lo que va entre comillas invertidas y cada palabra suelta que
-/// empiece con `/` o `~/`, sin la puntuación de alrededor ni el `:línea` del final.
+/// empiece con `/`, `~/` o una unidad de Windows (`C:\`, `C:/`), sin la puntuación de
+/// alrededor ni el `:línea` del final.
 fn candidatos(text: &str) -> Vec<String> {
     let mut out = vec![];
     for (k, part) in text.split('`').enumerate() {
@@ -53,8 +54,14 @@ fn candidatos(text: &str) -> Vec<String> {
             out.push(limpia(w));
         }
     }
-    out.retain(|c| c.starts_with('/') || c.starts_with("~/"));
+    out.retain(|c| c.starts_with('/') || c.starts_with("~/") || c.starts_with("~\\") || unidad(c));
     out
+}
+
+/// `C:\…` o `C:/…`: una ruta absoluta de Windows.
+fn unidad(c: &str) -> bool {
+    let b = c.as_bytes();
+    b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
 }
 
 fn limpia(s: &str) -> String {
@@ -127,6 +134,16 @@ mod tests {
         assert!(c.contains(&"~/Documents/Reporte WEGA.xlsx".to_string()));
         assert!(c.contains(&"/tmp/a.rs".to_string()));
         assert!(c.contains(&"/etc/hosts".to_string()));
+    }
+
+    #[test]
+    fn saca_rutas_de_windows() {
+        let t = r"Listo: `C:\Users\kex\Reporte WEGA.xlsx` y C:\tmp\a.rs:12, (ver D:/datos/b.csv).";
+        let c = candidatos(t);
+        assert!(c.contains(&r"C:\Users\kex\Reporte WEGA.xlsx".to_string()));
+        assert!(c.contains(&r"C:\tmp\a.rs".to_string()));
+        assert!(c.contains(&"D:/datos/b.csv".to_string()));
+        assert!(!c.contains(&"Listo".to_string()));
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub(in crate::ui) fn stats(app: &App) -> String {
 }
 
 pub(in crate::ui) fn cwd() -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::rutas::home().map(|h| h.display().to_string()).unwrap_or_default();
     std::env::current_dir()
         .map(|p| p.display().to_string().replacen(&home, "~", 1))
         .unwrap_or_default()
