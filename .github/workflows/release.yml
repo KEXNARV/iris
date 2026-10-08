@@ -14,6 +14,20 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   VULKAN_SDK_VERSION: "1.4.309.0"
+  # ggml (whisper) compila por defecto con -march=native: para la CPU del runner, que puede ser
+  # un Xeon con AVX-512 y AMX. La v0.1.2 salió así y moría con "Illegal instruction" al cargar la
+  # voz en cualquier CPU de escritorio o portátil sin AVX-512. whisper-rs-sys pasa las GGML_* al
+  # CMake: piso fijo AVX2 + FMA + F16C (Intel desde 2013, AMD desde 2015), nada por encima.
+  GGML_NATIVE: "OFF"
+  GGML_AVX: "ON"
+  GGML_AVX2: "ON"
+  GGML_FMA: "ON"
+  GGML_F16C: "ON"
+  GGML_AVX512: "OFF"
+  GGML_AVX_VNNI: "OFF"
+  GGML_AMX_TILE: "OFF"
+  GGML_AMX_INT8: "OFF"
+  GGML_AMX_BF16: "OFF"
 
 jobs:
   linux:
