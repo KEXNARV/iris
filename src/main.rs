@@ -408,7 +408,7 @@ fn run(
                         }
                         Flow::Redraw => term.clear()?,
                         Flow::Update => {
-                            app.push(Role::System, "actualizando: bajando y compilando la versión nueva…");
+                            app.push(Role::System, "actualizando: bajando la versión nueva…");
                             update::install(tx.clone());
                         }
                         Flow::Go => {}

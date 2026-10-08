@@ -167,23 +167,19 @@ pub(in crate::ui) fn draw_colores(f: &mut Frame, anchor: Rect, sel: usize) {
 
 pub(in crate::ui) fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::update::Info) {
     let w = anchor.width.saturating_sub(2) as usize;
-    let what = match info.commits.len() {
-        0 => format!("Hay una versión nueva en GitHub ({}).", info.commit),
-        1 => format!("Hay una versión nueva en GitHub ({}): 1 cambio.", info.commit),
-        n => format!("Hay una versión nueva en GitHub ({}): {n} cambios.", info.commit),
-    };
+    let what = format!("Iris {} está disponible (tienes la {}).", info.version, env!("CARGO_PKG_VERSION"));
     let mut head = vec![];
     for l in wrap(&what, w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()).bold())));
     }
-    for l in wrap("Se baja, se compila e Iris se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
+    for l in wrap("Se baja de iris.knarvaez.com, se instala e Iris se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::faint()))));
     }
-    if !info.commits.is_empty() {
+    if !info.notas.is_empty() {
         head.push(Line::default());
     }
     let items = info
-        .commits
+        .notas
         .iter()
         .map(|c| Line::from(Span::styled(format!("  · {}", truncate(c, w.saturating_sub(4))), Style::new().fg(theme::text()))))
         .collect();

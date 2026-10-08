@@ -1,9 +1,10 @@
-//! Actualizaciones desde GitHub: al arrancar y cada hora mira si `origin/master` tiene commits
-//! que este binario no tiene. Si los hay, Iris lo ofrece; al aceptar, baja el código, lo
-//! instala con cargo y se vuelve a abrir en la misma sesión.
+//! Actualizaciones: al arrancar y cada hora mira la versión publicada en iris.knarvaez.com
+//! (`version.json`). Si es más nueva que esta, Iris lo ofrece; al aceptar se instala y se vuelve
+//! a abrir en la misma sesión.
 //!
-//! Dos formas de instalación: desde el repo clonado (`cargo install --path .`, la de Kevin) o
-//! directo de GitHub (`cargo install --git`). En la primera el código se trae con `git pull`.
+//! Dos formas de instalar la nueva: con el instalador de la página, en modo solo binario y en la
+//! misma carpeta (lo normal), o desde el repo clonado (`git pull` + `cargo install --path .`, la
+//! de Kevin, que compila lo suyo).
 
 use crate::AppEvent;
 use std::path::{Path, PathBuf};
@@ -12,9 +13,12 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-const REPO: &str = "https://github.com/KEXNARV/iris";
-/// El commit con que se compiló (lo pone `build.rs`).
-const BUILT: &str = env!("IRIS_COMMIT");
+/// Lo publicado: `{"version": "0.2.0", "notas": ["…", "…"]}`.
+const VERSION_URL: &str = "https://iris.knarvaez.com/version.json";
+const INSTALADOR_SH: &str = "https://iris.knarvaez.com/install.sh";
+const INSTALADOR_PS1: &str = "https://iris.knarvaez.com/install.ps1";
+/// Esta versión, la de Cargo.toml.
+const ESTA: &str = env!("CARGO_PKG_VERSION");
 const SRC: &str = env!("CARGO_MANIFEST_DIR");
 
 pub enum UpdateEvent {
@@ -25,24 +29,21 @@ pub enum UpdateEvent {
 
 #[derive(Clone)]
 pub struct Info {
-    /// El commit nuevo, corto.
-    pub commit: String,
-    /// Títulos de los commits nuevos, del más reciente al más viejo (vacío si no se sabe).
-    pub commits: Vec<String>,
+    /// La versión publicada, `0.2.0`.
+    pub version: String,
+    /// Lo que trae, como lo escribió quien la publicó (puede venir vacío).
+    pub notas: Vec<String>,
 }
 
 /// Revisa en segundo plano: unos segundos después de arrancar y luego cada hora.
 pub fn spawn(tx: Sender<AppEvent>) {
-    if BUILT.is_empty() {
-        return; // compilado sin git: no hay con qué comparar
-    }
     thread::spawn(move || {
         thread::sleep(Duration::from_secs(10));
         let mut offered = String::new();
         loop {
             if let Some(info) = check() {
-                if info.commit != offered {
-                    offered = info.commit.clone();
+                if info.version != offered {
+                    offered = info.version.clone();
                     if tx.send(AppEvent::Update(UpdateEvent::Available(info))).is_err() {
                         return;
                     }
@@ -84,19 +85,21 @@ fn is_repo() -> bool {
 }
 
 fn check() -> Option<Info> {
-    if is_repo() {
-        git(&["fetch", "-q", "origin", "master"]).ok()?;
-        let remote = git(&["rev-parse", "origin/master"]).ok()?;
-        // Igual, o con cambios locales que GitHub todavía no tiene: no hay nada que ofrecer.
-        if remote == BUILT || git(&["merge-base", "--is-ancestor", BUILT, &remote]).is_err() {
-            return None;
-        }
-        let log = git(&["log", "--format=%s", &format!("{BUILT}..{remote}")]).ok()?;
-        Some(Info { commit: remote[..7].into(), commits: log.lines().map(String::from).collect() })
-    } else {
-        let out = run(Command::new("git").args(["ls-remote", REPO, "refs/heads/master"])).ok()?;
-        let remote = out.split_whitespace().next()?.to_string();
-        (remote.len() >= 7 && remote != BUILT).then(|| Info { commit: remote[..7].into(), commits: vec![] })
+    let v: serde_json::Value = serde_json::from_str(&run(Command::new("curl").args(["-fsSL", "--max-time", "15", VERSION_URL])).ok()?).ok()?;
+    let version = v["version"].as_str()?.trim().trim_start_matches('v').to_string();
+    if !mas_nueva(&version, ESTA) {
+        return None;
+    }
+    let notas = v["notas"].as_array().map(|n| n.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    Some(Info { version, notas })
+}
+
+/// `a` es más nueva que `b` (`0.10.0` > `0.9.3`). Lo que no se entiende no es más nuevo.
+fn mas_nueva(a: &str, b: &str) -> bool {
+    let partes = |s: &str| s.split(['.', '-']).take(3).map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
+    match (partes(a), partes(b)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
     }
 }
 
@@ -109,8 +112,17 @@ fn install_now() -> Result<(), String> {
         // --autostash: lo que estés editando en el repo se guarda y vuelve después.
         git(&["pull", "-q", "--ff-only", "--autostash", "origin", "master"])?;
         run(Command::new(cargo()).args(["install", "--path", SRC]))?;
+        return Ok(());
+    }
+    // El instalador de la página, solo el binario y en la carpeta de este: sin dependencias del
+    // sistema (pedirían sudo sin terminal), sin modelo de voz y sin Claude Code.
+    let dir = exe().parent().map(Path::to_path_buf).ok_or("no sé dónde está instalado Iris")?;
+    if cfg!(windows) {
+        let script = format!("$env:IRIS_SOLO_BINARIO='1'; $env:IRIS_DESTINO='{}'; irm {INSTALADOR_PS1} | iex", dir.display());
+        run(Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]))?;
     } else {
-        run(Command::new(cargo()).args(["install", "--git", REPO, "--force"]))?;
+        let script = format!("curl -fsSL {INSTALADOR_SH} | sh -s -- --solo-binario");
+        run(Command::new("sh").args(["-c", &script]).env("IRIS_DESTINO", &dir))?;
     }
     Ok(())
 }
@@ -137,4 +149,19 @@ fn run(cmd: &mut Command) -> Result<String, String> {
     }
     let err = String::from_utf8_lossy(&out.stderr);
     Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("falló").trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mas_nueva;
+
+    #[test]
+    fn compara_versiones() {
+        assert!(mas_nueva("0.2.0", "0.1.0"));
+        assert!(mas_nueva("0.10.0", "0.9.3"));
+        assert!(mas_nueva("1.0.0", "0.99.99"));
+        assert!(!mas_nueva("0.1.0", "0.1.0"));
+        assert!(!mas_nueva("0.1.0", "0.2.0"));
+        assert!(!mas_nueva("pronto", "0.1.0"));
+    }
 }
