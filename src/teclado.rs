@@ -2,7 +2,23 @@
 //! y ghubd lo dibuja encima de su efecto. Mensajes de una línea a un socket UNIX:
 //! `state thinking`, `level 0.42`, `event error`. Si ghubd no corre, se pierden sin error.
 
+#[cfg(unix)]
 use std::os::unix::net::UnixDatagram;
+
+/// ghubd es de Linux: en Windows un socket que no manda nada.
+#[cfg(not(unix))]
+struct UnixDatagram;
+
+#[cfg(not(unix))]
+impl UnixDatagram {
+    fn unbound() -> std::io::Result<Self> {
+        Ok(UnixDatagram)
+    }
+
+    fn send_to(&self, _: &[u8], _: &std::path::Path) -> std::io::Result<usize> {
+        Ok(0)
+    }
+}
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 

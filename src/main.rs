@@ -211,9 +211,19 @@ fn main() -> Result<()> {
             args.extend(["--resume".into(), app.session.clone()]);
         }
         drop(app);
-        use std::os::unix::process::CommandExt;
-        let err = std::process::Command::new(update::exe()).args(args).exec();
-        return Err(err.into());
+        // En Linux la versión nueva toma el lugar de esta; Windows no tiene exec, así que la
+        // abre, la espera y sale con lo que ella devuelva.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new(update::exe()).args(args).exec();
+            return Err(err.into());
+        }
+        #[cfg(not(unix))]
+        {
+            let status = std::process::Command::new(update::exe()).args(args).status()?;
+            std::process::exit(status.code().unwrap_or(0));
+        }
     }
     res
 }

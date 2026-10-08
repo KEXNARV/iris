@@ -71,6 +71,18 @@ fn limpia(s: &str) -> String {
 }
 
 /// Al portapapeles como archivo, no como texto con la ruta.
+#[cfg(windows)]
+pub fn copiar(a: &Adjunto) -> bool {
+    // Como copiarlo en el Explorador: se pega como archivo en carpetas, correos y chats.
+    Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -LiteralPath $args[0]"])
+        .arg(&a.path)
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Al portapapeles como archivo, no como texto con la ruta.
+#[cfg(not(windows))]
 pub fn copiar(a: &Adjunto) -> bool {
     let uri = format!("file://{}\r\n", percent_encode(&a.path.to_string_lossy()));
     Command::new("wl-copy")

@@ -6,6 +6,7 @@
 //! servicio ya está vivo; si no, no hay música que pausar.
 
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -99,6 +100,18 @@ fn playing() -> Option<bool> {
 
 /// Una petición, una línea de vuelta. Nada de esto debe colgar a Iris: todo con timeout.
 fn send(req: &str) -> Option<serde_json::Value> {
+    // surco es de Linux (socket UNIX y systemd): en Windows no hay nada que pausar.
+    #[cfg(not(unix))]
+    {
+        let _ = req;
+        return None;
+    }
+    #[cfg(unix)]
+    send_unix(req)
+}
+
+#[cfg(unix)]
+fn send_unix(req: &str) -> Option<serde_json::Value> {
     if !alive() {
         return None;
     }
