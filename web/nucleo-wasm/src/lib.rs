@@ -43,22 +43,29 @@ struct Iris {
 }
 
 thread_local! {
-    static IRIS: RefCell<Option<Iris>> = const { RefCell::new(None) };
+    /// Cada núcleo de la página es uno: el grande de arriba y los de la rejilla de estados.
+    static NUCLEOS: RefCell<Vec<Iris>> = const { RefCell::new(Vec::new()) };
 }
 
-fn con<T>(f: impl FnOnce(&mut Iris) -> T) -> T {
-    IRIS.with(|c| {
-        let mut c = c.borrow_mut();
-        let iris = c.get_or_insert_with(|| Iris { core: Core::new(), sig: Signals::default(), img: vec![], paleta: vec![] });
-        f(iris)
+fn con<T>(id: u32, f: impl FnOnce(&mut Iris) -> T) -> T {
+    NUCLEOS.with(|n| f(&mut n.borrow_mut()[id as usize]))
+}
+
+/// Un núcleo nuevo, arrancando. Devuelve su id para las demás llamadas.
+#[unsafe(no_mangle)]
+pub extern "C" fn iris_nuevo() -> u32 {
+    NUCLEOS.with(|n| {
+        let mut n = n.borrow_mut();
+        n.push(Iris { core: Core::new(), sig: Signals::default(), img: vec![], paleta: vec![] });
+        (n.len() - 1) as u32
     })
 }
 
 /// Avanza `dt` segundos hacia el estado `estado` (índice de `ESTADOS`), con el nivel de la voz
 /// (0..1, al escuchar o hablar) y de la música.
 #[unsafe(no_mangle)]
-pub extern "C" fn iris_paso(dt: f64, estado: u32, voz: f32, musica: f32) {
-    con(|i| {
+pub extern "C" fn iris_paso(id: u32, dt: f64, estado: u32, voz: f32, musica: f32) {
+    con(id, |i| {
         let want = ESTADOS.get(estado as usize).copied().unwrap_or(State::Idle);
         i.sig.level = voz;
         i.sig.music = musica;
@@ -68,24 +75,36 @@ pub extern "C" fn iris_paso(dt: f64, estado: u32, voz: f32, musica: f32) {
 
 /// Un subagente: 0 nace, 1 trabaja (pulso), 2 termina bien, 3 termina con error.
 #[unsafe(no_mangle)]
-pub extern "C" fn iris_hijo(que: u32, id: u32) {
-    con(|i| {
-        let id = id as u64;
+pub extern "C" fn iris_hijo(id: u32, que: u32, hijo: u32) {
+    con(id, |i| {
+        let hijo = hijo as u64;
         match que {
             0 => {
-                i.core.kid_born(id);
-                i.sig.kids.push((id, State::Reading));
+                i.core.kid_born(hijo);
+                i.sig.kids.push((hijo, State::Reading));
             }
-            1 => i.core.kid_pulse(id, false),
+            1 => i.core.kid_pulse(hijo, false),
             _ => {
-                i.core.kid_end(id, que == 2);
-                i.sig.kids.retain(|k| k.0 != id);
+                i.core.kid_end(hijo, que == 2);
+                i.sig.kids.retain(|k| k.0 != hijo);
             }
         }
     });
 }
 
-/// Quién vive en el núcleo: 0 el original, 1 Baymax.
+/// Algo que pasa de golpe: 0 error, 1 listo, 2 cancelado.
+#[unsafe(no_mangle)]
+pub extern "C" fn iris_evento(id: u32, que: u32) {
+    use nucleo::Event;
+    let ev = match que {
+        0 => Event::Error,
+        1 => Event::Done,
+        _ => Event::Cancel,
+    };
+    con(id, |i| i.core.fire(ev));
+}
+
+/// Quién vive en los núcleos: 0 el original, 1 Baymax.
 #[unsafe(no_mangle)]
 pub extern "C" fn iris_buddy(cual: u32) {
     theme::usar((cual == 1).then(|| "baymax-web".into()));
@@ -94,8 +113,8 @@ pub extern "C" fn iris_buddy(cual: u32) {
 /// Dibuja el núcleo en una imagen de `w`×`h` píxeles con puntos cada `sp`: un índice de color
 /// por píxel (0 = nada). Devuelve cuántos colores tiene la paleta.
 #[unsafe(no_mangle)]
-pub extern "C" fn iris_imagen(w: u32, h: u32, sp: u32) -> u32 {
-    con(|i| {
+pub extern "C" fn iris_imagen(id: u32, w: u32, h: u32, sp: u32) -> u32 {
+    con(id, |i| {
         let (img, pal) = i.core.pixels(w as usize, h as usize, sp as usize);
         i.img = img;
         i.paleta = pal.iter().flat_map(|c| c.map(|v| v as f32)).collect();
@@ -104,11 +123,11 @@ pub extern "C" fn iris_imagen(w: u32, h: u32, sp: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn iris_imagen_ptr() -> *const u8 {
-    con(|i| i.img.as_ptr())
+pub extern "C" fn iris_imagen_ptr(id: u32) -> *const u8 {
+    con(id, |i| i.img.as_ptr())
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn iris_paleta_ptr() -> *const f32 {
-    con(|i| i.paleta.as_ptr())
+pub extern "C" fn iris_paleta_ptr(id: u32) -> *const f32 {
+    con(id, |i| i.paleta.as_ptr())
 }

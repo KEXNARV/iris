@@ -4,255 +4,671 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Iris · Claude Code con cara, voz y núcleo</title>
-<meta name="description" content="Iris es una interfaz de terminal para Claude Code: te escucha, te habla y muestra con su núcleo qué está haciendo.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='9' fill='%2300c8ff'/></svg>">
+<meta name="description" content="Iris es una interfaz de terminal para Claude Code: te escucha, te habla, y con su núcleo de puntos te muestra qué está haciendo. Para Linux y Windows.">
+<meta property="og:title" content="Iris · Claude Code con cara, voz y núcleo">
+<meta property="og:description" content="Te escucha, te habla y te muestra qué está haciendo. Diez estilos, buddies y una tienda para tunear todo.">
+<meta property="og:image" content="https://iris.knarvaez.com/img/estilo-cine.webp">
+<meta property="og:url" content="https://iris.knarvaez.com/">
+<meta name="theme-color" content="#05090d">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><g fill='%2300c8ff'><circle cx='16' cy='16' r='7'/><circle cx='16' cy='3' r='1.6' opacity='.6'/><circle cx='29' cy='16' r='1.6' opacity='.6'/><circle cx='16' cy='29' r='1.6' opacity='.6'/><circle cx='3' cy='16' r='1.6' opacity='.6'/></g></svg>">
 <style>
   :root {
     --bg: #05090d;
+    --bg2: #070d13;
     --panel: #0a1118;
     --line: #13212c;
+    --line2: #1d3240;
     --text: #cde1eb;
     --faint: #5a6e7d;
+    --dim: #34505f;
     --accent: #00c8ff;
-    --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+    --green: #5ae696;
+    --red: #e05050;
+    --amber: #e8a030;
+    --violet: #b482ff;
+    --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --pad: clamp(20px, 4vw, 72px);
   }
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 70px; }
   html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--mono); }
-  body { line-height: 1.55; font-size: clamp(15px, 0.35vw + 10px, 17px); }
+  body { line-height: 1.6; font-size: clamp(14px, 0.3vw + 10px, 16px); overflow-x: hidden; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  /* Llena la pantalla con un margen chico que crece con ella; solo en monitores enormes se frena. */
-  main { max-width: 2000px; margin: 0 auto; padding: 0 clamp(20px, 4vw, 72px); }
+  code, kbd { font-family: var(--mono); }
+  ::selection { background: var(--accent); color: var(--bg); }
+  .ancho { max-width: 2000px; margin: 0 auto; padding: 0 var(--pad); }
 
-  header { display: flex; justify-content: space-between; align-items: center; padding: 22px 0; }
-  .logo { letter-spacing: .5em; color: var(--accent); font-weight: 700; }
-  nav a { margin-left: 22px; color: var(--faint); }
-  nav a:hover { color: var(--text); text-decoration: none; }
+  /* La rejilla de puntos de fondo, como la del núcleo. */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background-image: radial-gradient(circle, rgba(0, 200, 255, .07) 1px, transparent 1.4px);
+    background-size: 22px 22px;
+    mask-image: radial-gradient(ellipse at 70% 20%, #000 0%, transparent 70%);
+  }
 
-  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(30px, 5vw, 90px); align-items: center; padding: clamp(30px, 6vh, 80px) 0 clamp(50px, 9vh, 110px); min-height: calc(100vh - 80px); }
-  .hero > *, .instalar, .tienda > * { min-width: 0; }
+  /* ── Navegación ── */
+  nav.top { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px); background: rgba(5, 9, 13, .78); border-bottom: 1px solid transparent; transition: border-color .3s; }
+  nav.top.bajo { border-bottom-color: var(--line); }
+  nav.top .ancho { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .logo { letter-spacing: .5em; color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 12px; }
+  .logo i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); animation: late 2.4s ease-in-out infinite; }
+  @keyframes late { 50% { transform: scale(.7); opacity: .6; } }
+  nav.top .links a { margin-left: clamp(12px, 2vw, 28px); color: var(--faint); font-size: 14px; }
+  nav.top .links a:hover { color: var(--text); text-decoration: none; }
+  nav.top .links a.cta { color: var(--bg); background: var(--accent); padding: 6px 14px; border-radius: 16px; }
+
+  /* ── Portada ── */
+  .hero { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(30px, 5vw, 90px); align-items: center; min-height: calc(100vh - 62px); padding: clamp(30px, 5vh, 70px) 0; }
+  .hero > * { min-width: 0; }
+  h1 { font-size: clamp(44px, 5vw, 86px); letter-spacing: .35em; margin: 0 0 10px; color: var(--accent); font-weight: 700; line-height: 1.05; }
+  .lema { font-size: clamp(19px, 1.6vw, 28px); margin: 0 0 14px; }
+  .sub { color: var(--faint); margin: 0 0 30px; max-width: 46ch; }
+  .estado { color: var(--faint); margin: 0 0 26px; height: 1.6em; }
+  .estado b { color: var(--accent); font-weight: 400; letter-spacing: .3em; }
   .escena { justify-self: center; width: 100%; max-width: min(640px, 72vh); display: grid; gap: 10px; justify-items: center; }
-  #nucleo { width: 100%; aspect-ratio: 1; image-rendering: auto; }
-  .buddies { display: flex; gap: 6px; }
-  .buddies button { background: none; border: 1px solid var(--line); color: var(--faint); font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 14px; cursor: pointer; }
-  .buddies button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
-  h1 { font-size: clamp(40px, 4.5vw, 76px); letter-spacing: .35em; margin: 0 0 8px; color: var(--accent); font-weight: 700; }
-  .lema { font-size: clamp(18px, 1.5vw, 26px); margin: 0 0 26px; }
-  .estado { color: var(--faint); margin: 0 0 30px; }
+  canvas.nucleo { width: 100%; aspect-ratio: 1; display: block; }
+  .botonera { display: flex; gap: 6px; }
+  .botonera button { background: none; border: 1px solid var(--line2); color: var(--faint); font: inherit; font-size: 13px; padding: 4px 13px; border-radius: 14px; cursor: pointer; }
+  .botonera button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
-  .instalar { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .instalar { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; max-width: 680px; }
   .tabs { display: flex; border-bottom: 1px solid var(--line); }
-  .tabs button { flex: 1; background: none; border: 0; color: var(--faint); font: inherit; padding: 10px; cursor: pointer; }
+  .tabs button { flex: 1; background: none; border: 0; color: var(--faint); font: inherit; padding: 11px; cursor: pointer; }
   .tabs button[aria-selected="true"] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
   .cmd { display: flex; align-items: center; gap: 12px; padding: 16px 16px 16px 18px; }
-  .cmd code { flex: 1; white-space: nowrap; overflow-x: auto; color: var(--text); }
+  .cmd code { flex: 1; white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
   .cmd code::before { content: "› "; color: var(--accent); }
-  .copiar { background: none; border: 1px solid var(--line); color: var(--faint); font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+  .copiar { background: none; border: 1px solid var(--line2); color: var(--faint); font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 6px; cursor: pointer; flex-shrink: 0; }
   .copiar:hover { color: var(--text); border-color: var(--faint); }
-  .nota { color: var(--faint); font-size: 13px; padding: 0 18px 14px; margin: 0; }
-  .pronto { display: inline-block; font-size: 12px; color: var(--bg); background: var(--accent); padding: 1px 8px; border-radius: 10px; margin-left: 6px; vertical-align: 2px; }
+  .nota { color: var(--faint); font-size: 13px; padding: 0 18px 15px; margin: 0; }
 
-  section { padding: 50px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 13px; letter-spacing: .4em; color: var(--faint); font-weight: 400; margin: 0 0 26px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
-  .card h3 { margin: 0 0 8px; font-size: 16px; color: var(--accent); font-weight: 600; }
+  /* ── Secciones ── */
+  section { padding: clamp(60px, 10vh, 130px) 0; border-top: 1px solid var(--line); }
+  .eti { font-size: 12px; letter-spacing: .45em; color: var(--accent); margin: 0 0 14px; }
+  h2 { font-size: clamp(26px, 2.6vw, 44px); margin: 0 0 16px; font-weight: 600; letter-spacing: -.01em; line-height: 1.2; }
+  .intro { color: var(--faint); max-width: 70ch; margin: 0 0 clamp(30px, 5vh, 56px); font-size: 1.05em; }
+  .intro b { color: var(--text); font-weight: 400; }
+  .aparece { opacity: 0; transform: translateY(18px); transition: opacity .7s ease, transform .7s ease; }
+  .aparece.visto { opacity: 1; transform: none; }
+
+  /* ── La sesión: una terminal con el Clásico de Iris ── */
+  .terminal { border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; background: #04080b; box-shadow: 0 30px 80px -30px rgba(0, 200, 255, .18); }
+  .terminal .barra { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg2); font-size: 12px; color: var(--faint); }
+  .terminal .barra i { width: 11px; height: 11px; border-radius: 50%; background: var(--line2); }
+  .terminal .barra span { margin-left: 10px; }
+  .clasico { display: grid; grid-template-columns: 1.6fr 1fr; grid-template-rows: 1fr auto; gap: 10px; padding: 12px; height: clamp(520px, 72vh, 760px); font-size: clamp(12px, 0.85vw, 14.5px); }
+  .caja { border: 1px solid var(--dim); border-radius: 4px; position: relative; padding: 16px 16px 12px; min-height: 0; }
+  .caja > .t { position: absolute; top: -.75em; left: 12px; background: #04080b; padding: 0 6px; color: var(--accent); font-weight: 700; font-size: .85em; letter-spacing: .05em; }
+  .chat { overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; gap: 10px; }
+  .chat .m { animation: entra .35s ease; }
+  @keyframes entra { from { opacity: 0; transform: translateY(6px); } }
+  .chat .quien { font-weight: 700; color: var(--accent); }
+  .chat .quien.tu { color: var(--amber); }
+  .chat .txt { white-space: pre-wrap; }
+  .chat .tool { color: var(--faint); }
+  .chat .tool b { color: var(--text); font-weight: 600; }
+  .chat .ok { color: var(--green); }
+  .chat .run, .actividad .run { color: var(--accent); }
+  .actividad .ok { color: var(--green); }
+  .chat code { color: var(--green); }
+  .chat pre { margin: 6px 0; padding: 8px 12px; border-left: 2px solid var(--dim); color: var(--green); white-space: pre; overflow: hidden; }
+  .chat strong { color: #fff; }
+  .lado { display: grid; grid-template-rows: 1.25fr 1fr; gap: 12px; min-height: 0; }
+  .lado .caja.nuc { display: grid; place-items: center; overflow: hidden; }
+  .lado .caja.nuc canvas { width: min(100%, 300px); }
+  .lado .rotulo { text-align: center; margin-top: -6px; }
+  .lado .rotulo b { color: var(--accent); letter-spacing: .3em; font-size: .9em; }
+  .lado .rotulo div { color: var(--faint); font-size: .85em; }
+  .actividad { overflow: hidden; font-size: .92em; }
+  .actividad div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--faint); }
+  .actividad b { color: var(--text); font-weight: 600; }
+  .orden { grid-column: 1 / -1; padding: 12px 16px; }
+  .orden .cursor { display: inline-block; width: .6em; height: 1.1em; background: var(--accent); vertical-align: -3px; animation: parpadea 1s steps(1) infinite; }
+  @keyframes parpadea { 50% { opacity: 0; } }
+  .ondita { display: inline-flex; gap: 2px; vertical-align: middle; margin-left: 8px; align-items: center; height: 18px; }
+  .ondita i { width: 3px; background: var(--green); border-radius: 2px; }
+
+  /* ── El núcleo y sus estados ── */
+  .estados { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+  .est { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 18px; transition: border-color .3s, transform .3s; }
+  .est:hover { border-color: var(--line2); transform: translateY(-3px); }
+  .est canvas { width: 100%; aspect-ratio: 1; display: block; }
+  .est h3 { margin: 4px 0 4px; font-size: 14px; letter-spacing: .25em; font-weight: 600; }
+  .est p { margin: 0; color: var(--faint); font-size: 13px; }
+
+  /* ── Estilos ── */
+  .galeria { display: grid; grid-template-columns: minmax(200px, 300px) 1fr; gap: clamp(20px, 3vw, 44px); align-items: start; }
+  .lista-est { display: grid; gap: 4px; position: sticky; top: 90px; }
+  .lista-est button { display: grid; grid-template-columns: 1fr; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; color: var(--faint); font: inherit; padding: 9px 14px; cursor: pointer; }
+  .lista-est button b { color: var(--text); font-weight: 600; }
+  .lista-est button span { font-size: 12px; }
+  .lista-est button[aria-pressed="true"] { border-color: var(--line2); background: var(--panel); }
+  .lista-est button[aria-pressed="true"] b { color: var(--accent); }
+  .marco { border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; background: #04080b; }
+  .marco img { display: block; width: 100%; height: auto; aspect-ratio: 1560 / 960; object-fit: cover; transition: opacity .25s; }
+  .marco .pie { padding: 12px 16px; color: var(--faint); font-size: 13px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 10px; }
+  .marco .pie code { color: var(--accent); }
+
+  /* ── Tarjetas ── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px 24px; }
+  .card h3 { margin: 0 0 10px; font-size: 16px; color: var(--accent); font-weight: 600; }
   .card p { margin: 0; color: var(--faint); }
-  .tienda { display: grid; grid-template-columns: 1.2fr 1fr; gap: 30px; align-items: center; }
-  .tienda p { color: var(--faint); margin: 0 0 12px; }
-  .tienda strong { color: var(--text); font-weight: 400; }
-  .pasos { margin: 0; padding: 0; list-style: none; counter-reset: p; }
-  .pasos li { counter-increment: p; padding: 8px 0 8px 34px; position: relative; color: var(--faint); }
-  .pasos li::before { content: counter(p); position: absolute; left: 0; top: 7px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font-size: 12px; display: grid; place-items: center; }
-  .pasos code { color: var(--text); }
-  footer { padding: 34px 0 50px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .card ul { margin: 10px 0 0; padding-left: 18px; color: var(--faint); }
+  .card code { color: var(--text); }
+  .card .tag { float: right; font-size: 11px; color: var(--faint); border: 1px solid var(--line2); padding: 0 8px; border-radius: 10px; }
 
+  /* ── Atajos ── */
+  .atajos { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 10px 30px; }
+  .atajo { display: flex; align-items: baseline; gap: 14px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+  .atajo span { color: var(--faint); }
+  kbd { display: inline-block; min-width: 2.1em; text-align: center; padding: 2px 8px; border: 1px solid var(--line2); border-bottom-width: 3px; border-radius: 6px; color: var(--accent); font-size: 13px; background: var(--panel); flex-shrink: 0; }
+  .intro code { color: var(--text); }
+
+  /* ── Tienda ── */
+  .ranuras { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .ranura { border: 1px dashed var(--line2); border-radius: 12px; padding: 18px 20px; position: relative; overflow: hidden; }
+  .ranura code { color: var(--accent); font-size: 15px; }
+  .ranura p { color: var(--faint); margin: 8px 0 0; font-size: 13.5px; }
+  .ranura::after { content: ""; position: absolute; inset: auto -20% -60% auto; width: 140px; height: 140px; background: radial-gradient(circle, rgba(0, 200, 255, .12), transparent 65%); }
+  .pasos { margin: 34px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; counter-reset: p; }
+  .pasos li { counter-increment: p; padding: 16px 18px 16px 58px; position: relative; color: var(--faint); background: var(--panel); border-radius: 12px; border: 1px solid var(--line); }
+  .pasos li::before { content: counter(p); position: absolute; left: 18px; top: 15px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font-size: 13px; display: grid; place-items: center; }
+  .pasos code { color: var(--text); }
+  .pronto { display: inline-block; font-size: 11px; color: var(--bg); background: var(--accent); padding: 1px 9px; border-radius: 10px; vertical-align: 3px; margin-left: 8px; letter-spacing: .05em; }
+
+  /* ── Instalar y preguntas ── */
+  .final { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(30px, 5vw, 80px); }
+  .final > * { min-width: 0; }
+  .req { margin: 22px 0 0; padding: 0; list-style: none; color: var(--faint); }
+  .req li { padding: 6px 0 6px 24px; position: relative; }
+  .req li::before { content: "◆"; position: absolute; left: 0; color: var(--accent); font-size: 11px; top: 9px; }
+  .req b { color: var(--text); font-weight: 400; }
+  .req code, details code, .nota code { color: var(--text); }
+  details { border-bottom: 1px solid var(--line); padding: 16px 0; }
+  summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--accent); }
+  details[open] summary::after { content: "−"; }
+  details p { color: var(--faint); margin: 12px 0 0; }
+
+  footer { padding: 40px 0 60px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; }
+  footer .ancho { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+  @media (max-width: 980px) {
+    .clasico { grid-template-columns: 1fr; height: auto; }
+    .clasico .chat { height: 340px; }
+    .lado { grid-template-rows: auto; grid-template-columns: 1fr 1fr; }
+    .galeria, .final { grid-template-columns: 1fr; }
+    .lista-est { position: static; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .lista-est button span { display: none; }
+  }
   @media (max-width: 760px) {
-    .hero, .tienda, .grid { grid-template-columns: 1fr; }
-    .hero { min-height: 0; }
+    .hero { grid-template-columns: 1fr; min-height: 0; }
     .escena { max-width: 300px; order: -1; }
+    nav.top .links a:not(.cta) { display: none; }
+    .lado { grid-template-columns: 1fr; }
     .cmd code { font-size: 13px; }
-    h1 { font-size: 36px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .aparece { opacity: 1; transform: none; transition: none; }
+    html { scroll-behavior: auto; }
   }
 </style>
 </head>
 <body>
-<main>
-  <header>
-    <span class="logo">IRIS</span>
-    <nav><a href="#que">qué es</a><a href="#tienda">tienda</a><a href="https://github.com/KEXNARV/iris">github</a></nav>
-  </header>
 
-  <div class="hero">
+<nav class="top">
+  <div class="ancho">
+    <a class="logo" href="#"><i></i>IRIS</a>
+    <div class="links">
+      <a href="#sesion">sesión</a><a href="#nucleo">núcleo</a><a href="#estilos">estilos</a><a href="#voz">voz</a><a href="#tienda">tienda</a><a href="https://github.com/KEXNARV/iris">github</a><a class="cta" href="#instalar">instalar</a>
+    </div>
+  </div>
+</nav>
+
+<main>
+  <div class="ancho hero">
     <div>
       <h1>IRIS</h1>
-      <p class="lema">Claude Code con cara, voz y núcleo. En tu terminal.</p>
-      <p class="estado" id="estado">en espera · mantén espacio para hablar</p>
-
-      <div class="instalar">
+      <p class="lema">Claude Code con cara, voz y núcleo.</p>
+      <p class="sub">Le hablas y te escucha. Te contesta en voz alta. Y mientras trabaja, su núcleo de puntos te muestra qué está haciendo: si piensa, lee, busca, corre comandos o manda subagentes.</p>
+      <p class="estado" id="estado"><b>EN ESPERA</b> · mantén espacio para hablar</p>
+      <div class="instalar" data-instalar>
         <div class="tabs" role="tablist">
           <button role="tab" aria-selected="true" data-os="linux">Arch · Ubuntu</button>
           <button role="tab" aria-selected="false" data-os="windows">Windows</button>
         </div>
-        <div class="cmd">
-          <code id="comando">curl -fsSL https://iris.knarvaez.com/install.sh | sh</code>
-          <button class="copiar" id="copiar">copiar</button>
-        </div>
-        <p class="nota">Necesitas una cuenta de Claude. Si no tienes Claude Code, el instalador lo trae. <a href="https://github.com/KEXNARV/iris/releases/latest">v0.1.0</a></p>
+        <div class="cmd"><code data-comando>curl -fsSL https://iris.knarvaez.com/install.sh | sh</code><button class="copiar">copiar</button></div>
+        <p class="nota">Necesitas una cuenta de Claude; si no tienes Claude Code, el instalador lo trae. <a href="https://github.com/KEXNARV/iris/releases/latest">última versión</a></p>
       </div>
     </div>
     <div class="escena">
-      <canvas id="nucleo" aria-label="El núcleo de Iris"></canvas>
-      <div class="buddies" role="group" aria-label="Quién vive en el núcleo">
+      <canvas class="nucleo" id="principal" aria-label="El núcleo de Iris trabajando"></canvas>
+      <div class="botonera" role="group" aria-label="Quién vive en el núcleo">
         <button data-buddy="0" aria-pressed="true">original</button>
         <button data-buddy="1" aria-pressed="false">baymax</button>
       </div>
     </div>
   </div>
 
-  <section id="que">
-    <h2>QUÉ ES</h2>
-    <div class="grid">
-      <div class="card"><h3>Te escucha y te habla</h3><p>Mantén espacio y háblale. El dictado corre en tu máquina con Whisper, sin mandar tu voz a ningún lado, y la respuesta te la lee en voz alta.</p></div>
-      <div class="card"><h3>Un núcleo que muestra qué hace</h3><p>Piensa, lee archivos, busca, corre comandos, lanza subagentes: cada cosa tiene su forma y su movimiento. Lo ves de un vistazo sin leer el log.</p></div>
-      <div class="card"><h3>Diez estilos de pantalla</h3><p>Clásico, Cine, Zen, Radar, Fósforo, Tablero… con <code>/theme</code> cambias cómo se reparte todo, con los colores de tu tema.</p></div>
-      <div class="card"><h3>Todo lo de Claude Code</h3><p>Iris va encima de Claude Code: las mismas herramientas, sesiones y permisos, con las herramientas a la vista (<code>^G</code>) y la conversación entera a mano (<code>^T</code>).</p></div>
+  <section id="sesion">
+    <div class="ancho">
+      <p class="eti aparece">UNA SESIÓN</p>
+      <h2 class="aparece">Le pides algo. Lo ves trabajar.</h2>
+      <p class="intro aparece">Así se ve una tarea de verdad en el estilo <b>Clásico</b>: la conversación a la izquierda, el núcleo cambiando de forma con cada cosa que hace y, abajo, cada herramienta con lo que tardó. Es la misma Iris: el núcleo de esta página es su código, compilado para el navegador.</p>
+      <div class="terminal aparece">
+        <div class="barra"><i></i><i></i><i></i><span>iris — ~/blog</span></div>
+        <div class="clasico">
+          <div class="caja chat" id="chat"><span class="t">CONVERSACIÓN</span></div>
+          <div class="lado">
+            <div class="caja nuc"><span class="t">NÚCLEO</span>
+              <div><canvas class="nucleo" id="sesion-nucleo" aria-label="El núcleo durante la sesión"></canvas>
+              <div class="rotulo"><b id="sesion-estado">EN ESPERA</b><div id="sesion-detalle">mantén o toca espacio para hablar</div></div></div>
+            </div>
+            <div class="caja actividad" id="actividad"><span class="t">ACTIVIDAD</span></div>
+          </div>
+          <div class="caja orden"><span class="t">ORDEN</span><span id="orden">› </span><span class="cursor"></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="nucleo">
+    <div class="ancho">
+      <p class="eti aparece">EL NÚCLEO</p>
+      <h2 class="aparece">Un lenguaje que se lee de reojo.</h2>
+      <p class="intro aparece">Cada cosa que hace Claude tiene su forma, su color y su movimiento. Sin leer el log sabes si está pensando, leyendo, editando o esperándote. Y los subagentes salen del núcleo como <b>hijos</b> que trabajan a su lado y vuelven al terminar.</p>
+      <div class="estados" id="estados"></div>
+    </div>
+  </section>
+
+  <section id="estilos">
+    <div class="ancho">
+      <p class="eti aparece">DIEZ ESTILOS</p>
+      <h2 class="aparece">La pantalla, como te guste.</h2>
+      <p class="intro aparece">Con <b>/theme</b> cambias cómo se reparte todo, sin perder nada: los mismos colores de tu tema de terminal, el mismo núcleo, otra forma de leer. Estas capturas son de Iris corriendo en una terminal.</p>
+      <div class="galeria aparece">
+        <div class="lista-est" id="lista-est"></div>
+        <div class="marco">
+          <img id="foto-est" src="img/estilo-clasico.webp" alt="Iris en el estilo Clásico" width="1560" height="960">
+          <div class="pie"><span id="pie-est">paneles con borde, como siempre</span><code id="cmd-est">/theme clasico</code></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="voz">
+    <div class="ancho">
+      <p class="eti aparece">VOZ</p>
+      <h2 class="aparece">Háblale como a alguien.</h2>
+      <p class="intro aparece">Mantén <b>espacio</b> y dile lo que quieres. Suelta y lo manda. Si le hablaste, te contesta hablando; si escribiste, en silencio. Todo el dictado ocurre en tu máquina.</p>
+      <div class="grid">
+        <div class="card aparece"><span class="tag">local</span><h3>Te escucha</h3><p>Whisper corre en tu equipo, con la GPU si hay (Vulkan). Tu voz no sale de la máquina.</p><ul><li>Detecta cuándo dejas de hablar</li><li>Descarta las frases que Whisper inventa con el ruido</li><li>Escribir mientras trabaja deja el mensaje en espera</li></ul></div>
+        <div class="card aparece"><span class="tag">opcional</span><h3>Te habla</h3><p>Lee la respuesta en voz alta mientras llega, frase por frase, sin leerte el código ni las tablas.</p><ul><li>Se calla en cuanto le hablas</li><li>Pausa tu música mientras conversan y la reanuda</li><li><code>/voice</code>: auto, siempre o nunca</li></ul></div>
+        <div class="card aparece"><span class="tag">linux</span><h3>Modo flotante</h3><p>Una Iris escondida que aparece con un atajo del escritorio, te escucha sola, hace lo que pediste ("sube el volumen", "abre el navegador") y se vuelve a esconder.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="atajos">
+    <div class="ancho">
+      <p class="eti aparece">ATAJOS</p>
+      <h2 class="aparece">Todo a una tecla.</h2>
+      <p class="intro aparece">Valen en cualquier estilo. Y con <b>/</b> se abre el menú de órdenes: <code>/model</code>, <code>/effort</code>, <code>/resume</code>, <code>/buddy</code>, <code>/theme</code>…</p>
+      <div class="atajos aparece">
+        <div class="atajo"><kbd>espacio</kbd><span>mantén para hablar, suelta para mandar</span></div>
+        <div class="atajo"><kbd>^G</kbd><span>cada herramienta, entera; <kbd>tab</kbd> los subagentes</span></div>
+        <div class="atajo"><kbd>^T</kbd><span>la conversación entera, con su markdown</span></div>
+        <div class="atajo"><kbd>^O</kbd><span>la respuesta entera, para leerla tranquilo</span></div>
+        <div class="atajo"><kbd>esc</kbd><span>lo callas, o lo interrumpes si está trabajando</span></div>
+        <div class="atajo"><kbd>^V</kbd><span>pega una imagen del portapapeles</span></div>
+        <div class="atajo"><kbd>/</kbd><span>el menú de órdenes</span></div>
+        <div class="atajo"><kbd>^R</kbd><span>reinicia el motor con una sesión nueva</span></div>
+        <div class="atajo"><kbd>arrastrar</kbd><span>copia texto del chat; un clic en un adjunto lo copia como archivo</span></div>
+      </div>
     </div>
   </section>
 
   <section id="tienda">
-    <h2>TIENDA DE PIEZAS</h2>
-    <div class="tienda">
-      <div>
-        <p><strong>Quién vive en el núcleo lo decides tú.</strong> Buddies (como Baymax), partículas, ondas, caras: piezas que cualquiera puede crear, subir y descargar.</p>
-        <p>Cada pieza corre aislada: no puede tocar tus archivos ni la red. Y nada se publica sin revisión.</p>
-        <p><span class="pronto">pronto</span></p>
+    <div class="ancho">
+      <p class="eti aparece">LA TIENDA<span class="pronto">pronto</span></p>
+      <h2 class="aparece">Tunea todo.</h2>
+      <p class="intro aparece">Cada parte de Iris es una pieza que se cambia: quién vive en el núcleo, cómo son las partículas, los colores, la pantalla entera. Cualquiera puede crear una, subirla y que otros la instalen con una orden. Corren <b>aisladas</b> (WebAssembly): una pieza no puede tocar tus archivos ni la red, y nada se publica sin revisión.</p>
+      <div class="ranuras">
+        <div class="ranura aparece"><code>/buddy</code><p>Quién vive en el núcleo: el original, Baymax… o el que alguien dibuje.</p></div>
+        <div class="ranura aparece"><code>/particles</code><p>Las motas alrededor: cuántas, cómo flotan, qué hacen cuando escucha.</p></div>
+        <div class="ranura aparece"><code>/colors</code><p>Paletas completas para la pantalla y el núcleo, más allá de tu tema.</p></div>
+        <div class="ranura aparece"><code>/theme</code><p>Estilos de pantalla nuevos: otra forma de repartir chat, núcleo y actividad.</p></div>
+        <div class="ranura aparece"><code>/arcs</code><p>Los anillos que giran al pensar y al buscar.</p></div>
+        <div class="ranura aparece"><code>/sounds</code><p>Un sonido al terminar, al fallar o al necesitarte.</p></div>
       </div>
       <ol class="pasos">
-        <li><code>/tienda kirby</code> para buscarlo</li>
-        <li>Instalarlo con un enter</li>
-        <li><code>/buddy kirby</code> y ya vive en tu núcleo</li>
+        <li class="aparece"><code>/tienda kirby</code> para buscarla</li>
+        <li class="aparece">Ves su vista previa animada e instalas con un enter</li>
+        <li class="aparece"><code>/buddy kirby</code> y ya vive en tu núcleo</li>
       </ol>
     </div>
   </section>
 
-  <footer>
-    <span>Iris · hecho por <a href="https://github.com/KEXNARV">KEXNARV</a></span>
-    <span>Iris no es de Anthropic: es una interfaz sobre Claude Code.</span>
-  </footer>
+  <section id="instalar">
+    <div class="ancho final">
+      <div>
+        <p class="eti aparece">INSTALAR</p>
+        <h2 class="aparece">Un comando y listo.</h2>
+        <div class="instalar aparece" data-instalar>
+          <div class="tabs" role="tablist">
+            <button role="tab" aria-selected="true" data-os="linux">Arch · Ubuntu</button>
+            <button role="tab" aria-selected="false" data-os="windows">Windows</button>
+          </div>
+          <div class="cmd"><code data-comando>curl -fsSL https://iris.knarvaez.com/install.sh | sh</code><button class="copiar">copiar</button></div>
+          <p class="nota">Comprueba lo que baja, instala lo que falte y te deja <code>iris</code> listo.</p>
+        </div>
+        <ul class="req aparece">
+          <li><b>Una cuenta de Claude</b> (Pro, Max o API). Iris usa Claude Code por debajo, con tu sesión.</li>
+          <li><b>Linux x86_64</b> (Arch, Ubuntu 22.04+ y derivados) o <b>Windows 10/11</b> de 64 bits.</li>
+          <li><b>Una terminal con Sixel</b> para el núcleo en puntos finos: foot, WezTerm, Windows Terminal. En las demás se dibuja en braille.</li>
+          <li><b>Para la voz</b>, un micrófono y ~550 MB del modelo, que el instalador baja (<code>--sin-voz</code> para saltarlo).</li>
+        </ul>
+      </div>
+      <div class="aparece">
+        <p class="eti">PREGUNTAS</p>
+        <details><summary>¿Cuánto cuesta?</summary><p>Iris es gratis y de código abierto. Lo que gastas es lo de Claude: va con tu suscripción o tu clave de API, como Claude Code.</p></details>
+        <details><summary>¿Es de Anthropic?</summary><p>No. Es una interfaz propia que corre encima de Claude Code: las mismas herramientas, permisos y sesiones, con otra cara.</p></details>
+        <details><summary>¿Qué pasa con mi voz?</summary><p>El dictado se hace en tu máquina con Whisper. Lo único que viaja es el texto que resulta, igual que si lo escribieras.</p></details>
+        <details><summary>¿Funciona en Windows?</summary><p>Sí, en Windows Terminal. Por ahora el dictado corre en el procesador (sin GPU) y el modo flotante es solo de Linux.</p></details>
+        <details><summary>¿Y mis sesiones de Claude Code?</summary><p>Son las mismas. Con <code>/resume</code> retomas cualquiera, con su conversación y lo que hizo cada herramienta.</p></details>
+        <details><summary>¿Cómo se actualiza?</summary><p>Vuelve a correr el comando de instalación: siempre baja la última versión. Para quitarlo, <code>sh -s -- --desinstalar</code>.</p></details>
+      </div>
+    </div>
+  </section>
 </main>
 
+<footer>
+  <div class="ancho">
+    <span>Iris · hecho por <a href="https://github.com/KEXNARV">KEXNARV</a> · <a href="https://github.com/KEXNARV/iris">código</a></span>
+    <span>Iris no es de Anthropic: es una interfaz sobre Claude Code.</span>
+  </div>
+</footer>
+
 <script>
-// Instalar: el comando según el sistema, y copiarlo.
-const comandos = {
+"use strict";
+const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+// ── Instalar: el comando según el sistema, y copiarlo ──
+const COMANDOS = {
   linux: "curl -fsSL https://iris.knarvaez.com/install.sh | sh",
   windows: "irm https://iris.knarvaez.com/install.ps1 | iex",
 };
-const tabs = document.querySelectorAll(".tabs button");
-const comando = document.getElementById("comando");
-function elegir(os) {
-  tabs.forEach(t => t.setAttribute("aria-selected", t.dataset.os === os));
-  comando.textContent = comandos[os];
+function elegirOs(os) {
+  $$("[data-instalar] .tabs button").forEach(t => t.setAttribute("aria-selected", t.dataset.os === os));
+  $$("[data-comando]").forEach(c => (c.textContent = COMANDOS[os]));
 }
-tabs.forEach(t => t.addEventListener("click", () => elegir(t.dataset.os)));
-if (/Windows/.test(navigator.userAgent)) elegir("windows");
-const copiar = document.getElementById("copiar");
-copiar.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(comando.textContent);
-  copiar.textContent = "copiado";
-  setTimeout(() => (copiar.textContent = "copiar"), 1400);
-});
+$$("[data-instalar] .tabs button").forEach(t => t.addEventListener("click", () => elegirOs(t.dataset.os)));
+if (/Windows/.test(navigator.userAgent)) elegirOs("windows");
+$$(".copiar").forEach(b => b.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(b.parentElement.querySelector("code").textContent);
+  b.textContent = "copiado";
+  setTimeout(() => (b.textContent = "copiar"), 1400);
+}));
 
-// El núcleo: el mismo de la terminal, compilado a WASM (web/nucleo-wasm). Aquí solo se le dice
-// qué está haciendo, como si trabajara en algo, y se pinta lo que devuelve.
-const cv = document.getElementById("nucleo");
-const cx = cv.getContext("2d");
-const estado = document.getElementById("estado");
-// El índice es el de ESTADOS en nucleo-wasm/src/lib.rs.
-const E = { reposo: 0, escucha: 1, transcribe: 2, piensa: 3, planea: 4, lee: 5, busca: 6, edita: 7, corre: 8, delega: 9, habla: 10, duerme: 11 };
-const GUION = [
-  [E.reposo, 3.5, "en espera · mantén espacio para hablar"],
-  [E.escucha, 3.2, "te escucho…"],
-  [E.transcribe, 1.2, "transcribiendo"],
-  [E.piensa, 3.0, "pensando"],
-  [E.lee, 2.6, "leyendo src/ui/mod.rs"],
-  [E.busca, 2.4, "buscando «draw»"],
-  [E.delega, 5.0, "dos subagentes revisando"],
-  [E.edita, 2.4, "editando src/ui/vistas.rs"],
-  [E.corre, 2.6, "cargo test"],
-  [E.habla, 3.6, "hablando"],
+// ── La barra se marca al bajar; las secciones aparecen al llegar ──
+addEventListener("scroll", () => $("nav.top").classList.toggle("bajo", scrollY > 10), { passive: true });
+const io = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && (e.target.classList.add("visto"), io.unobserve(e.target))), { threshold: 0.12 });
+$$(".aparece").forEach(el => io.observe(el));
+
+// ── Estilos ──
+const ESTILOS = [
+  ["clasico", "Clásico", "paneles con borde, como siempre"],
+  ["cine", "Cine", "la voz primero: historial, núcleo y lo que hace"],
+  ["propuesta", "Propuesta", "sin cajas, el núcleo al frente"],
+  ["cabina", "Cabina", "HUD denso: registro con hora y línea del turno"],
+  ["fosforo", "Fósforo", "CRT de un solo color, con retícula y barrido"],
+  ["radar", "Radar", "cada herramienta aparece en su sector"],
+  ["editorial", "Editorial", "titular grande, columna de lectura y figura"],
+  ["zen", "Zen", "casi nada: un punto que late y la línea de escritura"],
+  ["bitacora", "Bitácora", "todo en orden, línea por línea, con su hora"],
+  ["tablero", "Tablero", "mosaicos: contexto, costo, herramientas y sesión"],
+  ["herramientas", "^G Herramientas", "cada herramienta entera: entrada, salida y cuánto tardó"],
 ];
-const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let w = null, mem = null;
-function tam() {
-  // Más de ~720 px de lado no se nota y cuesta: el canvas se estira con CSS.
-  const lado = Math.min(720, Math.round(cv.clientWidth * (devicePixelRatio || 1)));
-  cv.width = cv.height = Math.max(160, lado);
+const lista = $("#lista-est");
+ESTILOS.forEach(([id, nombre, desc], i) => {
+  const b = document.createElement("button");
+  b.innerHTML = `<b>${nombre}</b><span>${desc}</span>`;
+  b.setAttribute("aria-pressed", i === 0);
+  b.addEventListener("click", () => verEstilo(i));
+  lista.append(b);
+  if (i > 0) new Image().src = `img/estilo-${id}.webp`;
+});
+function verEstilo(i) {
+  const [id, nombre, desc] = ESTILOS[i];
+  const img = $("#foto-est");
+  img.style.opacity = 0;
+  setTimeout(() => {
+    img.src = `img/estilo-${id}.webp`;
+    img.alt = `Iris en el estilo ${nombre}`;
+    img.style.opacity = 1;
+  }, 180);
+  $("#pie-est").textContent = desc;
+  $("#cmd-est").textContent = id === "herramientas" ? "ctrl + g" : `/theme ${id}`;
+  [...lista.children].forEach((b, j) => b.setAttribute("aria-pressed", j === i));
 }
-addEventListener("resize", tam);
-tam();
 
-let paso = 0, enPaso = 0, ultimo = performance.now(), hijos = [];
-function guion(dt) {
-  enPaso += dt;
-  const [, dura] = GUION[paso];
-  if (enPaso >= dura) {
-    enPaso = 0;
-    paso = (paso + 1) % GUION.length;
-    estado.textContent = GUION[paso][2];
-    if (GUION[paso][0] === E.delega) {
-      hijos = [1, 2];
-      hijos.forEach(id => w.iris_hijo(0, id));
+// ── Los núcleos: el mismo de la terminal, compilado a WASM (web/nucleo-wasm) ──
+// Índices de ESTADOS en nucleo-wasm/src/lib.rs.
+const E = { reposo: 0, escucha: 1, transcribe: 2, piensa: 3, planea: 4, lee: 5, busca: 6, edita: 7, corre: 8, delega: 9, habla: 10, duerme: 11 };
+let W = null;
+const nucleos = [];
+
+class Nucleo {
+  // `guion(dt, t, nucleo)` devuelve [estado, voz] en cada cuadro.
+  constructor(canvas, guion, { lado = 640, densidad = 110 } = {}) {
+    this.cv = canvas;
+    this.cx = canvas.getContext("2d");
+    this.guion = guion;
+    this.lado = lado;
+    this.densidad = densidad;
+    this.visible = false;
+    this.t = 0;
+    this.id = W.iris_nuevo();
+    new IntersectionObserver(([e]) => (this.visible = e.isIntersecting), { rootMargin: "100px" }).observe(canvas);
+    nucleos.push(this);
+  }
+  cuadro(dt) {
+    this.t += dt;
+    const [estado, voz] = this.guion(dt, this.t, this);
+    W.iris_paso(this.id, dt, estado, voz, 0);
+    if (!this.visible) return;
+    const lado = Math.max(140, Math.min(this.lado, Math.round(this.cv.clientWidth * (devicePixelRatio || 1))));
+    if (this.cv.width !== lado) this.cv.width = this.cv.height = lado;
+    const sp = Math.max(3, Math.round(lado / this.densidad));
+    const n = W.iris_imagen(this.id, lado, lado, sp);
+    const img = new Uint8Array(W.memory.buffer, W.iris_imagen_ptr(this.id), lado * lado);
+    const pal = new Float32Array(W.memory.buffer, W.iris_paleta_ptr(this.id), n * 3);
+    const datos = this.cx.createImageData(lado, lado);
+    const px = datos.data;
+    for (let i = 0; i < img.length; i++) {
+      const k = img[i];
+      if (k === 0) continue;
+      const c = (k - 1) * 3, o = i * 4;
+      px[o] = pal[c]; px[o + 1] = pal[c + 1]; px[o + 2] = pal[c + 2]; px[o + 3] = 255;
     }
+    this.cx.putImageData(datos, 0, 0);
   }
-  const [e] = GUION[paso];
-  // Los subagentes trabajan un rato y terminan: uno bien y el otro también, al final.
-  if (e === E.delega) {
-    if (Math.random() < dt * 1.5) hijos.forEach(id => w.iris_hijo(1, id));
-    if (enPaso > 3.6 && hijos.length === 2) { w.iris_hijo(2, hijos.shift()); }
-    if (enPaso > 4.4 && hijos.length === 1) { w.iris_hijo(2, hijos.shift()); }
-  }
-  // La voz: un nivel que sube y baja como una frase, al escuchar y al hablar.
-  const t = performance.now() / 1000;
-  const voz = (e === E.escucha || e === E.habla) ? Math.max(0, 0.35 + 0.3 * Math.sin(t * 7.3) * Math.sin(t * 2.1) + 0.15 * Math.sin(t * 17)) : 0;
-  return [e, voz];
 }
 
-function cuadro(ahora) {
-  const dt = Math.min(0.1, (ahora - ultimo) / 1000);
-  ultimo = ahora;
-  const [e, voz] = quieto ? [E.reposo, 0] : guion(dt);
-  w.iris_paso(dt, e, voz, 0);
-  const W = cv.width, H = cv.height;
-  const sp = Math.max(3, Math.round(W / 110));
-  const n = w.iris_imagen(W, H, sp);
-  const img = new Uint8Array(mem.buffer, w.iris_imagen_ptr(), W * H);
-  const pal = new Float32Array(mem.buffer, w.iris_paleta_ptr(), n * 3);
-  const datos = cx.createImageData(W, H);
-  const px = datos.data;
-  for (let i = 0; i < img.length; i++) {
-    const k = img[i];
-    if (k === 0) continue;
-    const c = (k - 1) * 3;
-    px[i * 4] = pal[c];
-    px[i * 4 + 1] = pal[c + 1];
-    px[i * 4 + 2] = pal[c + 2];
-    px[i * 4 + 3] = 255;
-  }
-  cx.putImageData(datos, 0, 0);
-  if (!quieto) requestAnimationFrame(cuadro);
+// La voz: un nivel que sube y baja como una frase.
+const vozDe = t => Math.max(0, 0.35 + 0.3 * Math.sin(t * 7.3) * Math.sin(t * 2.1) + 0.15 * Math.sin(t * 17));
+
+// Un guion que va pasando por pasos [estado, segundos, al entrar(nucleo)].
+function guionDePasos(pasos) {
+  let i = 0, en = 0, primera = true;
+  return (dt, t, nuc) => {
+    if (primera) { primera = false; pasos[0][2]?.(nuc); }
+    en += dt;
+    if (en >= pasos[i][1]) {
+      en = 0;
+      i = (i + 1) % pasos.length;
+      pasos[i][2]?.(nuc);
+    }
+    const e = pasos[i][0];
+    return [e, e === E.escucha || e === E.habla ? vozDe(t) : 0];
+  };
 }
 
-document.querySelectorAll(".buddies button").forEach(b => b.addEventListener("click", () => {
-  if (!w) return;
-  w.iris_buddy(Number(b.dataset.buddy));
-  document.querySelectorAll(".buddies button").forEach(x => x.setAttribute("aria-pressed", x === b));
+// ── El grande de arriba ──
+function iniciarPrincipal() {
+  const est = $("#estado");
+  const di = (a, b) => () => (est.innerHTML = b ? `<b>${a}</b> · ${b}` : `<b>${a}</b>`);
+  new Nucleo($("#principal"), guionDePasos([
+    [E.reposo, 3.5, di("EN ESPERA", "mantén espacio para hablar")],
+    [E.escucha, 3.2, di("TE ESCUCHO", "suelta espacio para enviar")],
+    [E.transcribe, 1.2, di("TRANSCRIBIENDO", "whisper, en tu máquina")],
+    [E.piensa, 3.0, di("PENSANDO", "")],
+    [E.lee, 2.6, di("LEYENDO", "src/ui/mod.rs")],
+    [E.busca, 2.4, di("BUSCANDO", "«fn draw»")],
+    [E.delega, 5.0, n => { di("SUBAGENTES", "dos revisando a la vez")(); [1, 2].forEach(h => W.iris_hijo(n.id, 0, h)); setTimeout(() => W.iris_hijo(n.id, 2, 1), 3400); setTimeout(() => W.iris_hijo(n.id, 2, 2), 4300); }],
+    [E.edita, 2.4, di("EDITANDO", "src/ui/vistas.rs")],
+    [E.corre, 2.6, di("CORRIENDO", "cargo test")],
+    [E.habla, 3.6, n => { di("HABLANDO", "listo, ya quedó")(); setTimeout(() => W.iris_evento(n.id, 1), 3300); }],
+  ]));
+}
+
+// ── La rejilla de estados ──
+function iniciarEstados() {
+  const ESTADOS_WEB = [
+    ["ESCUCHANDO", "una estrella que vibra con tu voz", E.escucha],
+    ["PENSANDO", "se recoge y giran los arcos", E.piensa],
+    ["LEYENDO", "una lupa recorre lo que abre", E.lee],
+    ["BUSCANDO", "el radar barre buscando", E.busca],
+    ["EDITANDO", "puntadas sobre el cuerpo", E.edita],
+    ["CORRIENDO", "la prensa: algo se ejecuta", E.corre],
+    ["SUBAGENTES", "los hijos salen y vuelven", E.delega],
+    ["HABLANDO", "ondas al ritmo de lo que dice", E.habla],
+  ];
+  const caja = $("#estados");
+  ESTADOS_WEB.forEach(([titulo, desc, e]) => {
+    const d = document.createElement("div");
+    d.className = "est aparece";
+    d.innerHTML = `<canvas aria-label="El núcleo ${titulo.toLowerCase()}"></canvas><h3>${titulo}</h3><p>${desc}</p>`;
+    caja.append(d);
+    io.observe(d);
+    let vivos = [], sig = 0, prox = 0;
+    new Nucleo(d.querySelector("canvas"), (dt, t, n) => {
+      // Los subagentes nacen de a uno y, con dos fuera, vuelven juntos; el resto se queda en su estado.
+      if (e === E.delega && t > prox) {
+        prox = t + 2.2;
+        if (vivos.length >= 2) { vivos.forEach(h => W.iris_hijo(n.id, 2, h)); vivos = []; }
+        else { vivos.push(++sig); W.iris_hijo(n.id, 0, sig); }
+      }
+      return [t < 0.4 ? E.reposo : e, e === E.escucha || e === E.habla ? vozDe(t + titulo.length) : 0];
+    }, { lado: 360, densidad: 80 });
+  });
+}
+
+// ── La sesión en la terminal ──
+function iniciarSesion() {
+  const chat = $("#chat"), act = $("#actividad"), orden = $("#orden");
+  const rot = $("#sesion-estado"), det = $("#sesion-detalle");
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  function poner(html, cls = "") {
+    const d = document.createElement("div");
+    d.className = "m " + cls;
+    d.innerHTML = html;
+    chat.append(d);
+    while (chat.children.length > 14) chat.children[1].remove();
+    return d;
+  }
+  const tu = texto => poner(`<div class="quien tu">tú</div><div class="txt">${md(texto)}</div>`);
+  const iris = html => poner(`<div class="quien">iris</div><div class="txt">${html}</div>`);
+  function herramienta(nombre, detalle, segs) {
+    const fila = `<span class="run">◐</span> <b>${nombre}</b> ${esc(detalle)}`;
+    const d = poner(fila, "tool");
+    const a = document.createElement("div");
+    a.innerHTML = fila;
+    act.insertBefore(a, act.children[1] || null);
+    while (act.children.length > 9) act.lastChild.remove();
+    setTimeout(() => {
+      const ok = `<span class="ok">✓</span> <b>${nombre}</b> ${esc(detalle)} <span style="opacity:.6">${segs}s</span>`;
+      d.innerHTML = ok;
+      a.innerHTML = ok;
+    }, segs * 1000);
+  }
+  const estado = (a, b = "") => { rot.textContent = a; det.textContent = b; };
+  let tecleo = null;
+  function teclear(texto, ms = 45) {
+    clearInterval(tecleo);
+    let i = 0;
+    orden.textContent = "› ";
+    tecleo = setInterval(() => {
+      orden.textContent = "› " + texto.slice(0, ++i);
+      if (i >= texto.length) clearInterval(tecleo);
+    }, ms);
+  }
+  function limpiar() {
+    clearInterval(tecleo);
+    [...chat.children].slice(1).forEach(c => c.remove());
+    [...act.children].slice(1).forEach(c => c.remove());
+  }
+  const FINAL = `Listo, ya se ve bien en el celular.
+
+Eran <strong>dos</strong> problemas en <code>src/styles/theme.css</code>:
+• <strong>El tema oscuro empezaba en 768 px.</strong> Le quité el <code>min-width</code>.
+• <strong>Los párrafos tenían un gris fijo</strong> que no cambiaba con el tema:
+<pre>@media (prefers-color-scheme: dark) {
+  :root { --texto-suave: #b4b4b8; }
+}</pre>Contraste en el celular: 1.9 : 1 → <strong>11.2 : 1</strong>. Las 24 pruebas pasan.`;
+  let hijo = 0;
+  new Nucleo($("#sesion-nucleo"), guionDePasos([
+    [E.reposo, 2.5, () => { limpiar(); estado("EN ESPERA", "mantén o toca espacio para hablar"); orden.textContent = "› "; }],
+    [E.escucha, 3.6, () => { estado("TE ESCUCHO", "suelta espacio para enviar"); orden.innerHTML = '› <span style="color:var(--faint)">te escucho…</span><span class="ondita" id="ondita"></span>'; }],
+    [E.transcribe, 1.1, () => { estado("TRANSCRIBIENDO"); orden.textContent = "› "; }],
+    [E.piensa, 2.4, () => { tu("el modo oscuro del blog se ve fatal en el celular: texto gris sobre gris. ¿lo arreglas?"); estado("PENSANDO"); }],
+    [E.piensa, 1.6, () => iris("Voy a ver cómo está armado el tema y dónde se rompe en pantallas chicas.")],
+    [E.busca, 1.4, () => { estado("BUSCANDO", "prefers-color-scheme"); herramienta("Grep", "«prefers-color-scheme» src", 0.3); }],
+    [E.lee, 1.5, () => { estado("LEYENDO", "src/styles/theme.css"); herramienta("Read", "src/styles/theme.css", 0.2); }],
+    [E.lee, 1.3, () => { estado("LEYENDO", "src/components/Header.astro"); herramienta("Read", "src/components/Header.astro", 0.2); }],
+    [E.delega, 3.6, n => { estado("SUBAGENTES", "revisando las demás páginas"); herramienta("Agent", "revisar el contraste en las otras páginas", 3.2); const h = ++hijo; W.iris_hijo(n.id, 0, h); setTimeout(() => W.iris_hijo(n.id, 2, h), 3000); }],
+    [E.piensa, 1.6, () => { estado("PENSANDO"); iris("Ahí está: el tema oscuro solo se activa desde 768 px, y los párrafos tienen un gris fijo que no cambia con el tema."); }],
+    [E.edita, 1.2, () => { estado("EDITANDO", "src/styles/theme.css"); herramienta("Edit", "src/styles/theme.css −1 +1", 0.1); }],
+    [E.edita, 1.2, () => herramienta("Edit", "src/styles/theme.css −1 +1", 0.1)],
+    [E.corre, 2.6, () => { estado("CORRIENDO", "npm test"); herramienta("Bash", "npm test -- --run", 2.1); }],
+    [E.habla, 5.0, n => { estado("HABLANDO", "listo, ya quedó"); iris(FINAL); setTimeout(() => W.iris_evento(n.id, 1), 4800); }],
+    [E.reposo, 3.0, () => { estado("EN ESPERA", "mantén o toca espacio para hablar"); teclear("¿y el header también?"); }],
+  ]), { lado: 420, densidad: 72 });
+  // La ondita de la orden mientras escucha.
+  setInterval(() => {
+    const o = document.getElementById("ondita");
+    if (!o) return;
+    const t = performance.now() / 1000;
+    o.innerHTML = Array.from({ length: 14 }, (_, i) => `<i style="height:${3 + 14 * vozDe(t + i * 0.13)}px"></i>`).join("");
+  }, 80);
+}
+
+// ── Arranque ──
+$$(".botonera button").forEach(b => b.addEventListener("click", () => {
+  if (!W) return;
+  W.iris_buddy(Number(b.dataset.buddy));
+  $$(".botonera button").forEach(x => x.setAttribute("aria-pressed", x === b));
 }));
 
 WebAssembly.instantiateStreaming(fetch("nucleo.wasm"), {}).then(({ instance }) => {
-  w = instance.exports;
-  mem = w.memory;
-  requestAnimationFrame(t => { ultimo = t; cuadro(t); });
+  W = instance.exports;
+  iniciarPrincipal();
+  iniciarSesion();
+  iniciarEstados();
+  let ultimo = performance.now();
+  function bucle(ahora) {
+    const dt = Math.min(0.1, (ahora - ultimo) / 1000);
+    ultimo = ahora;
+    for (const n of nucleos) n.cuadro(quieto ? 0 : dt);
+    if (!quieto) requestAnimationFrame(bucle);
+  }
+  requestAnimationFrame(bucle);
 });
 </script>
 </body>
