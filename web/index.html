@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Iris · Claude Code con cara, voz y núcleo</title>
+<meta name="description" content="Iris es una interfaz de terminal para Claude Code: te escucha, te habla y muestra con su núcleo qué está haciendo.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='9' fill='%2300c8ff'/></svg>">
+<style>
+  :root {
+    --bg: #05090d;
+    --panel: #0a1118;
+    --line: #13212c;
+    --text: #cde1eb;
+    --faint: #5a6e7d;
+    --accent: #00c8ff;
+    --mono: "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--mono); }
+  body { line-height: 1.55; font-size: 15px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  main { max-width: 980px; margin: 0 auto; padding: 0 22px; }
+
+  header { display: flex; justify-content: space-between; align-items: center; padding: 22px 0; }
+  .logo { letter-spacing: .5em; color: var(--accent); font-weight: 700; }
+  nav a { margin-left: 22px; color: var(--faint); }
+  nav a:hover { color: var(--text); text-decoration: none; }
+
+  .hero { display: grid; grid-template-columns: 1.05fr 1fr; gap: 40px; align-items: center; padding: 40px 0 70px; }
+  .hero > *, .instalar, .tienda > * { min-width: 0; }
+  #nucleo { width: 100%; aspect-ratio: 1; max-width: 460px; justify-self: center; }
+  h1 { font-size: 46px; letter-spacing: .35em; margin: 0 0 8px; color: var(--accent); font-weight: 700; }
+  .lema { font-size: 19px; margin: 0 0 26px; }
+  .estado { color: var(--faint); margin: 0 0 30px; }
+
+  .instalar { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; background: none; border: 0; color: var(--faint); font: inherit; padding: 10px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { color: var(--accent); box-shadow: inset 0 -2px var(--accent); }
+  .cmd { display: flex; align-items: center; gap: 12px; padding: 16px 16px 16px 18px; }
+  .cmd code { flex: 1; white-space: nowrap; overflow-x: auto; color: var(--text); }
+  .cmd code::before { content: "› "; color: var(--accent); }
+  .copiar { background: none; border: 1px solid var(--line); color: var(--faint); font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+  .copiar:hover { color: var(--text); border-color: var(--faint); }
+  .nota { color: var(--faint); font-size: 13px; padding: 0 18px 14px; margin: 0; }
+  .pronto { display: inline-block; font-size: 12px; color: var(--bg); background: var(--accent); padding: 1px 8px; border-radius: 10px; margin-left: 6px; vertical-align: 2px; }
+
+  section { padding: 50px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 13px; letter-spacing: .4em; color: var(--faint); font-weight: 400; margin: 0 0 26px; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 20px 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 16px; color: var(--accent); font-weight: 600; }
+  .card p { margin: 0; color: var(--faint); }
+  .tienda { display: grid; grid-template-columns: 1.2fr 1fr; gap: 30px; align-items: center; }
+  .tienda p { color: var(--faint); margin: 0 0 12px; }
+  .tienda strong { color: var(--text); font-weight: 400; }
+  .pasos { margin: 0; padding: 0; list-style: none; counter-reset: p; }
+  .pasos li { counter-increment: p; padding: 8px 0 8px 34px; position: relative; color: var(--faint); }
+  .pasos li::before { content: counter(p); position: absolute; left: 0; top: 7px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--accent); color: var(--accent); font-size: 12px; display: grid; place-items: center; }
+  .pasos code { color: var(--text); }
+  footer { padding: 34px 0 50px; border-top: 1px solid var(--line); color: var(--faint); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+
+  @media (max-width: 760px) {
+    .hero, .tienda, .grid { grid-template-columns: 1fr; }
+    #nucleo { max-width: 300px; order: -1; }
+    .cmd code { font-size: 13px; }
+    h1 { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="logo">IRIS</span>
+    <nav><a href="#que">qué es</a><a href="#tienda">tienda</a><a href="https://github.com/KEXNARV/iris">github</a></nav>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>IRIS</h1>
+      <p class="lema">Claude Code con cara, voz y núcleo. En tu terminal.</p>
+      <p class="estado" id="estado">en espera · mantén espacio para hablar</p>
+
+      <div class="instalar">
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-os="linux">Arch · Ubuntu</button>
+          <button role="tab" aria-selected="false" data-os="windows">Windows</button>
+        </div>
+        <div class="cmd">
+          <code id="comando">curl -fsSL https://167-86-91-183.sslip.io/install.sh | sh</code>
+          <button class="copiar" id="copiar">copiar</button>
+        </div>
+        <p class="nota">Necesitas una cuenta de Claude. Si no tienes Claude Code, el instalador lo trae. <span class="pronto">pronto</span></p>
+      </div>
+    </div>
+    <canvas id="nucleo" aria-label="El núcleo de Iris"></canvas>
+  </div>
+
+  <section id="que">
+    <h2>QUÉ ES</h2>
+    <div class="grid">
+      <div class="card"><h3>Te escucha y te habla</h3><p>Mantén espacio y háblale. El dictado corre en tu máquina con Whisper, sin mandar tu voz a ningún lado, y la respuesta te la lee en voz alta.</p></div>
+      <div class="card"><h3>Un núcleo que muestra qué hace</h3><p>Piensa, lee archivos, busca, corre comandos, lanza subagentes: cada cosa tiene su forma y su movimiento. Lo ves de un vistazo sin leer el log.</p></div>
+      <div class="card"><h3>Diez estilos de pantalla</h3><p>Clásico, Cine, Zen, Radar, Fósforo, Tablero… con <code>/theme</code> cambias cómo se reparte todo, con los colores de tu tema.</p></div>
+      <div class="card"><h3>Todo lo de Claude Code</h3><p>Iris va encima de Claude Code: las mismas herramientas, sesiones y permisos, con las herramientas a la vista (<code>^G</code>) y la conversación entera a mano (<code>^T</code>).</p></div>
+    </div>
+  </section>
+
+  <section id="tienda">
+    <h2>TIENDA DE PIEZAS</h2>
+    <div class="tienda">
+      <div>
+        <p><strong>Quién vive en el núcleo lo decides tú.</strong> Buddies (como Baymax), partículas, ondas, caras: piezas que cualquiera puede crear, subir y descargar.</p>
+        <p>Cada pieza corre aislada: no puede tocar tus archivos ni la red. Y nada se publica sin revisión.</p>
+        <p><span class="pronto">pronto</span></p>
+      </div>
+      <ol class="pasos">
+        <li><code>/tienda kirby</code> para buscarlo</li>
+        <li>Instalarlo con un enter</li>
+        <li><code>/buddy kirby</code> y ya vive en tu núcleo</li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <span>Iris · hecho por <a href="https://github.com/KEXNARV">KEXNARV</a></span>
+    <span>Iris no es de Anthropic: es una interfaz sobre Claude Code.</span>
+  </footer>
+</main>
+
+<script>
+// Instalar: el comando según el sistema, y copiarlo.
+const comandos = {
+  linux: "curl -fsSL https://167-86-91-183.sslip.io/install.sh | sh",
+  windows: "irm https://167-86-91-183.sslip.io/install.ps1 | iex",
+};
+const tabs = document.querySelectorAll(".tabs button");
+const comando = document.getElementById("comando");
+function elegir(os) {
+  tabs.forEach(t => t.setAttribute("aria-selected", t.dataset.os === os));
+  comando.textContent = comandos[os];
+}
+tabs.forEach(t => t.addEventListener("click", () => elegir(t.dataset.os)));
+if (/Windows/.test(navigator.userAgent)) elegir("windows");
+const copiar = document.getElementById("copiar");
+copiar.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(comando.textContent);
+  copiar.textContent = "copiado";
+  setTimeout(() => (copiar.textContent = "copiar"), 1400);
+});
+
+// El núcleo: una bola de puntos que respira, arcos que giran y motas alrededor. Va pasando
+// por los estados de Iris como si estuviera trabajando.
+const cv = document.getElementById("nucleo");
+const cx = cv.getContext("2d");
+const estado = document.getElementById("estado");
+const ESTADOS = [
+  { nombre: "en espera · mantén espacio para hablar", r: 0.30, pulso: 0.025, arcos: 0, giro: 0.2, color: [0, 200, 255] },
+  { nombre: "te escucho…", r: 0.34, pulso: 0.06, arcos: 1, giro: 0.6, color: [80, 230, 160] },
+  { nombre: "pensando", r: 0.28, pulso: 0.035, arcos: 3, giro: 1.6, color: [150, 130, 255] },
+  { nombre: "leyendo archivos", r: 0.29, pulso: 0.03, arcos: 2, giro: 0.9, color: [0, 200, 255] },
+  { nombre: "hablando", r: 0.33, pulso: 0.07, arcos: 1, giro: 0.5, color: [255, 190, 90] },
+];
+const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let e = 0, mezcla = 1, desde = ESTADOS[0];
+const motas = Array.from({ length: 70 }, () => ({ a: Math.random() * 6.283, r: 0.38 + Math.random() * 0.13, v: 0.1 + Math.random() * 0.3, z: Math.random() }));
+const lerp = (a, b, t) => a + (b - a) * t;
+function tam() {
+  const d = devicePixelRatio || 1;
+  cv.width = cv.clientWidth * d;
+  cv.height = cv.clientHeight * d;
+}
+addEventListener("resize", tam);
+tam();
+if (!quieto) setInterval(() => {
+  desde = mezclado();
+  e = (e + 1) % ESTADOS.length;
+  mezcla = 0;
+  estado.textContent = ESTADOS[e].nombre;
+}, 3200);
+function mezclado() {
+  const a = desde, b = ESTADOS[e], t = Math.min(1, mezcla);
+  return { r: lerp(a.r, b.r, t), pulso: lerp(a.pulso, b.pulso, t), arcos: lerp(a.arcos, b.arcos, t), giro: lerp(a.giro, b.giro, t), color: a.color.map((c, i) => lerp(c, b.color[i], t)) };
+}
+function cuadro(ms) {
+  const t = ms / 1000;
+  mezcla += 0.02;
+  const s = mezclado();
+  const W = cv.width, H = cv.height, n = Math.min(W, H);
+  const paso = n / 64, punto = paso * 0.34;
+  cx.clearRect(0, 0, W, H);
+  const col = a => `rgba(${s.color[0] | 0},${s.color[1] | 0},${s.color[2] | 0},${a})`;
+  const R = s.r * (1 + s.pulso * Math.sin(t * 2.2));
+  for (let y = paso / 2; y < H; y += paso) {
+    for (let x = paso / 2; x < W; x += paso) {
+      const dx = (x - W / 2) / n, dy = (y - H / 2) / n;
+      const d = Math.hypot(dx, dy);
+      const ang = Math.atan2(dy, dx);
+      // El borde ondula un poco: es un blob, no un círculo.
+      const borde = R * (1 + 0.05 * Math.sin(ang * 3 + t * 1.3) + 0.03 * Math.sin(ang * 5 - t));
+      let a = 0;
+      if (d < borde) a = 0.35 + 0.65 * (1 - d / borde) ** 0.6;
+      // Arcos: anillos partidos que giran alrededor.
+      for (let k = 0; k < Math.ceil(s.arcos); k++) {
+        const rr = borde + 0.06 + k * 0.045;
+        const fuerza = Math.min(1, s.arcos - k);
+        const giro = ang - t * s.giro * (k % 2 ? -1 : 1) + k;
+        if (Math.abs(d - rr) < 0.013 && Math.sin(giro * 2) > 0.2) a = Math.max(a, 0.8 * fuerza);
+      }
+      if (a > 0) {
+        cx.fillStyle = col(a);
+        cx.beginPath();
+        cx.arc(x, y, punto, 0, 6.283);
+        cx.fill();
+      }
+    }
+  }
+  for (const m of motas) {
+    m.a += m.v * 0.004 * (1 + s.giro);
+    const x = W / 2 + Math.cos(m.a) * m.r * n, y = H / 2 + Math.sin(m.a) * m.r * n * 0.92;
+    cx.fillStyle = col(0.15 + 0.5 * m.z);
+    cx.beginPath();
+    cx.arc(x, y, punto * (0.5 + 0.6 * m.z), 0, 6.283);
+    cx.fill();
+  }
+  if (!quieto) requestAnimationFrame(cuadro);
+}
+requestAnimationFrame(cuadro);
+</script>
+</body>
+</html>
