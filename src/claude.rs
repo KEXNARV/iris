@@ -68,6 +68,8 @@ impl Claude {
                 // Repite cada mensaje nuestro en el momento en que lo lee: así se sabe cuándo
                 // uno escrito a mitad de turno deja de estar en espera.
                 "--replay-user-messages",
+                // Sin pedir permiso para cada herramienta.
+                "--dangerously-skip-permissions",
                 // Sin esto `AskUserQuestion` no existe en `-p`; con esto el motor nos pregunta a
                 // nosotros por stdout (`control_request` `can_use_tool`) y espera la respuesta.
                 "--permission-prompt-tool",
