@@ -24,7 +24,7 @@ jobs:
       - name: Dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev cmake clang libclang-dev
+          sudo apt-get install -y libasound2-dev libvulkan-dev cmake clang libclang-dev
       - name: SDK de Vulkan (glslc y cabeceras nuevas para ggml)
         run: |
           curl -fsSL -o sdk.tar.xz "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
