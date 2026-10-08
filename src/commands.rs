@@ -39,8 +39,8 @@ pub fn load() -> Vec<Command> {
         desc: "resumir la conversación para liberar contexto".into(),
         local: false,
     });
-    let home = std::env::var("HOME").unwrap_or_default();
-    for dir in [format!("{home}/.claude/skills"), ".claude/skills".into()] {
+    let home = crate::rutas::home().unwrap_or_default();
+    for dir in [home.join(".claude").join("skills"), ".claude/skills".into()] {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for e in entries.flatten() {
             if let Some((name, desc)) = skill_meta(&e.path().join("SKILL.md")) {

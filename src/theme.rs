@@ -128,8 +128,7 @@ fn path() -> Option<PathBuf> {
     if let Some(p) = crate::rutas::var("THEME") {
         return Some(p.into());
     }
-    let home = std::env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".local/state/omarchy/current/theme/colors.toml"))
+    Some(crate::rutas::home()?.join(".local/state/omarchy/current/theme/colors.toml"))
 }
 
 /// Relee el tema si cambió desde la última vez. Devuelve true si cambió algo.
