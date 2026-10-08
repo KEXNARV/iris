@@ -2,7 +2,7 @@
 
 use crate::*;
 
-pub(crate) const FLOTANTE_PROMPT: &str = "Modo flotante: Kevin te llamó con un atajo desde el escritorio y te habla por voz; \
+pub(crate) const FLOTANTE_PROMPT: &str = "Modo flotante: el usuario te llamó con un atajo desde el escritorio y te habla por voz; \
 tu respuesta se lee en voz alta. Si pide una acción del sistema (volumen, brillo, tema, abrir o cerrar apps, \
 música, capturas, recordatorios), hazla directo con los comandos de Omarchy, Hyprland o wpctl, sin pedir \
 confirmación salvo que sea destructiva, y contesta en UNA frase corta en español, sin markdown. Para preguntas, \
@@ -45,7 +45,7 @@ pub(crate) fn flotante_tick(app: &mut App, voice_tx: &Sender<VoiceCmd>) {
 pub(crate) fn hide_flotante() {
     let _ = std::process::Command::new("hyprctl")
         // Con la config en Lua, «dispatch» recibe una llamada de hl.dsp (la sintaxis vieja falla).
-        .args(["dispatch", "hl.dsp.workspace.toggle_special(\"jarvis\")"])
+        .args(["dispatch", "hl.dsp.workspace.toggle_special(\"iris\")"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -55,7 +55,7 @@ pub(crate) fn hide_flotante() {
 pub(crate) fn notify(title: &str, body: &str) {
     let body: String = body.chars().take(140).collect();
     let _ = std::process::Command::new("notify-send")
-        .args(["-a", "JARVIS", title, &body])
+        .args(["-a", "Iris", title, &body])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();

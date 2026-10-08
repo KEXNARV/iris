@@ -3,9 +3,9 @@
 use crate::*;
 
 /// ¿Se puede dibujar el núcleo como imagen? Hace falta una terminal con Sixel (foot) y saber
-/// cuántos píxeles mide una celda. `JARVIS_SIXEL=0` lo apaga; `=1` lo fuerza en otra terminal.
+/// cuántos píxeles mide una celda. `IRIS_SIXEL=0` lo apaga; `=1` lo fuerza en otra terminal.
 pub(crate) fn sixel_cell() -> Option<(u16, u16)> {
-    let want = std::env::var("JARVIS_SIXEL").ok();
+    let want = crate::rutas::var("SIXEL");
     let foot = std::env::var("TERM").is_ok_and(|t| t.starts_with("foot"));
     if want.as_deref() == Some("0") || (!foot && want.as_deref() != Some("1")) {
         return None;
@@ -45,7 +45,7 @@ pub(crate) fn sixel_frame(term: &mut ratatui::DefaultTerminal, app: &mut App, fr
     // El tamaño de la celda cambia con el zoom de la fuente; se vuelve a medir.
     let Some((cw, ch)) = cell_px().or(app.sixel_cell) else { return Ok(cleared) };
     app.sixel_cell = Some((cw, ch));
-    let sp = std::env::var("JARVIS_DOT").ok().and_then(|v| v.parse().ok()).unwrap_or(4);
+    let sp = crate::rutas::var("DOT").and_then(|v| v.parse().ok()).unwrap_or(4);
     let img = app.nucleo.sixel(r.width as usize * cw as usize, r.height as usize * ch as usize, sp);
     // Cada imagen tiene fondo transparente y foot deja ver por ahí la anterior: sin borrar el
     // panel, los cuadros viejos se acumulan. Borrar las celdas (ECH) elimina la imagen de abajo;

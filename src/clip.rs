@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn reconoce_rutas_de_imagenes() {
-        let dir = std::env::temp_dir().join("jarvis-clip-test");
+        let dir = std::env::temp_dir().join("iris-clip-test");
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("captura de pantalla.png");
         std::fs::write(&a, b"x").unwrap();

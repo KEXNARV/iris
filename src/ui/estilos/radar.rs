@@ -35,7 +35,7 @@ pub(in crate::ui) fn radar(f: &mut Frame, app: &App) {
     .areas(inner);
     {
         let buf = f.buffer_mut();
-        let x = put(buf, head.x, head.y, "◎ JARVIS", Style::new().fg(theme::accent()).bold(), head.width);
+        let x = put(buf, head.x, head.y, "◎ IRIS", Style::new().fg(theme::accent()).bold(), head.width);
         put(buf, x + 3, head.y, &model_short(app), Style::new().fg(theme::text()), head.width / 3);
         let clock = now_hhmmss();
         put_right(buf, head.right() - 1, head.y, &clock, Style::new().fg(theme::text()));

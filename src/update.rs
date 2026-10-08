@@ -1,5 +1,5 @@
 //! Actualizaciones desde GitHub: al arrancar y cada hora mira si `origin/master` tiene commits
-//! que este binario no tiene. Si los hay, Jarvis lo ofrece; al aceptar, baja el código, lo
+//! que este binario no tiene. Si los hay, Iris lo ofrece; al aceptar, baja el código, lo
 //! instala con cargo y se vuelve a abrir en la misma sesión.
 //!
 //! Dos formas de instalación: desde el repo clonado (`cargo install --path .`, la de Kevin) o
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 const REPO: &str = "https://github.com/KEXNARV/jarvis";
 /// El commit con que se compiló (lo pone `build.rs`).
-const BUILT: &str = env!("JARVIS_COMMIT");
+const BUILT: &str = env!("IRIS_COMMIT");
 const SRC: &str = env!("CARGO_MANIFEST_DIR");
 
 pub enum UpdateEvent {
@@ -67,14 +67,14 @@ pub fn install(tx: Sender<AppEvent>) {
 /// El binario recién instalado. El que corre ya fue reemplazado, y Linux lo muestra como
 /// «… (deleted)».
 pub fn exe() -> PathBuf {
-    let p = std::env::current_exe().unwrap_or_else(|_| "jarvis".into());
+    let p = std::env::current_exe().unwrap_or_else(|_| "iris".into());
     match p.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
         Some(s) => s.into(),
         None => p,
     }
 }
 
-/// Clonado del repo de Jarvis (y no, por ejemplo, la copia temporal de `cargo install --git`).
+/// Clonado del repo de Iris (y no, por ejemplo, la copia temporal de `cargo install --git`).
 fn is_repo() -> bool {
     git(&["remote", "get-url", "origin"]).is_ok_and(|url| url.trim_end_matches(".git").ends_with("KEXNARV/jarvis"))
 }

@@ -2,7 +2,7 @@
 //! dos puntos unidos por una línea, por donde se ve el fondo, como sus ojos negros en la cara
 //! blanca.
 //!
-//! El color sale de `nucleo` en la paleta (`colores-baymax.toml`), o de `JARVIS_NUCLEO`, que
+//! El color sale de `nucleo` en la paleta (`colores-baymax.toml`), o de `IRIS_NUCLEO`, que
 //! manda al arrancar: `auto` (el del tema) o un `#rrggbb`.
 
 use std::sync::Mutex;
@@ -124,7 +124,7 @@ pub fn leer(toml: &str) {
             (k.trim() == key).then(|| v.trim().trim_matches('"').to_string())
         })
     };
-    let nucleo = std::env::var("JARVIS_NUCLEO").ok().or_else(|| get("nucleo"));
+    let nucleo = crate::rutas::var("NUCLEO").or_else(|| get("nucleo"));
     poner_nucleo(nucleo.and_then(|s| Modo::buscar(&s)).unwrap_or(Modo::Auto));
 }
 

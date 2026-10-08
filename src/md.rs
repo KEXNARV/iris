@@ -636,18 +636,18 @@ mod tests {
     }
 }
 
-/// `JARVIS_SNAPSHOT=1 cargo test md::snapshot` deja target/md.html con una respuesta de muestra.
+/// `IRIS_SNAPSHOT=1 cargo test md::snapshot` deja target/md.html con una respuesta de muestra.
 #[cfg(test)]
 #[test]
 fn snapshot() {
-    if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
+    if !crate::rutas::hay_var("SNAPSHOT") {
         return;
     }
     crate::theme::poll();
-    let sample = "Ya está: el NÚCLEO vivo quedó **integrado** en JARVIS. Lo verifiqué con `cargo test`.\n\n\
+    let sample = "Ya está: el NÚCLEO vivo quedó **integrado** en Iris. Lo verifiqué con `cargo test`.\n\n\
 ## Qué cambió\n\n\
 1. **Colores por familia:**\n   - Celestes: presencia.\n   - Ámbar: tu turno.\n     - incluye *no te oigo*\n2. **Transiciones** con gesto.\n3. Contra el parpadeo: un Read de 50 ms se ve 0,6 s.\n\n\
-| Estado | Qué hace | Cuándo, en JARVIS |\n|---|---|---|\n| En reposo | Respira lento, sin arcos, le salen «z» | más de 2 min sin actividad |\n| Te leo | Mira hacia la entrada y da un respingo con cada tecla | mientras escribes |\n| Git | Crece un grafo de commits | Bash con `git` |\n\n\
+| Estado | Qué hace | Cuándo, en Iris |\n|---|---|---|\n| En reposo | Respira lento, sin arcos, le salen «z» | más de 2 min sin actividad |\n| Te leo | Mira hacia la entrada y da un respingo con cada tecla | mientras escribes |\n| Git | Crece un grafo de commits | Bash con `git` |\n\n\
 ```rust\nlet tick = Duration::from_millis(16); // 60 fps: lo que más se mueve es el núcleo, y conviene que no se trabe\n```\n\n\
 > Ojo: los cambios no están commiteados.\n\n---\n\n\
 - [x] markdown nuevo\n- [ ] commit\n\nMás en [el repo](https://github.com/KEXNARV/jarvis) y ~~nada más~~.";

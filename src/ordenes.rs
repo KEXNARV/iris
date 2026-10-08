@@ -37,6 +37,38 @@ pub(crate) fn model(app: &mut App, claude: &mut Option<Claude>, arg: &str) {
     }
 }
 
+/// Sin argumento abre la lista; con uno lo pide. El motor acepta cualquier texto sin quejarse,
+/// así que el nivel se valida aquí.
+pub(crate) fn effort(app: &mut App, claude: &mut Option<Claude>, arg: &str) {
+    let q = arg.to_lowercase();
+    if q.is_empty() {
+        let sel = commands::EFFORTS.iter().position(|e| e.0 == app.effort).unwrap_or(0);
+        app.modal = Some(Modal::Effort { sel });
+        return;
+    }
+    let level = match q.as_str() {
+        "auto" | "default" => None,
+        l if commands::EFFORTS.iter().any(|e| e.0 == l) => Some(l),
+        _ => {
+            let all: Vec<_> = commands::EFFORTS.iter().map(|e| e.0).collect();
+            app.push(Role::Error, format!("effort desconocido: {arg} (usa {})", all.join(", ")));
+            return;
+        }
+    };
+    let Some(c) = claude.as_mut().filter(|_| app.alive) else {
+        app.push(Role::Error, "claude no está corriendo (Ctrl+R)");
+        return;
+    };
+    match c.set_effort(level) {
+        Ok(()) => {
+            app.effort = level.unwrap_or("auto").to_string();
+            let when = if app.busy { "desde el próximo turno" } else { "listo" };
+            app.push(Role::System, format!("effort → {} ({when})", app.effort));
+        }
+        Err(e) => app.push(Role::Error, format!("no pude cambiar el effort: {e}")),
+    }
+}
+
 /// `/theme`: sin argumento abre la lista con vista previa; con uno (`cabina`, `cine`…) lo aplica.
 pub(crate) fn theme(app: &mut App, arg: &str) {
     if arg.is_empty() {

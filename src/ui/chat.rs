@@ -20,11 +20,11 @@ pub(in crate::ui) fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
 /// Cómo se rotula quién habla en la conversación.
 #[derive(Clone, Copy, PartialEq)]
 pub(in crate::ui) enum Voz {
-    /// «TÚ» / «JARVIS» en su propia fila.
+    /// «TÚ» / «Iris» en su propia fila.
     Clasico,
     /// Un margen de 10 columnas con el nombre alineado a la derecha: un guion.
     Guion,
-    /// «▸ TÚ» / «◆ JARVIS», como un canal de radio.
+    /// «▸ TÚ» / «◆ Iris», como un canal de radio.
     Canal,
 }
 
@@ -111,7 +111,7 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
                         // Las filas del markdown traen su sangría de 2; delante va el margen.
                         for (k, (line, skip, cont)) in md.into_iter().enumerate() {
                             let head = if k == 0 {
-                                Span::styled(format!("{:>w$}", "jarvis", w = GUION - 2), who)
+                                Span::styled(format!("{:>w$}", "iris", w = GUION - 2), who)
                             } else {
                                 Span::raw(" ".repeat(GUION - 2))
                             };
@@ -122,7 +122,7 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
                         }
                     }
                     _ => {
-                        let name = if voz == Voz::Canal { "  ◆ JARVIS" } else { "  JARVIS" };
+                        let name = if voz == Voz::Canal { "  ◆ IRIS" } else { "  IRIS" };
                         rows.push((Line::from(Span::styled(name, who)), 2, false));
                         rows.extend(md);
                     }

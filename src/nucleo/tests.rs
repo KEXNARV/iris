@@ -183,15 +183,15 @@ fn hijos_nacen_trabajan_y_vuelven() {
 /// Huella de cómo se ve el núcleo: cada estado, con y sin Baymax, con señales, eventos e
 /// hijos, en braille y en puntos de imagen, a lo largo de varios segundos. Sirve para partir el
 /// núcleo en piezas sin cambiar nada de lo que se ve:
-/// `JARVIS_DORADO=/ruta cargo test nucleo::tests::dorado -- --ignored` la escribe ahí, y si el
+/// `IRIS_DORADO=/ruta cargo test nucleo::tests::dorado -- --ignored` la escribe ahí, y si el
 /// archivo ya existe la compara con él.
 #[test]
 #[ignore]
 fn dorado() {
     use std::hash::{DefaultHasher, Hash, Hasher};
-    let Some(ruta) = std::env::var_os("JARVIS_DORADO") else { return };
+    let Some(ruta) = crate::rutas::var("DORADO") else { return };
     let _turno = crate::theme::tests::TURNO.lock().unwrap_or_else(|e| e.into_inner());
-    let paleta = std::env::temp_dir().join("jarvis-dorado-baymax.toml");
+    let paleta = std::env::temp_dir().join("iris-dorado-baymax.toml");
     let huella = |c: &Core| {
         let mut h = DefaultHasher::new();
         for (w, hh) in [(36, 15), (60, 22), (12, 6)] {
@@ -252,17 +252,17 @@ fn dorado() {
     }
 }
 
-/// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
+/// `IRIS_SNAPSHOT=1 cargo test nucleo::tests::snapshot -- --nocapture` deja target/nucleo.html con todos
 /// los estados, para mirarlos en el navegador.
 #[test]
-/// `JARVIS_SNAPSHOT=1 cargo test nucleo::tests::baymax_ppm` deja en target/baymax/ la cara
+/// `IRIS_SNAPSHOT=1 cargo test nucleo::tests::baymax_ppm` deja en target/baymax/ la cara
 /// de Baymax en varios estados, como la ve foot (Sixel), con la paleta Baymax de verdad.
 fn baymax_ppm() {
-    if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
+    if !crate::rutas::hay_var("SNAPSHOT") {
         return;
     }
     let home = std::env::var("HOME").unwrap();
-    crate::theme::usar(Some(format!("{home}/.config/jarvis/colores-baymax.toml").into()));
+    crate::theme::usar(Some(format!("{home}/.config/iris/colores-baymax.toml").into()));
     let dir = std::path::Path::new("target/baymax");
     std::fs::create_dir_all(dir).unwrap();
     let bg = crate::baymax::hacia(crate::theme::fondo_rgb(), 0, 0.0);
@@ -282,7 +282,7 @@ fn baymax_ppm() {
 
 #[test]
 fn snapshot() {
-    if std::env::var_os("JARVIS_SNAPSHOT").is_none() {
+    if !crate::rutas::hay_var("SNAPSHOT") {
         return;
     }
     crate::theme::poll();

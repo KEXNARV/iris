@@ -5,14 +5,15 @@ use std::path::Path;
 pub struct Command {
     pub name: String,
     pub desc: String,
-    /// Lo resuelve Jarvis; si no, la orden se le pasa tal cual al motor.
+    /// Lo resuelve Iris; si no, la orden se le pasa tal cual al motor.
     pub local: bool,
 }
 
-/// Los que `claude -p` no entiende y Jarvis resuelve él mismo.
+/// Los que `claude -p` no entiende y Iris resuelve él mismo.
 const LOCAL: &[(&str, &str)] = &[
     ("resume", "retomar una sesión anterior · /resume N"),
     ("model", "cambiar de modelo · /model sonnet"),
+    ("effort", "cuánto piensa: low, medium, high, xhigh o max · /effort high"),
     ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
     ("clear", "conversación nueva; la anterior queda en /resume (^L solo limpia la pantalla)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
@@ -22,7 +23,7 @@ const LOCAL: &[(&str, &str)] = &[
     ("buddy", "quién vive en el núcleo: original o Baymax · /buddy baymax"),
     ("core", "color de la cara de Baymax en el núcleo · /core blanco"),
     ("agents", "qué hace cada subagente, paso a paso (también ^G y Tab)"),
-    ("quit", "salir de Jarvis (^C)"),
+    ("quit", "salir de Iris (^C)"),
 ];
 
 /// Comandos propios más los skills del usuario. Los que traen los plugins solo se conocen
@@ -51,6 +52,16 @@ pub fn load() -> Vec<Command> {
     }
     out
 }
+
+/// (nivel, para qué); `auto` deja el que trae el modelo.
+pub const EFFORTS: &[(&str, &str)] = &[
+    ("auto", "el que trae el modelo"),
+    ("low", "rápido, piensa poco"),
+    ("medium", ""),
+    ("high", ""),
+    ("xhigh", ""),
+    ("max", "piensa todo lo que haga falta"),
+];
 
 /// (id, nombre, para qué)
 pub const MODELS: &[(&str, &str, &str)] = &[

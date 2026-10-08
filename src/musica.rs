@@ -48,7 +48,7 @@ impl Musica {
         let m = Musica::default();
         let levels = m.levels.clone();
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        let conf = dir.join("jarvis-cava.conf");
+        let conf = dir.join("iris-cava.conf");
         if std::fs::write(&conf, CAVA_CONF).is_err() {
             return m;
         }

@@ -19,6 +19,7 @@ mod sixel;
 mod teclado;
 mod theme;
 mod ui;
+mod rutas;
 mod update;
 mod voice;
 mod app;
@@ -52,6 +53,7 @@ use flotante::*;
 use pantalla::*;
 
 fn main() -> Result<()> {
+    rutas::migrar();
     voice::prefer_discrete_gpu();
     let mut extra: Vec<String> = std::env::args().skip(1).collect();
     if extra.first().map(String::as_str) == Some("--transcribe") {
@@ -69,7 +71,7 @@ fn main() -> Result<()> {
     let (voice_tx, level) = voice::spawn(tx.clone());
     update::spawn(tx.clone());
 
-    // `jarvis --resume <id>`: además de pasárselo al motor, se muestra la conversación.
+    // `iris --resume <id>`: además de pasárselo al motor, se muestra la conversación.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::replay(id));
     let (messages, activity, agents_done) = resumed.map(|r| (r.messages, r.activity, r.agents)).unwrap_or_default();
     let turn_from = activity.len();
@@ -84,6 +86,7 @@ fn main() -> Result<()> {
         voice_model: String::new(),
         levels: vec![0.0; 256],
         model: String::new(),
+        effort: "auto".into(),
         session: String::new(),
         cost: 0.0,
         turns: 0,
@@ -116,7 +119,7 @@ fn main() -> Result<()> {
         last_voice: Instant::now(),
         noise_floor: 0.0,
         booted: Instant::now(),
-        calm: std::env::var_os("JARVIS_CALM").is_some(),
+        calm: rutas::hay_var("CALM"),
         md_cache: Default::default(),
         adjuntos_cache: Default::default(),
         images: vec![],
@@ -129,10 +132,10 @@ fn main() -> Result<()> {
         hide_at: None,
         habla: habla::Habla::new(tx.clone()),
         lector: habla::Lector::new(),
-        voz_modo: match std::env::var("JARVIS_HABLA").as_deref() {
+        voz_modo: match rutas::var("HABLA").as_deref() {
             _ if flotante => VozModo::Siempre,
-            Ok("always") | Ok("siempre") => VozModo::Siempre,
-            Ok("never") | Ok("nunca") | Ok("0") => VozModo::Nunca,
+            Some("always") | Some("siempre") => VozModo::Siempre,
+            Some("never") | Some("nunca") | Some("0") => VozModo::Nunca,
             _ => VozModo::Auto,
         },
         spoken_next: false,
@@ -175,7 +178,7 @@ fn main() -> Result<()> {
         let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
         app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
     }
-    // Con el mouse en manos de Jarvis, arrastrar copia solo texto del chat; Shift+arrastrar
+    // Con el mouse en manos de Iris, arrastrar copia solo texto del chat; Shift+arrastrar
     // sigue siendo la selección de la terminal.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
     // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
@@ -338,6 +341,7 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
+                            app.effort = "auto".into();
                             app.alive = true;
                             app.modal = None;
                             app.ctx_used = 0;
@@ -351,6 +355,7 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
+                            app.effort = "auto".into();
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;
@@ -371,6 +376,7 @@ fn run(
                             args.extend(["--resume".into(), id.clone()]);
                             *claude = None;
                             *claude = Some(Claude::spawn(&args, tx.clone())?);
+                            app.effort = "auto".into();
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;

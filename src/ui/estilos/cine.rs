@@ -14,7 +14,7 @@ pub(in crate::ui) fn cine(f: &mut Frame, app: &App) {
         let buf = f.buffer_mut();
         let top = area.y + 1;
         let bot = area.bottom().saturating_sub(2);
-        put(buf, area.x + 3, top, &spaced("JARVIS"), Style::new().fg(theme::accent()).bold(), 20);
+        put(buf, area.x + 3, top, &spaced("IRIS"), Style::new().fg(theme::accent()).bold(), 20);
         put_right(buf, area.right().saturating_sub(4), top, &now_hhmmss(), Style::new().fg(theme::text()));
         let x = put(buf, area.x + 3, bot, "ctx ", Style::new().fg(theme::faint()), 4);
         let x = meter(buf, x, bot, 20, ctx_pct(app) / 100.0, tone);

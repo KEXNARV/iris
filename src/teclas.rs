@@ -192,6 +192,10 @@ pub(crate) fn handle_key(
                     model(app, claude, arg.trim());
                     return Flow::Go;
                 }
+                "/effort" => {
+                    effort(app, claude, arg.trim());
+                    return Flow::Go;
+                }
                 "/restart" => return Flow::Restart,
                 "/voice" => {
                     app.voz_modo = match (arg.trim(), app.voz_modo) {
@@ -349,6 +353,21 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
                     let id = commands::MODELS[*sel].0;
                     app.modal = None;
                     model(app, claude, id);
+                }
+                KeyCode::Esc => app.modal = None,
+                _ => {}
+            }
+            Some(Flow::Go)
+        }
+        Modal::Effort { sel } => {
+            let n = commands::EFFORTS.len();
+            match k.code {
+                KeyCode::Up => *sel = (*sel + n - 1) % n,
+                KeyCode::Down => *sel = (*sel + 1) % n,
+                KeyCode::Enter => {
+                    let level = commands::EFFORTS[*sel].0;
+                    app.modal = None;
+                    effort(app, claude, level);
                 }
                 KeyCode::Esc => app.modal = None,
                 _ => {}

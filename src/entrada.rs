@@ -95,7 +95,7 @@ pub struct Historial {
 const MAX: usize = 500;
 
 fn path() -> Option<PathBuf> {
-    Some(PathBuf::from(std::env::var_os("HOME")?).join(".local/state/jarvis/historial"))
+    Some(crate::rutas::estado()?.join("historial"))
 }
 
 impl Historial {

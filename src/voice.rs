@@ -82,11 +82,11 @@ pub fn prefer_discrete_gpu() {
 }
 
 fn models_dir() -> Result<PathBuf> {
-    Ok(PathBuf::from(std::env::var("HOME")?).join(".local/share/jarvis/models"))
+    Ok(crate::rutas::datos().ok_or_else(|| anyhow::anyhow!("sin carpeta de datos"))?.join("models"))
 }
 
 fn model_path() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("JARVIS_MODEL") {
+    if let Ok(p) = crate::rutas::var("MODEL").ok_or(()) {
         return Ok(PathBuf::from(p));
     }
     let dir = models_dir()?;
@@ -275,7 +275,7 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
     }
     let mut state = ctx.create_state().map_err(|e| anyhow!("{e:?}"))?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    let lang = std::env::var("JARVIS_LANG").unwrap_or_else(|_| "es".into());
+    let lang = crate::rutas::var("LANG").ok_or(()).unwrap_or_else(|_| "es".into());
     params.set_language(Some(&lang));
     params.set_n_threads(threads());
     params.set_no_context(true);
@@ -368,7 +368,7 @@ fn threads() -> i32 {
     thread::available_parallelism().map_or(4, |n| n.get().min(12) as i32)
 }
 
-/// `jarvis --transcribe audio.wav`: prueba la transcripción sin la interfaz.
+/// `iris --transcribe audio.wav`: prueba la transcripción sin la interfaz.
 pub fn transcribe_file(path: &str) -> Result<()> {
     let out = std::process::Command::new("ffmpeg")
         .args(["-loglevel", "error", "-i", path, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"])
@@ -390,7 +390,7 @@ pub fn transcribe_file(path: &str) -> Result<()> {
         load.as_secs_f32(),
         audio.len() as f32 / WHISPER_RATE as f32,
         t1.elapsed().as_secs_f32(),
-        if is_hallucination(&text) { "  (alucinación: Jarvis la descartaría)" } else { "" }
+        if is_hallucination(&text) { "  (alucinación: Iris la descartaría)" } else { "" }
     );
     Ok(())
 }

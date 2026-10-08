@@ -1,6 +1,6 @@
 //! Estilos de la pantalla: cómo se reparte y se dibuja todo alrededor del núcleo. Los colores
 //! siguen siendo los del tema de Omarchy; esto es la composición. Se elige con `/theme` y se
-//! guarda en `~/.config/jarvis/estilo`.
+//! guarda en `~/.config/iris/estilo`.
 
 use std::path::PathBuf;
 
@@ -78,15 +78,12 @@ fn sin_tildes(s: &str) -> String {
 }
 
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("jarvis").join("estilo"))
+    Some(crate::rutas::config()?.join("estilo"))
 }
 
-/// `JARVIS_ESTILO` manda sobre lo guardado; sin nada, el clásico.
+/// `IRIS_ESTILO` manda sobre lo guardado; sin nada, el clásico.
 pub fn cargar() -> Estilo {
-    if let Some(e) = std::env::var("JARVIS_ESTILO").ok().and_then(|s| Estilo::buscar(&s)) {
+    if let Some(e) = crate::rutas::var("ESTILO").and_then(|s| Estilo::buscar(&s)) {
         return e;
     }
     path()

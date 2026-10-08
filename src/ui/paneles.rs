@@ -15,7 +15,7 @@ pub(in crate::ui) fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let model = app.model.trim_start_matches("claude-");
     let sess = app.session.get(..8).unwrap_or("········");
     let left = Line::from(vec![
-        Span::styled(" ◆ J.A.R.V.I.S ", Style::new().fg(Color::Black).bg(theme::accent()).bold()),
+        Span::styled(" ◆ I.R.I.S ", Style::new().fg(Color::Black).bg(theme::accent()).bold()),
         Span::styled(format!("  {model}"), Style::new().fg(theme::text())),
         Span::styled(format!("  ·  {}  ·  sesión {sess}", cwd()), Style::new().fg(theme::faint())),
     ]);

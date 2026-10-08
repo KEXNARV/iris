@@ -15,7 +15,7 @@ pub(in crate::ui) fn cabina(f: &mut Frame, app: &App) {
         let sep = Style::new().fg(theme::dim());
         let k = Style::new().fg(theme::faint());
         let v = Style::new().fg(theme::text());
-        let mut x = put(buf, bar.x, bar.y, " ◢ JARVIS ", Style::new().fg(Color::Black).bg(theme::accent()).bold(), 10) + 2;
+        let mut x = put(buf, bar.x, bar.y, " ◢ IRIS ", Style::new().fg(Color::Black).bg(theme::accent()).bold(), 10) + 2;
         for (key, val) in [
             ("MODELO", app.model.trim_start_matches("claude-").to_string()),
             ("DIR", cwd()),

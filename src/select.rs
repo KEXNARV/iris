@@ -150,7 +150,7 @@ mod tests {
         View {
             area: Rect { x: 1, y: 1, width: 40, height: 2 },
             rows: vec![
-                row("  JARVIS", 2, false),
+                row("  IRIS", 2, false),
                 row("  Un párrafo largo que no", 2, false),
                 row("  cupo en una línea.", 2, true),
                 row("  │ cargo build", 4, false),

@@ -1,6 +1,6 @@
 //! Quién vive en el núcleo: el original (la bolita con sus arcos) o un personaje. Es aparte del
 //! estilo, así que cualquier estilo puede llevar cualquiera. Se elige con `/buddy` y se guarda en
-//! `~/.config/jarvis/buddy`.
+//! `~/.config/iris/buddy` (en Windows, `%APPDATA%\\iris\\buddy`).
 
 use std::path::PathBuf;
 
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 pub enum Buddy {
     /// El núcleo de siempre, con los colores de Omarchy.
     Original,
-    /// La cara de Baymax; el color de su cara se guarda en `~/.config/jarvis/colores-baymax.toml`.
+    /// La cara de Baymax; el color de su cara se guarda en `~/.config/iris/colores-baymax.toml`.
     Baymax,
 }
 
@@ -47,16 +47,13 @@ impl Buddy {
 }
 
 fn path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("jarvis").join("buddy"))
+    Some(crate::rutas::config()?.join("buddy"))
 }
 
-/// `JARVIS_BUDDY` manda sobre lo guardado. Sin nada guardado, el del estilo de antes (cuando
+/// `IRIS_BUDDY` manda sobre lo guardado. Sin nada guardado, el del estilo de antes (cuando
 /// Baymax venía pegado a «Cine Baymax» y «Clásico Baymax»); si no, el original.
 pub fn cargar() -> Buddy {
-    if let Some(b) = std::env::var("JARVIS_BUDDY").ok().and_then(|s| Buddy::buscar(&s)) {
+    if let Some(b) = crate::rutas::var("BUDDY").and_then(|s| Buddy::buscar(&s)) {
         return b;
     }
     let leer = |p: PathBuf| std::fs::read_to_string(p).ok();
@@ -100,7 +97,7 @@ mod tests {
     #[test]
     fn solo_baymax_trae_paleta() {
         assert!(Buddy::Original.paleta().is_none());
-        assert!(Buddy::Baymax.paleta().unwrap().ends_with("jarvis/colores-baymax.toml"));
+        assert!(Buddy::Baymax.paleta().unwrap().ends_with("iris/colores-baymax.toml"));
     }
 
     #[test]

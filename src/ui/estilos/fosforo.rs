@@ -38,7 +38,7 @@ pub(in crate::ui) fn fosforo(f: &mut Frame, app: &App) {
         let buf = f.buffer_mut();
         let hi = Style::new().fg(theme::text()).bold();
         let lo = Style::new().fg(theme::faint());
-        let mut x = put(buf, head.x, head.y, "JARVIS-OS", hi, head.width);
+        let mut x = put(buf, head.x, head.y, "IRIS-OS", hi, head.width);
         for v in [model_short(app), cwd(), format!("SES {}", ses8(app))] {
             x = put(buf, x + 3, head.y, &v.to_uppercase(), lo, head.right().saturating_sub(x + 12));
         }
@@ -105,7 +105,7 @@ pub(in crate::ui) fn fosforo(f: &mut Frame, app: &App) {
     if listening(state) {
         wave(f, input_w, app, t, theme::accent(), theme::dim());
     } else {
-        orden_line(f, input_w, Rect { width: chat.width, ..rule2 }, app, state, t, "JARVIS> ", theme::accent());
+        orden_line(f, input_w, Rect { width: chat.width, ..rule2 }, app, state, t, "IRIS> ", theme::accent());
     }
     {
         let buf = f.buffer_mut();

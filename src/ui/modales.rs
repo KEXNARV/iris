@@ -9,6 +9,7 @@ pub(in crate::ui) fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Sessions { list, sel }) => draw_sessions(f, anchor, list, *sel),
         Some(Modal::Ask(a)) => draw_ask(f, anchor, a),
         Some(Modal::Model { sel }) => draw_models(f, anchor, app, *sel),
+        Some(Modal::Effort { sel }) => draw_efforts(f, anchor, app, *sel),
         Some(Modal::Estilo { sel, .. }) => draw_estilos(f, anchor, *sel),
         Some(Modal::Color { sel, .. }) => draw_colores(f, anchor, *sel),
         Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
@@ -75,7 +76,7 @@ pub(in crate::ui) fn draw_menu(f: &mut Frame, anchor: Rect, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let desc = if c.local { format!("jarvis {}", c.desc) } else { c.desc.clone() };
+            let desc = if c.local { format!("iris {}", c.desc) } else { c.desc.clone() };
             item(i == sel, "/", &c.name, name_w, &desc, w)
         })
         .collect();
@@ -107,6 +108,21 @@ pub(in crate::ui) fn draw_models(f: &mut Frame, anchor: Rect, app: &App, sel: us
         .collect();
     let hints = [("↑↓", "elegir"), ("enter", "cambiar"), ("esc", "cerrar")];
     overlay(f, anchor, "MODELO", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+pub(in crate::ui) fn draw_efforts(f: &mut Frame, anchor: Rect, app: &App, sel: usize) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let items = crate::commands::EFFORTS
+        .iter()
+        .enumerate()
+        .map(|(i, (level, what))| {
+            let now = if *level == app.effort { "en uso" } else { "" };
+            let desc = [now, what].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" · ");
+            item(i == sel, "", level, 10, &desc, w)
+        })
+        .collect();
+    let hints = [("↑↓", "elegir"), ("enter", "cambiar"), ("esc", "cerrar")];
+    overlay(f, anchor, "EFFORT", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
 pub(in crate::ui) fn draw_estilos(f: &mut Frame, anchor: Rect, sel: usize) {
@@ -160,7 +176,7 @@ pub(in crate::ui) fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::upda
     for l in wrap(&what, w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()).bold())));
     }
-    for l in wrap("Se baja, se compila y Jarvis se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
+    for l in wrap("Se baja, se compila e Iris se vuelve a abrir en esta misma sesión.", w.saturating_sub(2)) {
         head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::faint()))));
     }
     if !info.commits.is_empty() {

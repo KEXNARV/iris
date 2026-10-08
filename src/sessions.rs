@@ -1,5 +1,5 @@
 //! Sesiones anteriores de Claude Code, leídas de sus transcripts en `~/.claude/projects`.
-//! `claude -p` no tiene `/resume`; jarvis lo resuelve relanzando el motor con `--resume <id>`.
+//! `claude -p` no tiene `/resume`; Iris lo resuelve relanzando el motor con `--resume <id>`.
 
 use std::fs;
 use std::io::{BufRead, BufReader};

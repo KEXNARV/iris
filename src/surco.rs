@@ -1,5 +1,5 @@
-//! surco (~/code/surco), el reproductor: mientras JARVIS escucha o habla, la música se pausa,
-//! y al terminar se reanuda. Solo lo que JARVIS pausó: si ya la habías parado tú, no la toca.
+//! surco (~/code/surco), el reproductor: mientras Iris escucha o habla, la música se pausa,
+//! y al terminar se reanuda. Solo lo que Iris pausó: si ya la habías parado tú, no la toca.
 //!
 //! surco se activa por socket (systemd), así que `surco.sock` existe aunque no haya nada
 //! corriendo, y conectarse lo despertaría. Por eso primero se pregunta a systemd si el
@@ -27,7 +27,7 @@ impl Surco {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<bool>();
         thread::spawn(move || {
-            // Si fue JARVIS quien pausó, y por lo tanto le toca reanudar.
+            // Si fue Iris quien pausó, y por lo tanto le toca reanudar.
             let mut paused_by_us = false;
             let mut pending_resume = false;
             loop {
@@ -97,7 +97,7 @@ fn playing() -> Option<bool> {
     Some(!p.get("playback")?.get("paused")?.as_bool()?)
 }
 
-/// Una petición, una línea de vuelta. Nada de esto debe colgar a JARVIS: todo con timeout.
+/// Una petición, una línea de vuelta. Nada de esto debe colgar a Iris: todo con timeout.
 fn send(req: &str) -> Option<serde_json::Value> {
     if !alive() {
         return None;

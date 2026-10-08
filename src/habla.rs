@@ -1,4 +1,4 @@
-//! La voz de JARVIS: un proceso de Python con Kokoro (`scripts/hablar.py`) que se abre la
+//! La voz de Iris: un proceso de Python con Kokoro (`scripts/hablar.py`) que se abre la
 //! primera vez que hace falta hablar y queda vivo. Acá se le mandan frases y se escuchan sus
 //! eventos (empezó, volumen, terminó). `Lector` arma esas frases a partir del streaming.
 
@@ -22,7 +22,7 @@ pub enum HablaEvent {
 const SCRIPT: &str = include_str!("../scripts/hablar.py");
 
 fn base() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share/jarvis")
+    crate::rutas::datos().unwrap_or_default()
 }
 
 pub struct Habla {
@@ -40,9 +40,9 @@ impl Habla {
     fn start(&mut self) -> Result<(), String> {
         let python = base().join("py/bin/python");
         if !python.exists() {
-            return Err("no está el entorno de voz (~/.local/share/jarvis/py)".into());
+            return Err("no está el entorno de voz (~/.local/share/iris/py)".into());
         }
-        // El script viaja dentro de Jarvis; se escribe si cambió.
+        // El script viaja dentro de Iris; se escribe si cambió.
         let path = base().join("hablar.py");
         if std::fs::read_to_string(&path).ok().as_deref() != Some(SCRIPT) {
             std::fs::write(&path, SCRIPT).map_err(|e| e.to_string())?;

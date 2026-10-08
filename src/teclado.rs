@@ -1,4 +1,4 @@
-//! El teclado como parte del núcleo: le cuenta a ghubd (ghub-linux) qué está haciendo JARVIS,
+//! El teclado como parte del núcleo: le cuenta a ghubd (ghub-linux) qué está haciendo Iris,
 //! y ghubd lo dibuja encima de su efecto. Mensajes de una línea a un socket UNIX:
 //! `state thinking`, `level 0.42`, `event error`. Si ghubd no corre, se pierden sin error.
 
@@ -12,7 +12,7 @@ pub struct Teclado {
     sock: Option<UnixDatagram>,
     path: PathBuf,
     last: Option<State>,
-    /// Con varios JARVIS abiertos, ghubd muestra el que está haciendo algo: cada uno manda su pid.
+    /// Con varios Iris abiertos, ghubd muestra el que está haciendo algo: cada uno manda su pid.
     id: u32,
     beat: Instant,
     level_at: Instant,
@@ -38,7 +38,7 @@ impl Teclado {
     }
 
     /// Cada cuadro: el estado si cambió (y una vez por segundo de latido, así ghubd sabe que
-    /// JARVIS sigue vivo), y el nivel de la voz a ~30 por segundo mientras escucha.
+    /// Iris sigue vivo), y el nivel de la voz a ~30 por segundo mientras escucha.
     pub fn tick(&mut self, state: State, level: f32) {
         if self.last != Some(state) || self.beat.elapsed() >= Duration::from_secs(1) {
             self.last = Some(state);

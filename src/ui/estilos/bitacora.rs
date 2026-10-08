@@ -24,7 +24,7 @@ pub(in crate::ui) fn bitacora(f: &mut Frame, app: &App) {
 
     {
         let buf = f.buffer_mut();
-        let x = put(buf, head.x, head.y, "JARVIS", Style::new().fg(theme::accent()).bold(), 6);
+        let x = put(buf, head.x, head.y, "IRIS", Style::new().fg(theme::accent()).bold(), 6);
         put(buf, x + 1, head.y, "bitácora", Style::new().fg(theme::faint()), 10);
         // El estado como una traza: el nivel de la voz al escuchar, el pulso del núcleo si no.
         let clock = now_hhmmss();
@@ -87,7 +87,7 @@ pub(in crate::ui) fn bitacora(f: &mut Frame, app: &App) {
         match m.role {
             Role::User if m.waiting.is_some() => entry(&mut rows, String::new(), "COLA", theme::faint(), &m.text, theme::faint(), None),
             Role::User => entry(&mut rows, String::new(), "TÚ", theme::text(), &m.text, theme::text(), None),
-            Role::Assistant => entry(&mut rows, String::new(), "JARVIS", theme::accent(), &plain(&m.text), theme::text(), None),
+            Role::Assistant => entry(&mut rows, String::new(), "IRIS", theme::accent(), &plain(&m.text), theme::text(), None),
             Role::System => entry(&mut rows, String::new(), "SYS", theme::faint(), &m.text, theme::faint(), None),
             Role::Error => entry(&mut rows, String::new(), "ERROR", RED, &m.text, RED, None),
             Role::Tool => {

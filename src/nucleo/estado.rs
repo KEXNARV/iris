@@ -1,4 +1,4 @@
-//! Qué está haciendo Jarvis, visto desde el núcleo: los estados, los eventos sueltos y las
+//! Qué está haciendo Iris, visto desde el núcleo: los estados, los eventos sueltos y las
 //! señales que manda la app en cada cuadro, y cómo una herramienta se traduce en estado.
 
 use ratatui::style::Color;

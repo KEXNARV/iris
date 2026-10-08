@@ -78,7 +78,7 @@ impl App {
                         .and_then(|m| m.text.lines().find(|l| !l.trim().is_empty()))
                         .unwrap_or("")
                         .replace(['*', '`', '#'], "");
-                    let title = if is_error { "JARVIS: el turno terminó con error" } else { "JARVIS terminó" };
+                    let title = if is_error { "Iris: el turno terminó con error" } else { "Iris terminó" };
                     notify(title, &first);
                 }
                 if std::mem::take(&mut self.speak_turn) {
@@ -109,7 +109,7 @@ impl App {
             }
             ClaudeEvent::Ask { request_id, tool, input } => {
                 if !self.focused && !self.flotante {
-                    notify("JARVIS te pregunta algo", "Necesita tu respuesta para seguir.");
+                    notify("Iris te pregunta algo", "Necesita tu respuesta para seguir.");
                 }
                 self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input)));
             }

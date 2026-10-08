@@ -35,7 +35,7 @@ pub(in crate::ui) fn editorial(f: &mut Frame, app: &App) {
         const MESES: [&str; 12] =
             ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
         let (_, mo, d, wd) = local_date();
-        let x = put(buf, head.x, head.y, &spaced("JARVIS"), Style::new().fg(theme::accent()).bold(), head.width);
+        let x = put(buf, head.x, head.y, &spaced("IRIS"), Style::new().fg(theme::accent()).bold(), head.width);
         let ed = format!("  ·  edición del {} {d} de {}  ·  nº {}", DIAS[wd as usize], MESES[(mo as usize).saturating_sub(1) % 12], app.turns);
         put(buf, x, head.y, &ed, Style::new().fg(theme::faint()), head.width.saturating_sub(x - head.x + 10));
         put_right(buf, head.right() - 1, head.y, &now_hhmmss(), Style::new().fg(theme::text()));

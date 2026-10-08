@@ -125,7 +125,7 @@ fn con_clave(toml: &str, clave: &str, valor: &str) -> String {
 }
 
 fn path() -> Option<PathBuf> {
-    if let Some(p) = std::env::var_os("JARVIS_THEME") {
+    if let Some(p) = crate::rutas::var("THEME") {
         return Some(p.into());
     }
     let home = std::env::var_os("HOME")?;

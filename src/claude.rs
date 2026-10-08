@@ -142,7 +142,7 @@ impl Claude {
         self.next_req += 1;
         self.write(json!({
             "type": "control_request",
-            "request_id": format!("jarvis-{}", self.next_req),
+            "request_id": format!("iris-{}", self.next_req),
             "request": { "subtype": "interrupt" },
         }))
     }
@@ -161,8 +161,18 @@ impl Claude {
         self.next_req += 1;
         self.write(json!({
             "type": "control_request",
-            "request_id": format!("jarvis-{}", self.next_req),
+            "request_id": format!("iris-{}", self.next_req),
             "request": { "subtype": "set_model", "model": model },
+        }))
+    }
+
+    /// `None` vuelve al nivel por defecto del modelo.
+    pub fn set_effort(&mut self, level: Option<&str>) -> Result<()> {
+        self.next_req += 1;
+        self.write(json!({
+            "type": "control_request",
+            "request_id": format!("iris-{}", self.next_req),
+            "request": { "subtype": "apply_flag_settings", "settings": { "effortLevel": level } },
         }))
     }
 
@@ -183,7 +193,7 @@ impl Claude {
 impl Drop for Claude {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        // Sin esto el proceso muerto queda como zombi hasta que Jarvis termina.
+        // Sin esto el proceso muerto queda como zombi hasta que Iris termina.
         let _ = self.child.wait();
     }
 }

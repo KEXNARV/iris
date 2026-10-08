@@ -20,7 +20,7 @@ pub(in crate::ui) fn tablero(f: &mut Frame, app: &App) {
     .areas(inner);
     {
         let buf = f.buffer_mut();
-        let x = put(buf, head.x + 1, head.y, "◆ JARVIS", Style::new().fg(theme::accent()).bold(), 8);
+        let x = put(buf, head.x + 1, head.y, "◆ IRIS", Style::new().fg(theme::accent()).bold(), 8);
         put(buf, x + 2, head.y, "tablero de la sesión", Style::new().fg(theme::faint()), 22);
         put_right(buf, head.right() - 1, head.y, &format!("{} · {} · {}", model_short(app), ses8(app), now_hhmmss()), Style::new().fg(theme::faint()));
     }

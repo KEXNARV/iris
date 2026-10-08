@@ -1,5 +1,5 @@
 //! NÚCLEO: el panel de arriba a la derecha, donde vive el buddy. Muestra qué está haciendo
-//! Jarvis con la forma, el movimiento y una mirada que va hacia donde pasan las cosas.
+//! Iris con la forma, el movimiento y una mirada que va hacia donde pasan las cosas.
 //!
 //! El diseño se hizo en `docs/blob-hibrido.html`; esto es su versión para la terminal. Se
 //! dibuja sobre una rejilla braille propia (2×4 puntos por celda) y no con el `Canvas` de

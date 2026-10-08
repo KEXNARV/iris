@@ -24,7 +24,7 @@ pub(in crate::ui) fn propuesta(f: &mut Frame, app: &App) {
     {
         let buf = f.buffer_mut();
         let x = put(buf, head.x, head.y, "◆ ", Style::new().fg(theme::accent()).bold(), head.width);
-        let x = put(buf, x, head.y, &spaced("JARVIS"), Style::new().fg(theme::accent()).bold(), head.width);
+        let x = put(buf, x, head.y, &spaced("IRIS"), Style::new().fg(theme::accent()).bold(), head.width);
         put(buf, x + 3, head.y, app.model.trim_start_matches("claude-"), Style::new().fg(theme::text()), head.width / 3);
         let sess = app.session.get(..8).unwrap_or("········");
         let clock = now_hhmmss();

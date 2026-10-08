@@ -109,6 +109,7 @@ pub enum Modal {
     Sessions { list: Vec<sessions::Session>, sel: usize },
     Ask(Ask),
     Model { sel: usize },
+    Effort { sel: usize },
     /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
     Estilo { sel: usize, antes: estilo::Estilo },
     /// `/core`: el color de la cara de Baymax.
@@ -130,6 +131,8 @@ pub struct App {
     pub voice_model: String,
     pub levels: Vec<f32>,
     pub model: String,
+    /// Lo que se pidió con `/effort`; vuelve a `auto` cuando el motor se relanza.
+    pub effort: String,
     pub session: String,
     pub cost: f64,
     pub turns: u32,
@@ -162,7 +165,7 @@ pub struct App {
     pub(crate) quit_armed: Option<Instant>,
     /// Versión nueva por ofrecer: se muestra cuando no estorbe.
     pub(crate) update: Option<update::Info>,
-    /// Se instaló la versión nueva: al salir, Jarvis se vuelve a abrir con ella.
+    /// Se instaló la versión nueva: al salir, Iris se vuelve a abrir con ella.
     pub(crate) reexec: bool,
     /// El blob del panel NÚCLEO.
     pub nucleo: nucleo::Core,
@@ -202,7 +205,7 @@ pub struct App {
     pub(crate) heard: bool,
     /// Cuándo esconderse, si no pasa nada antes.
     pub(crate) hide_at: Option<Instant>,
-    /// La voz de JARVIS (Kokoro) y el que arma las frases de la respuesta para decirlas.
+    /// La voz de Iris (Kokoro) y el que arma las frases de la respuesta para decirlas.
     pub(crate) habla: habla::Habla,
     pub(crate) lector: habla::Lector,
     pub voz_modo: VozModo,
