@@ -31,7 +31,11 @@
 
   .hero { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(30px, 5vw, 90px); align-items: center; padding: clamp(30px, 6vh, 80px) 0 clamp(50px, 9vh, 110px); min-height: calc(100vh - 80px); }
   .hero > *, .instalar, .tienda > * { min-width: 0; }
-  #nucleo { width: 100%; aspect-ratio: 1; max-width: min(640px, 72vh); justify-self: center; }
+  .escena { justify-self: center; width: 100%; max-width: min(640px, 72vh); display: grid; gap: 10px; justify-items: center; }
+  #nucleo { width: 100%; aspect-ratio: 1; image-rendering: auto; }
+  .buddies { display: flex; gap: 6px; }
+  .buddies button { background: none; border: 1px solid var(--line); color: var(--faint); font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 14px; cursor: pointer; }
+  .buddies button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
   h1 { font-size: clamp(40px, 4.5vw, 76px); letter-spacing: .35em; margin: 0 0 8px; color: var(--accent); font-weight: 700; }
   .lema { font-size: clamp(18px, 1.5vw, 26px); margin: 0 0 26px; }
   .estado { color: var(--faint); margin: 0 0 30px; }
@@ -66,7 +70,7 @@
   @media (max-width: 760px) {
     .hero, .tienda, .grid { grid-template-columns: 1fr; }
     .hero { min-height: 0; }
-    #nucleo { max-width: 300px; order: -1; }
+    .escena { max-width: 300px; order: -1; }
     .cmd code { font-size: 13px; }
     h1 { font-size: 36px; }
   }
@@ -97,7 +101,13 @@
         <p class="nota">Necesitas una cuenta de Claude. Si no tienes Claude Code, el instalador lo trae. <span class="pronto">pronto</span></p>
       </div>
     </div>
-    <canvas id="nucleo" aria-label="El núcleo de Iris"></canvas>
+    <div class="escena">
+      <canvas id="nucleo" aria-label="El núcleo de Iris"></canvas>
+      <div class="buddies" role="group" aria-label="Quién vive en el núcleo">
+        <button data-buddy="0" aria-pressed="true">original</button>
+        <button data-buddy="1" aria-pressed="false">baymax</button>
+      </div>
+    </div>
   </div>
 
   <section id="que">
@@ -153,83 +163,97 @@ copiar.addEventListener("click", async () => {
   setTimeout(() => (copiar.textContent = "copiar"), 1400);
 });
 
-// El núcleo: una bola de puntos que respira, arcos que giran y motas alrededor. Va pasando
-// por los estados de Iris como si estuviera trabajando.
+// El núcleo: el mismo de la terminal, compilado a WASM (web/nucleo-wasm). Aquí solo se le dice
+// qué está haciendo, como si trabajara en algo, y se pinta lo que devuelve.
 const cv = document.getElementById("nucleo");
 const cx = cv.getContext("2d");
 const estado = document.getElementById("estado");
-const ESTADOS = [
-  { nombre: "en espera · mantén espacio para hablar", r: 0.30, pulso: 0.025, arcos: 0, giro: 0.2, color: [0, 200, 255] },
-  { nombre: "te escucho…", r: 0.34, pulso: 0.06, arcos: 1, giro: 0.6, color: [80, 230, 160] },
-  { nombre: "pensando", r: 0.28, pulso: 0.035, arcos: 3, giro: 1.6, color: [150, 130, 255] },
-  { nombre: "leyendo archivos", r: 0.29, pulso: 0.03, arcos: 2, giro: 0.9, color: [0, 200, 255] },
-  { nombre: "hablando", r: 0.33, pulso: 0.07, arcos: 1, giro: 0.5, color: [255, 190, 90] },
+// El índice es el de ESTADOS en nucleo-wasm/src/lib.rs.
+const E = { reposo: 0, escucha: 1, transcribe: 2, piensa: 3, planea: 4, lee: 5, busca: 6, edita: 7, corre: 8, delega: 9, habla: 10, duerme: 11 };
+const GUION = [
+  [E.reposo, 3.5, "en espera · mantén espacio para hablar"],
+  [E.escucha, 3.2, "te escucho…"],
+  [E.transcribe, 1.2, "transcribiendo"],
+  [E.piensa, 3.0, "pensando"],
+  [E.lee, 2.6, "leyendo src/ui/mod.rs"],
+  [E.busca, 2.4, "buscando «draw»"],
+  [E.delega, 5.0, "dos subagentes revisando"],
+  [E.edita, 2.4, "editando src/ui/vistas.rs"],
+  [E.corre, 2.6, "cargo test"],
+  [E.habla, 3.6, "hablando"],
 ];
 const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let e = 0, mezcla = 1, desde = ESTADOS[0];
-const motas = Array.from({ length: 70 }, () => ({ a: Math.random() * 6.283, r: 0.38 + Math.random() * 0.13, v: 0.1 + Math.random() * 0.3, z: Math.random() }));
-const lerp = (a, b, t) => a + (b - a) * t;
+let w = null, mem = null;
 function tam() {
-  const d = devicePixelRatio || 1;
-  cv.width = cv.clientWidth * d;
-  cv.height = cv.clientHeight * d;
+  // Más de ~720 px de lado no se nota y cuesta: el canvas se estira con CSS.
+  const lado = Math.min(720, Math.round(cv.clientWidth * (devicePixelRatio || 1)));
+  cv.width = cv.height = Math.max(160, lado);
 }
 addEventListener("resize", tam);
 tam();
-if (!quieto) setInterval(() => {
-  desde = mezclado();
-  e = (e + 1) % ESTADOS.length;
-  mezcla = 0;
-  estado.textContent = ESTADOS[e].nombre;
-}, 3200);
-function mezclado() {
-  const a = desde, b = ESTADOS[e], t = Math.min(1, mezcla);
-  return { r: lerp(a.r, b.r, t), pulso: lerp(a.pulso, b.pulso, t), arcos: lerp(a.arcos, b.arcos, t), giro: lerp(a.giro, b.giro, t), color: a.color.map((c, i) => lerp(c, b.color[i], t)) };
-}
-function cuadro(ms) {
-  const t = ms / 1000;
-  mezcla += 0.02;
-  const s = mezclado();
-  const W = cv.width, H = cv.height, n = Math.min(W, H);
-  const paso = n / 64, punto = paso * 0.34;
-  cx.clearRect(0, 0, W, H);
-  const col = a => `rgba(${s.color[0] | 0},${s.color[1] | 0},${s.color[2] | 0},${a})`;
-  const R = s.r * (1 + s.pulso * Math.sin(t * 2.2));
-  for (let y = paso / 2; y < H; y += paso) {
-    for (let x = paso / 2; x < W; x += paso) {
-      const dx = (x - W / 2) / n, dy = (y - H / 2) / n;
-      const d = Math.hypot(dx, dy);
-      const ang = Math.atan2(dy, dx);
-      // El borde ondula un poco: es un blob, no un círculo.
-      const borde = R * (1 + 0.05 * Math.sin(ang * 3 + t * 1.3) + 0.03 * Math.sin(ang * 5 - t));
-      let a = 0;
-      if (d < borde) a = 0.35 + 0.65 * (1 - d / borde) ** 0.6;
-      // Arcos: anillos partidos que giran alrededor.
-      for (let k = 0; k < Math.ceil(s.arcos); k++) {
-        const rr = borde + 0.06 + k * 0.045;
-        const fuerza = Math.min(1, s.arcos - k);
-        const giro = ang - t * s.giro * (k % 2 ? -1 : 1) + k;
-        if (Math.abs(d - rr) < 0.013 && Math.sin(giro * 2) > 0.2) a = Math.max(a, 0.8 * fuerza);
-      }
-      if (a > 0) {
-        cx.fillStyle = col(a);
-        cx.beginPath();
-        cx.arc(x, y, punto, 0, 6.283);
-        cx.fill();
-      }
+
+let paso = 0, enPaso = 0, ultimo = performance.now(), hijos = [];
+function guion(dt) {
+  enPaso += dt;
+  const [, dura] = GUION[paso];
+  if (enPaso >= dura) {
+    enPaso = 0;
+    paso = (paso + 1) % GUION.length;
+    estado.textContent = GUION[paso][2];
+    if (GUION[paso][0] === E.delega) {
+      hijos = [1, 2];
+      hijos.forEach(id => w.iris_hijo(0, id));
     }
   }
-  for (const m of motas) {
-    m.a += m.v * 0.004 * (1 + s.giro);
-    const x = W / 2 + Math.cos(m.a) * m.r * n, y = H / 2 + Math.sin(m.a) * m.r * n * 0.92;
-    cx.fillStyle = col(0.15 + 0.5 * m.z);
-    cx.beginPath();
-    cx.arc(x, y, punto * (0.5 + 0.6 * m.z), 0, 6.283);
-    cx.fill();
+  const [e] = GUION[paso];
+  // Los subagentes trabajan un rato y terminan: uno bien y el otro también, al final.
+  if (e === E.delega) {
+    if (Math.random() < dt * 1.5) hijos.forEach(id => w.iris_hijo(1, id));
+    if (enPaso > 3.6 && hijos.length === 2) { w.iris_hijo(2, hijos.shift()); }
+    if (enPaso > 4.4 && hijos.length === 1) { w.iris_hijo(2, hijos.shift()); }
   }
+  // La voz: un nivel que sube y baja como una frase, al escuchar y al hablar.
+  const t = performance.now() / 1000;
+  const voz = (e === E.escucha || e === E.habla) ? Math.max(0, 0.35 + 0.3 * Math.sin(t * 7.3) * Math.sin(t * 2.1) + 0.15 * Math.sin(t * 17)) : 0;
+  return [e, voz];
+}
+
+function cuadro(ahora) {
+  const dt = Math.min(0.1, (ahora - ultimo) / 1000);
+  ultimo = ahora;
+  const [e, voz] = quieto ? [E.reposo, 0] : guion(dt);
+  w.iris_paso(dt, e, voz, 0);
+  const W = cv.width, H = cv.height;
+  const sp = Math.max(3, Math.round(W / 110));
+  const n = w.iris_imagen(W, H, sp);
+  const img = new Uint8Array(mem.buffer, w.iris_imagen_ptr(), W * H);
+  const pal = new Float32Array(mem.buffer, w.iris_paleta_ptr(), n * 3);
+  const datos = cx.createImageData(W, H);
+  const px = datos.data;
+  for (let i = 0; i < img.length; i++) {
+    const k = img[i];
+    if (k === 0) continue;
+    const c = (k - 1) * 3;
+    px[i * 4] = pal[c];
+    px[i * 4 + 1] = pal[c + 1];
+    px[i * 4 + 2] = pal[c + 2];
+    px[i * 4 + 3] = 255;
+  }
+  cx.putImageData(datos, 0, 0);
   if (!quieto) requestAnimationFrame(cuadro);
 }
-requestAnimationFrame(cuadro);
+
+document.querySelectorAll(".buddies button").forEach(b => b.addEventListener("click", () => {
+  if (!w) return;
+  w.iris_buddy(Number(b.dataset.buddy));
+  document.querySelectorAll(".buddies button").forEach(x => x.setAttribute("aria-pressed", x === b));
+}));
+
+WebAssembly.instantiateStreaming(fetch("nucleo.wasm"), {}).then(({ instance }) => {
+  w = instance.exports;
+  mem = w.memory;
+  requestAnimationFrame(t => { ultimo = t; cuadro(t); });
+});
 </script>
 </body>
 </html>

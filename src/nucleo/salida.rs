@@ -53,7 +53,7 @@ impl Core {
     }
 
     /// La imagen de puntos sin codificar: un índice de color por píxel (0 = transparente).
-    pub(super) fn pixels(&self, w: usize, h: usize, sp: usize) -> (Vec<u8>, Vec<[f64; 3]>) {
+    pub fn pixels(&self, w: usize, h: usize, sp: usize) -> (Vec<u8>, Vec<[f64; 3]>) {
         let sp = sp.max(2);
         let (dw, dh) = ((w / sp).max(8), (h / sp).max(8));
         // Bloques de ~3×3 puntos: lo de atrás queda tapado igual que en braille.
