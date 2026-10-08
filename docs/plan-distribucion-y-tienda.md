@@ -54,6 +54,14 @@ Caddy con HTTPS:
 - límites por IP para subir y tamaño máximo por paquete.
 El mismo dominio sirve `install.sh`, `install.ps1` y una página para navegar la tienda.
 
+**Tunear todo (pedido de Kevin, 2026-10-08).** No solo buddies: cada parte que se pueda
+cambiar es un *espacio* con su orden, y la tienda vende piezas para cualquiera de ellos:
+`/buddy` (quién vive en el núcleo), `/particles` (las motas), `/arcs` (los anillos), `/colors`
+(paletas), `/theme` (estilos de pantalla enteros), `/sounds`. El manifiesto del paquete dice a
+qué espacio va. Los de dibujo (buddy, partículas, arcos) son WASM sobre la rejilla; las paletas y
+los sonidos son datos; los estilos de pantalla necesitan un ABI propio (cajas, texto, el núcleo
+en un rectángulo) y van después.
+
 **6. `/tienda` en Iris.** Buscar, ver la vista previa, instalar, actualizar y quitar. Lo
 instalado aparece en `/buddy` y en las piezas como lo de fábrica.
 
