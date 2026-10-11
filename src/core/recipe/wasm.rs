@@ -53,6 +53,13 @@ fn number(v: &toml::Value) -> Option<f64> {
     v.as_float().or_else(|| v.as_integer().map(|i| i as f64)).or_else(|| v.as_bool().map(|b| if b { 1.0 } else { 0.0 }))
 }
 
+/// Work for a call that draws: what's drawn grows with the grid (a body filled dot by dot in a
+/// big window has tens of thousands), so 150 per dot on top of the base, up to a ceiling that
+/// still cuts a runaway piece in a few tens of milliseconds.
+fn fuel_for(dw: usize, dh: usize) -> u64 {
+    (150 * (dw * dh) as u64).clamp(FUEL, 20 * FUEL)
+}
+
 fn state_index(s: State) -> f64 {
     ALL.iter().position(|x| *x == s).unwrap_or(0) as f64
 }
@@ -161,7 +168,7 @@ impl WasmPart {
         let bytes: Vec<u8> = slots.iter().flat_map(|v| v.to_le_bytes()).collect();
         let result: Result<T, String> = (|| {
             inner.memory.write(&mut inner.store, inner.io as usize, &bytes).map_err(|e| format!("no se puede escribir su entrada: {e}"))?;
-            inner.store.set_fuel(FUEL).map_err(|e| e.to_string())?;
+            inner.store.set_fuel(grid.map_or(FUEL, |g| fuel_for(g.dw, g.dh))).map_err(|e| e.to_string())?;
             inner.store.data_mut().rand = rand.as_ref().map(|r| (**r).clone());
             let out = f(&mut inner.store).map_err(|e| e.to_string());
             if let (Some(r), Some(a)) = (rand, inner.store.data_mut().rand.take()) {

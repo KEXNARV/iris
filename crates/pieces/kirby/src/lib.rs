@@ -142,6 +142,8 @@ struct Pose {
     sweat: Option<f64>,
     hat: f64,
     cap: Cap,
+    /// Too many dots for one frame: the fills go checkered (outlines and features stay whole).
+    hatch: bool,
 }
 
 fn ease_out(u: f64) -> f64 {
@@ -157,6 +159,13 @@ fn ease_out_back(u: f64) -> f64 {
 /// The length of (x, y): `sqrt` is one WASM instruction, `hypot` a whole function.
 fn len(x: f64, y: f64) -> f64 {
     (x * x + y * y).sqrt()
+}
+
+/// An ellipse's squared normalized radius at (u, v): below 1 inside. No square root: this runs
+/// for every dot, and a big window has tens of thousands of them per frame.
+fn q(u: f64, v: f64, cx: f64, cy: f64, a: f64, b: f64) -> f64 {
+    let (x, y) = ((u - cx) / a, (v - cy) / b);
+    x * x + y * y
 }
 
 /// Distance (roughly, in its units) from an ellipse's edge: negative inside.
@@ -282,6 +291,7 @@ impl Kirby {
             _ => Cap::None,
         };
         Pose {
+            hatch: false,
             cap,
             t,
             w: 1.15 * du / r,
@@ -302,31 +312,70 @@ impl Kirby {
     }
 }
 
-/// What dot (`u`, `v`) of Kirby is (in its units, 1 = its radius, y up): its tone and ink.
-fn dot(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
-    let w = p.w;
+/// Where an ellipse crosses the row at `v`: its half width (negative: the row misses it).
+fn span(v: f64, cy: f64, a: f64, b: f64) -> f64 {
+    let y = (v - cy) / b;
+    let h = 1.0 - y * y;
+    if h > 0.0 { a * h.sqrt() } else { -1.0 }
+}
 
+/// An ellipse on one row: where it is, and where it's more than an outline inside.
+#[derive(Clone, Copy)]
+struct Cut {
+    lo: f64,
+    hi: f64,
+    ilo: f64,
+    ihi: f64,
+}
+
+impl Cut {
+    fn new(v: f64, cx: f64, cy: f64, a: f64, b: f64, w: f64) -> Cut {
+        let (h, ih) = (span(v, cy, a, b), span(v, cy, a - w, b - w));
+        if h < 0.0 {
+            return Cut { lo: 1.0, hi: -1.0, ilo: 1.0, ihi: -1.0 };
+        }
+        let ih = if ih < 0.0 { -1.0 } else { ih };
+        Cut { lo: cx - h, hi: cx + h, ilo: cx - ih, ihi: cx + ih }
+    }
+
+    fn has(&self, u: f64) -> bool {
+        u >= self.lo && u <= self.hi
+    }
+
+    fn deep(&self, u: f64) -> bool {
+        u >= self.ilo && u <= self.ihi
+    }
+}
+
+/// The hat, the copy star, the sweat drop and the bubble. Apart from `dot`: the WASM
+/// interpreter charges for every local a function has when it's called, so the per-dot path
+/// stays small and this one only runs near them.
+#[inline(never)]
+fn extras(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
+    let w = p.w;
     // The copy star, above its head, turning.
-    if p.hat > 0.0 {
+    if p.hat > 0.0 && u.abs() < 0.3 && v > 1.0 && v < 1.65 {
         let (sx, sy) = (u, v - 1.32 - 0.03 * (p.t * 3.0).sin());
         let rr = len(sx, sy);
         if rr < 0.27 * p.hat {
-        let th = sy.atan2(sx) - p.t * 1.5 - PI / 2.0;
-        let f = (th * 5.0 / TAU).rem_euclid(1.0);
-        let tip = (f * 2.0 - 1.0).abs();
-        let edge = (0.11 + 0.15 * tip * tip) * p.hat;
-        if rr < edge {
-            return Some((3, if rr < edge * 0.45 { WHITE } else { STAR }));
-        }
+            let th = sy.atan2(sx) - p.t * 1.5 - PI / 2.0;
+            let f = (th * 5.0 / TAU).rem_euclid(1.0);
+            let tip = (f * 2.0 - 1.0).abs();
+            let edge = (0.11 + 0.15 * tip * tip) * p.hat;
+            if rr < edge {
+                return Some((3, if rr < edge * 0.45 { WHITE } else { STAR }));
+            }
         }
     }
 
-    if let Some(d) = cap(p, u, v) {
-        return Some(d);
+    if p.cap != Cap::None && v > 0.4 {
+        if let Some(d) = cap(p, u, v) {
+            return Some(d);
+        }
     }
 
     // The sweat drop, sliding down its forehead.
-    if let Some(f) = p.sweat {
+    if let Some(f) = p.sweat.filter(|_| (u - 0.74).abs() < 0.2 && v > 0.3 && v < 1.1) {
         let (dx, dy, r) = (0.74, 0.74 - 0.25 * f, 0.075_f64.max(p.min));
         let top = dy + r * 2.4;
         if len(u - dx, v - dy) < r || (v > dy && v < top && (u - dx).abs() < (top - v) / 2.4) {
@@ -335,7 +384,7 @@ fn dot(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
     }
 
     // The sleeping bubble, growing and shrinking at the mouth.
-    if p.bubble > 0.0 {
+    if p.bubble > 0.0 && u > -0.1 && u < 0.6 && v > -0.6 && v < 0.2 {
         let rb = p.bubble.max(p.min);
         let (cx, cy) = (0.1 + rb * 0.85, -0.12 - rb * 0.25);
         let d = len(u - cx, v - cy);
@@ -350,36 +399,6 @@ fn dot(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
         }
     }
 
-    // Nothing of it reaches this far (arms and feet included).
-    if u * u + v * v > 1.45 * 1.45 {
-        return None;
-    }
-    let body = ellipse(u, v, 0.0, 0.02, 1.0, 0.93)
-        .min(ellipse(u, v, p.arm_l.0, p.arm_l.1, 0.3, 0.23))
-        .min(ellipse(u, v, p.arm_r.0, p.arm_r.1, 0.3, 0.23));
-    let feet = ellipse(u, v, -0.48, -0.87 + p.foot_l, 0.42, 0.21).min(ellipse(u, v, 0.5, -0.87 + p.foot_r, 0.42, 0.21));
-
-    // The face, inside the body.
-    if body < -w {
-        if let Some(d) = face(p, u, v) {
-            return Some(d);
-        }
-    }
-
-    // The feet go in front of the body.
-    if feet < 0.0 {
-        return Some((3, if feet > -w { FEET_LINE } else { FEET }));
-    }
-    if body < 0.0 {
-        if body > -w {
-            return Some((3, LINE));
-        }
-        // A shine at the top left: it reads as round.
-        if ellipse(u, v, -0.45, 0.55, 0.16, 0.1) < 0.0 {
-            return Some((3, WHITE));
-        }
-        return Some((3, PINK));
-    }
     None
 }
 
@@ -389,6 +408,7 @@ fn crown(u: f64) -> f64 {
 }
 
 /// The copy ability's hat, if this dot is part of it.
+#[inline(never)]
 fn cap(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
     match p.cap {
         Cap::None => None,
@@ -444,6 +464,7 @@ fn cap(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
 }
 
 /// The eyes, the mouth and the cheeks.
+#[inline(never)]
 fn face(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
     let w = p.w;
     let line = |d: f64| d.abs() < w * 0.75;
@@ -452,6 +473,9 @@ fn face(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
         let (cx, cy) = (side * 0.21 + p.gaze.0, 0.24 + p.gaze.1);
         let (a, b) = (0.1_f64.max(p.min), p.eye_b.max(p.min * 2.0));
         let (x, y) = (u - cx, v - cy);
+        if x.abs() > a * 1.5 || y.abs() > b * 1.3 {
+            continue;
+        }
         let hit = match p.eyes {
             Eyes::Open => {
                 if ellipse(u, v, cx, cy, a, b) < 0.0 {
@@ -482,7 +506,9 @@ fn face(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
         }
     }
 
+    let mouth_box = u.abs() < 0.32 && v < 0.05 && v > -0.5;
     match p.mouth {
+        _ if !mouth_box => {}
         Mouth::Open(o) => {
             let (a, b) = ((0.05 + 0.14 * o).max(p.min), (0.03 + 0.24 * o).max(p.min));
             let cy = -0.08 - 0.05 * o;
@@ -514,7 +540,7 @@ fn face(p: &Pose, u: f64, v: f64) -> Option<(u8, u8)> {
     }
 
     for side in [-1.0, 1.0] {
-        if ellipse(u, v, side * 0.44, 0.0, 0.15 * p.cheek, 0.075 * p.cheek) < 0.0 {
+        if (u - side * 0.44).abs() < 0.3 && v.abs() < 0.16 && q(u, v, side * 0.44, 0.0, 0.15 * p.cheek, 0.075 * p.cheek) < 1.0 {
             return Some((3, CHEEK));
         }
     }
@@ -661,14 +687,78 @@ impl Part for Kirby {
         let (c, d) = (row(cy + 1.7 * ky), row(cy - 1.25 * ky));
         let clamp = |n: f64, m: usize| n.clamp(0.0, m as f64 - 1.0) as usize;
         let (i0, i1) = (clamp(a.min(b), dw), clamp(a.max(b), dw));
+        // A whole body of dots is about π·kx·ky / (dot area); past what one frame can send,
+        // the fills go checkered.
+        let mut p = p;
+        p.hatch = PI * kx * ky / (di * dj).abs() > 12_000.0;
         let (j0, j1) = (clamp(c.min(d), dh), clamp(c.max(d), dh));
-        // Dot centers step evenly: (x0, y0) plus (di, dj) per dot.
+        // Row by row: where the body, the arms and the feet cross it (two square roots each),
+        // and then each dot only compares numbers. The interpreter charges for every call (and
+        // every local of the function called), so the face, the hats and the rest are only
+        // called inside their own boxes.
+        let w = p.w;
+        let (gx, gy) = p.gaze;
+        let over = |u: f64, v: f64| {
+            (p.hat > 0.0 || p.cap != Cap::None) && v > 0.4 || p.sweat.is_some() && u > 0.5 && v > 0.3 && u < 0.95 || p.bubble > 0.0 && u > -0.1 && u < 0.6 && v < 0.2 && v > -0.6
+        };
+        let in_face = |u: f64, v: f64| {
+            let eye = (v - 0.24 - gy).abs() < 0.32 && ((u - 0.21 - gx).abs() < 0.17 || (u + 0.21 - gx).abs() < 0.17);
+            let mouth = u.abs() < 0.32 && v < 0.05 && v > -0.5;
+            let cheek = (u.abs() - 0.44).abs() < 0.3 && v.abs() < 0.16;
+            eye || mouth || cheek
+        };
         for j in j0..=j1 {
             let v = (y0 + j as f64 * dj - cy) / ky;
+            let body = Cut::new(v, 0.0, 0.02, 1.0, 0.93, w);
+            let arms = [Cut::new(v, p.arm_l.0, p.arm_l.1, 0.3, 0.23, w), Cut::new(v, p.arm_r.0, p.arm_r.1, 0.3, 0.23, w)];
+            let feet = [Cut::new(v, -0.48, -0.87 + p.foot_l, 0.42, 0.21, w), Cut::new(v, 0.5, -0.87 + p.foot_r, 0.42, 0.21, w)];
+            let lo = body.lo.min(arms[0].lo).min(feet[0].lo);
+            let hi = body.hi.max(arms[1].hi).max(feet[1].hi);
+            let maybe_over = v > 0.3 || p.bubble > 0.0;
             for i in i0..=i1 {
                 let u = (x0 + i as f64 * di - cx) / kx;
-                if let Some((tone, ink)) = dot(&p, u, v) {
-                    g.dot(i, j, tone, ink);
+                if (u < lo || u > hi) && !maybe_over {
+                    continue;
+                }
+                let odd = p.hatch && (i + j) % 2 == 1;
+                let put = |g: &mut Grid, ink: u8| g.dot(i, j, 3, ink);
+                if maybe_over && over(u, v) {
+                    if let Some((tone, ink)) = extras(&p, u, v) {
+                        g.dot(i, j, tone, ink);
+                        continue;
+                    }
+                }
+                if u < lo || u > hi {
+                    continue;
+                }
+                if feet[0].has(u) || feet[1].has(u) {
+                    if feet[0].deep(u) || feet[1].deep(u) {
+                        if !odd {
+                            put(g, FEET);
+                        }
+                    } else {
+                        put(g, FEET_LINE);
+                    }
+                    continue;
+                }
+                let inside = body.has(u) || arms[0].has(u) || arms[1].has(u);
+                if !inside {
+                    continue;
+                }
+                if !(body.deep(u) || arms[0].deep(u) || arms[1].deep(u)) {
+                    put(g, LINE);
+                    continue;
+                }
+                if in_face(u, v) {
+                    if let Some((tone, ink)) = face(&p, u, v) {
+                        g.dot(i, j, tone, ink);
+                        continue;
+                    }
+                }
+                if v > 0.4 && u < -0.25 && q(u, v, -0.45, 0.55, 0.16, 0.1) < 1.0 {
+                    put(g, WHITE);
+                } else if !odd {
+                    put(g, PINK);
                 }
             }
         }
