@@ -22,10 +22,10 @@ The model takes that apart into four atoms:
 
 | Atom         | What it is                                                         | Format          |
 |--------------|--------------------------------------------------------------------|-----------------|
-| **Piece**    | one thing that reacts and/or draws: a body, an eye, the arcs, an antenna, a mood, a sound that plays on errors | code (WASM, or native for the built-in ones) |
+| **Piece**    | one thing that reacts and/or draws: a body, an eye, the arcs, an antenna, a mood, a sound that plays on errors | shapes and formulas made in Iris Studio, code (WASM), or native for the built-in ones |
 | **Channel**  | a named number that changes over time (`breath`, `gaze.x`, `arcs`, `body.radius`…). Iris publishes some; pieces read them and publish their own | — |
 | **Recipe**   | a buddy: which pieces, in what order, with what settings, wired to which channels, and its **script** (the value of each channel in each state) | data (TOML) |
-| **Asset**    | palettes, sounds, sprites that recipes and pieces use               | data            |
+| **Asset**    | palettes and sounds that recipes and pieces use                    | data            |
 
 **A buddy is a recipe.** The original and Baymax become two recipes made only of built-in
 pieces. Anyone can take one, swap its eye for another, take its arcs out, add three antennas,
@@ -148,8 +148,7 @@ manifest (`permissions = ["text"]`) and `/store` shows it before installing («e
 la conversación»), so nothing does it behind the user's back.
 
 **What Iris offers (imports `iris.*`):** `rand()` with the buddy's seed; `text(kind)` (above); `play(sound)` to play
-a sound from the package (rate-limited); `sprite(id, x, y, scale)` to stamp a picture from the
-package onto the grid. Nothing else: no files, network or clock. (`text` adds `iris.text` to the imports a piece may use; without the permission, loading it fails.)
+a sound from the package (rate-limited). Nothing else: no files, network or clock. (`text` adds `iris.text` to the imports a piece may use; without the permission, loading it fails.)
 
 A piece that only publishes channels (a mood, a gaze that follows the music) doesn't export
 `iris_paint`. A piece that only plays sounds doesn't draw or publish. That's what makes them
@@ -167,7 +166,8 @@ recipe doesn't know or care whether a piece is native or WASM.
 | change how the buddy reacts to each state                          | the script, no code              |
 | wire anything to anything (arcs to the music, size to the context) | `inputs`, no code                |
 | colors and sounds                                                  | assets, no code                  |
-| draw something that doesn't exist yet, or a new behavior           | a piece, in Rust (any language that compiles to WASM works) |
+| draw something that doesn't exist yet, or a new behavior           | a shape piece in Iris Studio (§5), no code |
+| go further than shapes and formulas allow                          | a piece in Rust (any language that compiles to WASM works), or "export to Rust" from Studio |
 | replace the mood, the gaze or the kids themselves                  | a piece                          |
 
 Where it stops, on purpose:
@@ -182,53 +182,71 @@ Where it stops, on purpose:
 - **The core.** Pieces draw inside the core. The rest of the screen (screen styles, `/theme`)
   needs a different contract and comes later.
 
-## 4. Editing a buddy inside Iris
+## 4. Picking and tuning inside Iris
 
-Freedom with no tools gets you lost, so the editor is part of the plan, not an extra:
+Iris keeps the quick things, the ones done without leaving the terminal:
 
-- `/buddy` lists the installed buddies; `/buddy edit` opens the current one as a list of its
-  pieces, with the core live on the right.
-- On a piece: its settings as controls (←/→ for numbers, enter for on/off, a list for options),
-  `x` takes it out, `d` duplicates it, shift+↑/↓ moves it, `+` adds an installed piece.
-- `s` opens the script: a table of channels × states.
-- Every change shows instantly; «save» writes the recipe in
-  `~/.config/iris/buddies/<name>.toml`. Editing a built-in or store buddy saves a copy
-  («kirby (mío)»): the original is never touched, so updates keep working.
+- `/buddy` lists the installed buddies and switches between them.
+- `/buddy edit` opens the current one as a list of its pieces with the core live on the right:
+  turn a piece off or on, change its settings (←/→ for numbers, enter for on/off, a list for
+  options). Anything deeper (new shapes, formulas, the script) opens it in Iris Studio.
+- Changes save a copy of the recipe in `~/.config/iris/buddies/<name>.toml` («kirby (mío)»): a
+  built-in or store buddy is never touched, so its updates keep working.
 
-## 5. Every file editable with any tool
+## 5. Iris Studio (the web tool)
 
-A buddy is a folder of ordinary files, so a user can open any of them with whatever they like
-(Photoshop, Aseprite, GIMP, Krita, Audacity, VS Code, Notepad) and Iris picks up the change the
-moment the file is saved:
+`iris.knarvaez.com/studio`: the place to make buddies and pieces without code, with the mouse,
+running the **real core** next to what's being edited (the same `core.wasm` as the landing,
+now able to run recipes). Works on Linux, Windows and Mac with nothing installed.
+
+**Shapes and formulas.** A piece made in Studio is a stack of layers, and each layer is a
+shape whose properties are live formulas:
+
+| Shape      | What it draws                                         |
+|------------|-------------------------------------------------------|
+| circle     | a filled or outlined disc                             |
+| blob       | a closed, wobbly curve (the original's body is one)   |
+| ring / arc | a ring or part of one, solid or dashed                |
+| curve      | a line through points (Bézier), open or closed        |
+| eye        | an eye with lid and pupil, ready to wire to the gaze  |
+| emitter    | dots that are born, move and die (motes, sparks, rain)|
+| group      | several shapes moved, scaled and rotated together     |
+
+Any number in a shape can be a formula over channels, settings and time:
 
 ```
-~/.config/iris/buddies/kirby/
-├── recipe.toml        the recipe (any text editor)
-├── body.png           pictures: PNG, GIF, WebP, also animated
-├── body-sleeping.png  one picture per state, if they want
-├── blink.gif
-└── hello.ogg          sounds: OGG, WAV, MP3
+radius   = 0.30 + breath * 0.1 + voice * 0.05
+x        = gaze.x * 0.08
+rotation = t * (0.5 + music * 2)
+tone     = if(alarm > 0.5, 3, 1)
 ```
 
-- **A buddy made of pictures, no code.** The built-in `image` piece draws a picture onto the
-  core: the transparent parts stay empty, the brightness decides each dot's tone, and the colors
-  come from the picture or from the palette (a setting). It takes one picture per state
-  (`frames.sleeping = "body-sleeping.png"`), an animated GIF, or a sprite sheet, and its inputs
-  can move, scale and tint it (`y = "breath"`, `scale = "voice"`). Drawing Kirby in Photoshop and
-  saving is enough to see him in the core.
-- **Live reload.** Iris watches the folder of the buddy in use. Saving a picture, a sound or
-  the recipe updates the core in the next frame; a file that's broken or half-saved keeps the
-  last good version and says what's wrong («body.png no se pudo leer: ¿está a medio guardar?»).
-- **`/buddy edit` and the files are the same thing.** The editor writes `recipe.toml`; editing
-  `recipe.toml` by hand updates the editor. `o` in the editor opens the folder in the file
-  manager.
-- **Packing is zipping the folder.** `/buddy publish` packs that folder as is.
+The formula language is small and safe: arithmetic, `sin cos abs min max clamp mix smoothstep
+noise rand`, `if`, channel names and settings. It's evaluated once per property per frame (not
+per dot), by the same Rust crate in Iris and in the browser, so what Studio shows is exactly
+what the terminal shows.
 
-One honest limit: the core is a grid of dots (2×4 per terminal cell in braille, finer in
-Sixel), so a detailed picture is shown as dots at that resolution. The template tells the
-author the grid size to draw at.
+**Timeline.** Per state and per event, a timeline of keyframes on top of the formulas: on
+`error`, shake for 0.3 s; on `done`, a bounce; while `sleeping`, sink a little. That's the
+script of the recipe, drawn instead of typed.
 
-## 6. The kit
+**A whole buddy too.** Studio edits recipes, not just pieces: add built-in pieces, store
+pieces and your own shape pieces, reorder them, wire their inputs to channels, edit the script
+as a table. Opening any store buddy remixes it into a copy.
+
+**From Studio to code.** "Export to Rust" turns a shape piece into an `iris-piece` project
+that draws the same, to keep going by hand where formulas fall short. It's one-way: once
+it's code, it's edited as code.
+
+**From Studio to your terminal, live.** Logged into the same account (`iris login`), Iris
+shows Studio drafts in `/buddy` as «borradores» and updates them as you edit on the web, so you
+can see the piece in your own terminal (braille or Sixel) while you build it. Without an
+account, drafts live in the browser and download as a `.iris`.
+
+**Publishing.** A button in Studio, with the same account. Shape pieces are data, not code:
+the server validates them by evaluating every formula, so they're the easiest kind to review.
+
+## 6. The kit (the code path)
 
 | Command                       | What it does                                                    |
 |-------------------------------|-----------------------------------------------------------------|
@@ -237,7 +255,6 @@ author the grid size to draw at.
 | `iris piece pack`       | validates and writes `antena-1.0.0.iris`                        |
 | `iris piece publish`         | logs in if needed and uploads it                                |
 | `iris piece status`           | in review, published or rejected (with the reason)              |
-| `/buddy publish`             | the same for a recipe made in the editor: no project, no code   |
 
 `iris-piece` goes to crates.io (the name is free, checked today), so a project doesn't need
 the Iris repo.
@@ -247,7 +264,8 @@ the Iris repo.
 A `.iris` is a zip with `iris.toml` and, depending on what it carries:
 
 ```
-antena-1.0.0.iris        a piece          iris.toml (+ [piece], [settings]), piece.wasm, sounds/, sprites/
+antena-1.0.0.iris        a code piece     iris.toml (+ [piece], [settings]), piece.wasm, sounds/
+orejas-1.0.0.iris        a shape piece    iris.toml (+ [piece], [settings]), shapes.toml, sounds/
 kirby-1.0.0.iris         a buddy (recipe) iris.toml (+ [recipe], [script], [[piece]])
 pastel-1.0.0.iris        a palette        iris.toml (+ [palette])
 campanas-1.0.0.iris      a sound pack     iris.toml (+ [sounds]), sounds/*.ogg
@@ -257,7 +275,7 @@ A recipe depends on pieces by name and major version (`kexnarv/kirby-body@1`). I
 recipe installs what it uses; a piece that's missing or failing is skipped with a notice and
 the rest of the buddy keeps going.
 
-Limits: 5 MB per package, 2 MB per `.wasm`, 256×256 sprites, 10 s per sound.
+Limits: 5 MB per package, 2 MB per `.wasm`, 64 layers per shape piece, 10 s per sound.
 
 ## 8. Publishing, review and signing
 
@@ -315,16 +333,16 @@ Same as the 2026-10-10 plan, adjusted:
 
 On a separate Linux user, so nothing from Kevin's setup helps:
 
-1. Install Iris and Rust.
-2. `/buddy edit` on the original: take the arcs out, make the zees bigger, wire the scale to
-   the music. Save as «mi buddy». **No code so far.**
-3. Open its folder, draw a body in Photoshop (or any image program), save: it's in the core.
-   **Still no code.**
-4. `iris piece new kirby-eyes` → `iris piece try`: write eyes that react to errors, put them in
-   the recipe from the editor, and publish both (`iris piece publish`, `/buddy publish`).
+1. Install Iris and Rust, and `iris login`.
+2. In Iris Studio: open the original, take its body out and build Kirby's with shapes and
+   formulas (a pink blob that breathes, cheeks that blush on errors, feet that bounce on
+   `done`). Watch it live in the terminal as a draft. **No code so far.**
+3. `iris piece new kirby-star` → `iris piece try`: write in Rust a star that orbits him while
+   he thinks, and publish it (`iris piece publish`).
+4. Back in Studio: add the star to the recipe and publish the buddy.
 5. As Kevin, at `iris.knarvaez.com/admin`: see both running, approve them.
-6. Back on the other user: `/store kirby` → enter → it's in the core, with the picture body,
-   the store eyes and everything else built-in.
+6. Back on the other user: `/store kirby` → enter → it's in the core, with the Studio body, the
+   Rust star and everything else built-in.
 
 ## 11. Order
 
@@ -335,37 +353,41 @@ a recipe of pieces without it changing a single dot.
 |-------|--------------------------------------------------------------------------|-------------------------------------------------|
 | 2a    | channels, the recipe format, and the 24 built-in pieces behind the new interface; the original and Baymax as recipes | the existing golden tests (`core::tests::golden`) pass unchanged: same dots in every state |
 | 2b    | ABI 2 in the host and in `iris-piece`; a WASM piece inside a recipe       | the built-in eye ported to WASM draws the same as the native one |
-| 2c    | `/buddy edit`, the `image` piece, the buddy folder with live reload    | steps 2 and 3 of the walk, with no code        |
-| 2d    | the kit (`new`, `try`, `pack`), `iris-piece` on crates.io      | from nothing to a piece moving in under five minutes |
-| 2e    | accounts (GitHub and Iris), upload, validation (iris-server)              | a broken package is rejected with a clear message |
-| 2f    | the host in the browser (`core.wasm` running recipes and WASM pieces), the admin panel, signing in the browser, reports | a package changed after approval is rejected   |
-| 2g    | `/store`, dependencies, failure notices                                 | **the walk, end to end**                       |
+| 2c    | shape pieces: the shapes, the formula language and its evaluator (one crate for Iris and the browser) | the original's body rebuilt as a shape piece looks like the native one |
+| 2d    | the host in the browser: `core.wasm` runs recipes, shape pieces and WASM pieces | the same recipe draws the same dots in Iris and in the browser |
+| 2e    | Iris Studio: layers, formulas, timeline, recipe editing, export to Rust; `/buddy edit` in Iris | step 2 of the walk in the browser, saved as a `.iris` |
+| 2f    | accounts (GitHub and Iris), drafts synced to Iris, upload, validation (iris-server) | a Studio draft shows live in the terminal; a broken package is rejected with a clear message |
+| 2g    | the kit (`new`, `try`, `pack`, `publish`), `iris-piece` on crates.io      | from nothing to a code piece moving in under five minutes |
+| 2h    | the admin panel, signing in the browser, reports                         | a package changed after approval is rejected   |
+| 2i    | `/store`, dependencies, failure notices                                  | **the walk, end to end**                       |
 
-Assets (`play`, `sprite`, palettes and sound packs) come in 2b–2d as the templates need them.
+Assets (`play`, palettes and sound packs) come along as Studio and the templates need them.
 
 ## Later
 
 Screen styles (`/theme`), the public catalog at `iris.knarvaez.com/store` (the browser host
-from 2f makes it cheap), Google accounts, Windows tests of the kit.
+from 2d makes it cheap), Google accounts, Windows tests of the kit.
 
 ## Decided (2026-10-11)
 
 1. **The model:** a buddy is a recipe of pieces (data), every part of the built-in buddies is a
-   replaceable piece, and pieces talk through named channels. Every file of a buddy can be
-   edited with any program and Iris reloads it live.
+   replaceable piece, and pieces talk through named channels.
+   Pieces are made in Iris Studio (shapes and formulas, on the web) or in pure code (Rust to
+   WASM). No pieces made of pictures.
 2. **The order:** start by rebuilding the original as a recipe (2a).
 3. **What pieces see:** everything, text included, declared with `permissions = ["text"]` and
    shown before installing.
 4. **Command names in English:** `iris piece new/try/pack/publish/status`, `/store`,
    `/buddy edit`, `iris login`.
 
-5. **Accounts:** GitHub or an Iris account (email and password), both in this phase.
-6. **Review:** a web panel only for Kevin, with a passkey; the signing key lives in his browser
+5. **Iris Studio** lives on the web, with shapes, formulas and a timeline, and exports to Rust.
+6. **Accounts:** GitHub or an Iris account (email and password), both in this phase.
+7. **Review:** a web panel only for Kevin, with a passkey; the signing key lives in his browser
    and never on the server.
-7. **Owned characters:** allowed. Whoever owns one can report it and Kevin takes it down.
+8. **Owned characters:** allowed. Whoever owns one can report it and Kevin takes it down.
 
 ## What Kevin has to do
 
-- Create the GitHub OAuth App (phase 2e).
-- Pick an email service and create its key (phase 2e).
-- On the first visit to the panel, register his passkey and save the key backup (phase 2f).
+- Create the GitHub OAuth App (phase 2f).
+- Pick an email service and create its key (phase 2f).
+- On the first visit to the panel, register his passkey and save the key backup (phase 2h).
