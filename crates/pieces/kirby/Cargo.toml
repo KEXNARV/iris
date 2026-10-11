@@ -1,0 +1,22 @@
+[package]
+name = "kirby"
+version = "1.0.0"
+edition = "2024"
+description = "Kirby, a código: el cuerpo de Iris como el personaje de pixel art, vivo con cada estado"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-piece = { path = "../../iris-piece" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Outside the Iris package: built separately, for wasm32-unknown-unknown.
+[workspace]

@@ -7,6 +7,7 @@
 //! (`core::tests::golden`) checks that not a single dot changed.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::bus::{Bus, Ch};
 use super::part::{Frame, Msg, Part, World};
@@ -531,7 +532,9 @@ impl KidsPart {
     fn new(b: &mut Build) -> Self {
         let scale = b.number("scale", 0.40);
         let p = KidsPart {
-            kids: Kids::new(scale),
+            // A recipe of one's own makes its kids from its kid parts; the built-in ones, the
+            // original's (as always).
+            kids: Kids::new(scale, b.recipe.files.is_some().then(|| Arc::new(b.recipe.clone()))),
             spring: SpringIn::new(b),
             anchor: AnchorIn::new(b),
             alive: b.bus.ch("kids.alive"),
@@ -573,11 +576,11 @@ impl Part for KidsPart {
     }
 
     fn paint(&self, g: &mut Grid, f: &Frame) {
-        self.kids.paint(g, f.ctx, &self.anchor.get(&f.bus));
+        self.kids.paint(g, f.ctx, (&self.anchor.get(&f.bus), f.ink_base));
     }
 
-    fn inks(&self, _col: [f64; 3]) -> Vec<[[f64; 3]; 4]> {
-        self.kids.inks().collect()
+    fn inks(&self, _col: [f64; 3], base: u8) -> Vec<[[f64; 3]; 4]> {
+        self.kids.inks(base)
     }
 
     #[cfg(test)]
@@ -1110,7 +1113,7 @@ impl Part for BlobPart {
     }
 
     /// The blob has no ink of its own: it's painted with the state's.
-    fn inks(&self, col: [f64; 3]) -> Vec<[[f64; 3]; 4]> {
+    fn inks(&self, col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
         vec![tones(col)]
     }
 }
@@ -1157,7 +1160,7 @@ impl Part for FacePart {
         self.face.draw(g, f.ctx, &look);
     }
 
-    fn inks(&self, col: [f64; 3]) -> Vec<[[f64; 3]; 4]> {
+    fn inks(&self, col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
         vec![self.face.tones(col)]
     }
 }

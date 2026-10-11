@@ -9,6 +9,8 @@
 //! min = 0.5
 //! max = 2.0
 //!
+//! colors = ["#ff8cc8"]           # its own inks (optional): ink 5 is the first, 6 the second…
+//!
 //! [outputs]                     # channels this piece publishes (optional)
 //! "ears.tip" = "body.y + body.radius * 1.4"
 //!
@@ -23,7 +25,7 @@
 //!
 //! Every shape has `x`, `y` (where its center goes), `sx`, `sy` (scale), `rotation` (radians),
 //! `tone` (1 dim … 3 full), `ink` (0 the state's color, 1 green, 2 red, 3 amber, 4 accent; the
-//! channel `ink.body` is the body's, red on errors) and `visible` (> 0.5 draws). Outlined shapes
+//! channel `ink.body` is the body's, red on errors; 5 onwards, the piece's own `colors`) and `visible` (> 0.5 draws). Outlined shapes
 //! take `fill`: `none`, `solid` or `hatch`. The rest depends on the shape (see [`Kind`]).
 
 pub mod expr;
@@ -114,7 +116,22 @@ pub struct Shape {
     pub inputs: Vec<String>,
     /// The channels it publishes, with their formulas.
     pub outputs: Vec<(String, Expr)>,
+    /// Its own inks, as 0–255 RGB: ink 5 is the first.
+    pub colors: Vec<[f64; 3]>,
     pub layers: Vec<Layer>,
+}
+
+/// Most own colors in a piece.
+pub const MAX_COLORS: usize = 16;
+
+/// "#rrggbb" as 0–255 RGB.
+pub fn hex(s: &str) -> Option<[f64; 3]> {
+    let h = s.trim().strip_prefix('#')?;
+    if h.len() != 6 || !h.is_ascii() {
+        return None;
+    }
+    let c = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok().map(f64::from);
+    Some([c(0)?, c(2)?, c(4)?])
 }
 
 /// Most layers in a piece.
@@ -154,6 +171,18 @@ impl Shape {
             let t = t.as_table().ok_or("[outputs] va como tabla: nombre = fórmula")?;
             for (k, v) in t {
                 outputs.push((k.clone(), formula(v, &format!("salida «{k}»"), &mut names)?));
+            }
+        }
+
+        let mut colors = vec![];
+        if let Some(c) = doc.get("colors") {
+            let c = c.as_array().ok_or("«colors» va como lista: [\"#ff8cc8\", …]")?;
+            if c.len() > MAX_COLORS {
+                return Err(format!("tiene {} colores propios; el máximo es {MAX_COLORS}", c.len()));
+            }
+            for v in c {
+                let t = v.as_str().unwrap_or_default();
+                colors.push(hex(t).ok_or(format!("«{t}» no es un color: va como \"#rrggbb\""))?);
             }
         }
 
@@ -201,7 +230,7 @@ impl Shape {
         if layers.is_empty() && outputs.is_empty() {
             return Err("no dibuja nada ni publica nada: le faltan capas ([[layer]])".into());
         }
-        Ok(Shape { settings, inputs: channels, outputs, layers })
+        Ok(Shape { settings, inputs: channels, outputs, colors, layers })
     }
 }
 
@@ -346,7 +375,7 @@ impl Instance {
                 continue;
             }
             let tone = v(5).round().clamp(1.0, 3.0) as u8;
-            let ink = v(6).round().clamp(0.0, 4.0) as u8;
+            let ink = v(6).round().clamp(0.0, (4 + shape.colors.len()) as f64) as u8;
             let own = |k: usize| v(COMMON.len() + k);
             let du = c.du().max(1e-4);
             match layer.kind {
@@ -405,7 +434,7 @@ impl Instance {
                             c.plot(x, y, tone, ink);
                         }
                     } else {
-                        outline(c, &tf, layer.fill, tone.saturating_sub(1).max(1), ink, r, |_| r, du);
+                        outline(c, &tf, layer.fill, softer(tone), ink, r, |_| r, du);
                         let pr = r * pupil;
                         let (px, py) = (lx * (r - pr), ly * (r - pr));
                         fill_with(c, &tf, Fill::Solid, tone, ink, r, |x, y| (x - px).hypot(y - py) < pr);
@@ -447,6 +476,13 @@ impl Transform {
     }
 }
 
+/// One tone below, for what goes behind an outline (a hatch, an eye's ring), but never down to
+/// tone 1 unless it already was: tone 1 is the theme's dim gray, with no ink, and a filled
+/// shape would lose its color.
+fn softer(tone: u8) -> u8 {
+    tone.saturating_sub(1).max(2).min(tone)
+}
+
 /// A closed outline given by its radius at each angle, and its inside if it has a fill.
 #[allow(clippy::too_many_arguments)]
 fn outline(c: &mut dyn Canvas, tf: &Transform, fill: Fill, tone: u8, ink: u8, reach: f64, r_at: impl Fn(f64) -> f64, du: f64) {
@@ -459,7 +495,7 @@ fn outline(c: &mut dyn Canvas, tf: &Transform, fill: Fill, tone: u8, ink: u8, re
         c.plot(x, y, tone, ink);
     }
     if fill != Fill::None {
-        let tone_in = if fill == Fill::Solid { tone } else { tone.saturating_sub(1).max(1) };
+        let tone_in = if fill == Fill::Solid { tone } else { softer(tone) };
         fill_with(c, tf, fill, tone_in, ink, reach, |lx, ly| lx.hypot(ly) < r_at(ly.atan2(lx).rem_euclid(turn)));
     }
 }

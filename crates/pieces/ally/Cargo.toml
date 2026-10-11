@@ -1,0 +1,22 @@
+[package]
+name = "ally"
+version = "1.0.0"
+edition = "2024"
+description = "Un Waddle Dee aliado con bandana: el cuerpo de cada subagente junto a Kirby"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-piece = { path = "../../iris-piece" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Outside the Iris package: built separately, for wasm32-unknown-unknown.
+[workspace]

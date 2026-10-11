@@ -15,7 +15,8 @@ use super::part::{Frame, Part, World};
 use super::Build;
 use crate::core::context::{Context, Notice};
 use crate::core::grid::Grid;
-use crate::core::host::{apply_ops, sandbox, HostData, FUEL};
+use crate::core::color::tones;
+use crate::core::host::{apply_ops, sandbox, HostData, OwnInks, FUEL};
 use crate::core::rand::Rand;
 use crate::core::state::{State, ALL};
 
@@ -36,6 +37,8 @@ pub(crate) struct WasmPart {
     inputs: Vec<Ch>,
     settings: Vec<f64>,
     outputs: Vec<Ch>,
+    /// Its own colors (0–255 RGB), its inks 5 onwards.
+    colors: Vec<[f64; 3]>,
 }
 
 /// A setting as the part declares it.
@@ -91,6 +94,13 @@ impl WasmPart {
             return Err(format!("no tiene ningún ajuste «{k}»"));
         }
         let settings = declared.iter().map(|d| b.spec.settings.get(&d.name).and_then(number).unwrap_or(d.default).clamp(d.min, d.max)).collect();
+        let mut colors = vec![];
+        for c in names("colors") {
+            colors.push(iris_shape::hex(&c).ok_or(format!("«{c}» no es un color: va como \"#rrggbb\""))?);
+        }
+        if colors.len() > iris_shape::MAX_COLORS {
+            return Err(format!("declara {} colores propios; el máximo es {}", colors.len(), iris_shape::MAX_COLORS));
+        }
         let inputs = names("inputs").iter().map(|n| b.input(n)).collect();
         let outputs = names("outputs").iter().map(|n| b.bus.ch(n)).collect();
 
@@ -103,7 +113,7 @@ impl WasmPart {
             instance.get_typed_func(&store, "iris_paint").ok(),
         );
         let inner = Inner { store, memory, io, f_step, f_event, f_layout, f_paint, broken: None };
-        let part = WasmPart { inner: RefCell::new(inner), inputs, settings, outputs };
+        let part = WasmPart { inner: RefCell::new(inner), inputs, settings, outputs, colors };
         // It is born with its settings written, and with the buddy's randomness, lent.
         let mut bus = std::mem::take(b.bus);
         let ok = part.call(&mut bus, None, 0.0, None, Some(b.rand), |s| f_new.call(s, ()));
@@ -213,8 +223,13 @@ impl Part for WasmPart {
         let mut bus = f.bus.clone();
         let Ok(r) = self.call(&mut bus, Some(f.ctx), 0.0, Some(g), None, |s| func.call(s, ())) else { return };
         let inner = &mut *self.inner.borrow_mut();
-        if let Err(e) = apply_ops(g, &inner.memory, &inner.store, r) {
+        if let Err(e) = apply_ops(g, &inner.memory, &inner.store, r, OwnInks { base: f.ink_base, count: self.colors.len() as u8 }) {
             inner.broken = Some(e);
         }
+    }
+
+    /// Its own colors, after the five base inks.
+    fn inks(&self, _col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
+        self.colors.iter().map(|c| tones(*c)).collect()
     }
 }

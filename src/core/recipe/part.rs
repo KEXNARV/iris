@@ -31,6 +31,8 @@ pub(crate) struct World<'a> {
 pub(crate) struct Frame<'a> {
     pub ctx: &'a Context,
     pub bus: Bus,
+    /// Where the painting part's own inks start in the palette (see `Part::inks`).
+    pub ink_base: u8,
 }
 
 pub(crate) trait Part {
@@ -55,8 +57,9 @@ pub(crate) trait Part {
         None
     }
 
-    /// The inks it adds to the palette, after the five base ones, in drawing order.
-    fn inks(&self, _col: [f64; 3]) -> Vec<[[f64; 3]; 4]> {
+    /// The inks it adds to the palette, after the five base ones, in drawing order; `base` is
+    /// where they'll start.
+    fn inks(&self, _col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
         vec![]
     }
 

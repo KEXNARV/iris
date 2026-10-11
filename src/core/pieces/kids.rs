@@ -9,7 +9,10 @@ use super::ease_out_back;
 use super::waves::Waves;
 use super::spring::Spring;
 use super::Piece;
-use crate::core::color::{tones, INK_ACCENT, INK_KID, INK_RED, MAX_KID_INKS};
+use crate::core::color::{tones, INK_ACCENT, INK_RED, MAX_KID_INKS};
+use crate::core::grid::MAX_INK;
+use crate::core::recipe::Recipe;
+use std::sync::Arc;
 use crate::core::context::{Anchor, Context};
 use crate::core::state::{Event, Signals, State};
 use crate::core::grid::Grid;
@@ -42,6 +45,7 @@ pub(crate) struct Kids {
     pulse: f64,
     /// The kid's body radius in its own world: used to scale it to its size.
     scale: f64,
+    recipe: Option<Arc<Recipe>>,
 }
 
 pub(crate) struct Step<'a> {
@@ -51,8 +55,9 @@ pub(crate) struct Step<'a> {
 }
 
 impl Kids {
-    pub fn new(scale: f64) -> Self {
-        Kids { kids: vec![], heard: None, orbit: 0.70, travel: 0.8, pulse: 0.65, scale }
+    /// `recipe`: what the kids are made of (its kid parts); none, the original's.
+    pub fn new(scale: f64, recipe: Option<Arc<Recipe>>) -> Self {
+        Kids { kids: vec![], heard: None, orbit: 0.70, travel: 0.8, pulse: 0.65, scale, recipe }
     }
 
     /// How many there are (alive or saying goodbye).
@@ -71,7 +76,7 @@ impl Kids {
         // It comes out where it will end up: the gap left by spreading out with one more.
         let alive = self.kids.iter().filter(|k| k.end.is_none()).count();
         let a = kid_slot(ctx.t, alive, alive + 1, ctx.calm());
-        self.kids.push(Kid { id, a, born: ctx.t, end: None, merged: false, core: Box::new(Core::mini(State::Thinking, id)), pulses: vec![] });
+        self.kids.push(Kid { id, a, born: ctx.t, end: None, merged: false, core: Box::new(Core::mini(State::Thinking, id, self.recipe.as_deref())), pulses: vec![] });
     }
 
     /// The kid did something (requested a tool or got its result): a particle rises.
@@ -98,16 +103,36 @@ impl Kids {
         self.heard = None;
     }
 
-    /// The kids' inks, each with the color of what it's doing.
-    pub fn inks(&self) -> impl Iterator<Item = [[f64; 3]; 4]> + '_ {
-        self.kids.iter().take(MAX_KID_INKS).map(|k| tones(k.core.ink()))
+    /// The colors of the kids' own parts (the same recipe for all: the first one's), after the
+    /// five base inks.
+    fn own(&self) -> Vec<[[f64; 3]; 4]> {
+        self.kids.first().map(|k| k.core.palette().split_off(5)).unwrap_or_default()
+    }
+
+    /// How many kids get an ink of their own, starting at `base`, leaving room for their own
+    /// colors after them.
+    fn slots(&self, base: u8, own: usize) -> usize {
+        let room = (MAX_INK as usize + 1).saturating_sub(base as usize + own);
+        self.kids.len().min(MAX_KID_INKS).min(room).max(1)
+    }
+
+    /// The kids' inks, each with the color of what it's doing, and then their own colors.
+    pub fn inks(&self, base: u8) -> Vec<[[f64; 3]; 4]> {
+        if self.kids.is_empty() {
+            return vec![];
+        }
+        let own = self.own();
+        let mut out: Vec<_> = self.kids.iter().take(self.slots(base, own.len())).map(|k| tones(k.core.ink())).collect();
+        out.extend(own);
+        out
     }
 }
 
 impl Piece for Kids {
     type Step<'a> = Step<'a>;
-    /// The main one's body: the line leaves from its edge.
-    type Paint<'a> = &'a Anchor;
+    /// The main one's body (the line leaves from its edge), and where the kids' inks start in
+    /// the palette (after the inks of whatever is drawn before them).
+    type Paint<'a> = (&'a Anchor, u8);
 
     /// Their state, their spot in the orbit, their gaze and their goodbye.
     fn step(&mut self, ctx: &Context, m: Step, dt: f64) {
@@ -161,13 +186,15 @@ impl Piece for Kids {
     }
 
     /// The kids, with their line to the main one and the particles traveling up it.
-    fn paint(&self, g: &mut Grid, ctx: &Context, anchor: &Anchor) {
+    fn paint(&self, g: &mut Grid, ctx: &Context, (anchor, ink0): (&Anchor, u8)) {
         let t = ctx.t;
         let (cx, cy, radius) = (anchor.cx, anchor.cy, anchor.radius);
         let alive = self.kids.iter().filter(|k| k.end.is_none()).count();
         // A kid's body radius: with many they shrink; never below what still reads as an
         // eye.
         let kr = (if alive > 4 { 0.10_f64 } else { 0.13 }).max(2.6 * g.du);
+        let slots = self.slots(ink0, self.own().len());
+        let own0 = ink0.saturating_add(slots as u8);
         for (n, k) in self.kids.iter().enumerate() {
             // How far it has left the body (0 inside, 1 in the orbit) and how big it is.
             let (out, size) = match k.end {
@@ -183,7 +210,7 @@ impl Piece for Kids {
                 Some((t0, false)) => (1.0, 1.0 - 0.8 * ((t - t0) / 1.4).min(1.0)),
             };
             let red = k.core.alarm() > 0.35;
-            let ink = INK_KID + n.min(MAX_KID_INKS - 1) as u8;
+            let ink = ink0 + n.min(slots - 1) as u8;
             let bob = 0.012 * (t * 1.7 + k.id as f64).sin();
             let orbit = radius + (self.orbit - radius) * out;
             let (kx, ky) = (orbit * k.a.cos(), orbit * k.a.sin() + bob);
@@ -228,7 +255,7 @@ impl Piece for Kids {
             }
 
             // The kid: its own core, scaled and in place, painted with its ink.
-            g.view(kx, ky, r / self.scale, ink);
+            g.view(kx, ky, r / self.scale, ink, own0);
             k.core.paint(g);
             g.unview();
         }

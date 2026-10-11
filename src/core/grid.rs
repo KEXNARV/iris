@@ -29,8 +29,13 @@ pub(crate) struct Grid {
     pub(crate) oy: f64,
     pub(crate) k: f64,
     ink: Option<u8>,
+    /// In a child's view, where its own inks (5 onwards) are in the palette.
+    own: u8,
     du0: f64,
 }
+
+/// The highest ink a dot can hold (`tone | ink << 2` in a byte).
+pub(crate) const MAX_INK: u8 = 63;
 
 impl Grid {
     /// For braille: `cw`×`ch` cells of 2×4 dots.
@@ -43,16 +48,16 @@ impl Grid {
         let s = asp.min(1.0);
         let (bx, by) = (dw.div_ceil(bw), dh.div_ceil(bh));
         let du = 2.0 / (s * dh as f64);
-        Grid { dw, dh, asp, s, du, dots: vec![0; dw * dh], bw, bh, used: vec![false; bx * by], ox: 0.0, oy: 0.0, k: 1.0, ink: None, du0: du }
+        Grid { dw, dh, asp, s, du, dots: vec![0; dw * dh], bw, bh, used: vec![false; bx * by], ox: 0.0, oy: 0.0, k: 1.0, ink: None, own: 5, du0: du }
     }
 
-    pub(crate) fn view(&mut self, ox: f64, oy: f64, k: f64, ink: u8) {
-        (self.ox, self.oy, self.k, self.ink) = (ox, oy, k, Some(ink));
+    pub(crate) fn view(&mut self, ox: f64, oy: f64, k: f64, ink: u8, own: u8) {
+        (self.ox, self.oy, self.k, self.ink, self.own) = (ox, oy, k, Some(ink), own);
         self.du = self.du0 / k;
     }
 
     pub(crate) fn unview(&mut self) {
-        (self.ox, self.oy, self.k, self.ink) = (0.0, 0.0, 1.0, None);
+        (self.ox, self.oy, self.k, self.ink, self.own) = (0.0, 0.0, 1.0, None, 5);
         self.du = self.du0;
     }
 
@@ -90,8 +95,11 @@ impl Grid {
     pub(crate) fn dot(&mut self, i: usize, j: usize, tone: u8, ink: u8) {
         let ink = match self.ink {
             Some(kid) if ink == INK_MAIN || ink == INK_ACCENT => kid,
+            Some(_) if ink >= 5 => self.own.saturating_add(ink - 5),
             _ => ink,
         };
+        // A dot keeps its ink in six bits: past that, the last one.
+        let ink = ink.min(MAX_INK);
         let k = j * self.dw + i;
         let old = self.dots[k];
         let (ot, oi) = (old & 3, old >> 2);

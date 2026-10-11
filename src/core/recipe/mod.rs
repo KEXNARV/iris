@@ -35,6 +35,7 @@ fn layer_on(layer: u32) -> bool {
 }
 
 /// One `[[piece]]` of a recipe.
+#[derive(Clone)]
 pub(crate) struct PieceSpec {
     /// How the recipe refers to it in `draw`; by default, what it uses.
     pub id: String,
@@ -43,12 +44,15 @@ pub(crate) struct PieceSpec {
     pub settings: toml::Table,
     /// Input → channel, for the inputs that don't read the channel of their own name.
     pub inputs: HashMap<String, String>,
-    /// Whether the kids (the subagents' small cores) carry it too.
+    /// Whether the kids (the subagents' small cores) carry it too, and whether only they do
+    /// (`kid = "only"`: in place of something the main one has).
     pub kid: bool,
+    pub only_kid: bool,
     /// Its bit in `LAYERS`.
     pub layer: Option<u32>,
 }
 
+#[derive(Clone)]
 pub(crate) struct Recipe {
     /// Where its `use` lines find their files; none for the built-in recipes.
     pub files: Option<Arc<dyn files::Files>>,
@@ -98,9 +102,10 @@ impl Recipe {
                 .and_then(|s| s.as_table())
                 .map(|t| t.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
                 .unwrap_or_default();
-            let kid = p.get("kid").and_then(|k| k.as_bool()).unwrap_or(true);
+            let only_kid = p.get("kid").and_then(|k| k.as_str()) == Some("only");
+            let kid = only_kid || p.get("kid").and_then(|k| k.as_bool()).unwrap_or(true);
             let layer = p.get("layer").and_then(|l| l.as_integer()).map(|l| l as u32);
-            pieces.push(PieceSpec { id, uses, settings, inputs, kid, layer });
+            pieces.push(PieceSpec { id, uses, settings, inputs, kid, only_kid, layer });
         }
         let draw: Vec<String> = doc
             .get("draw")
@@ -224,7 +229,7 @@ impl Assembled {
         let mut bus = Bus::default();
         let mut rand = Rand::new();
         let mut slots = vec![];
-        for spec in recipe.pieces.iter().filter(|p| !kid || p.kid) {
+        for spec in recipe.pieces.iter().filter(|p| if kid { p.kid } else { !p.only_kid }) {
             let mut b = Build { recipe, spec, bus: &mut bus, rand: &mut rand, state };
             let part = builtin::make(&mut b)?;
             slots.push(Slot { id: spec.id.clone(), part, layer: spec.layer, off: false });
@@ -295,15 +300,18 @@ impl Buddy for Assembled {
     }
 
     fn paint(&self, g: &mut Grid, ctx: &Context) {
-        let mut f = Frame { ctx, bus: self.bus.clone() };
+        let mut f = Frame { ctx, bus: self.bus.clone(), ink_base: 5 };
         for s in self.slots.iter().filter(|s| !s.off) {
             s.part.layout(&mut f, g);
         }
+        // Each part's own inks follow the five base ones, in drawing order (as in `palette`).
+        let col = self.color();
         for &i in &self.draw {
             let s = &self.slots[i];
             if !s.off && s.layer.is_none_or(layer_on) {
                 s.part.paint(g, &f);
             }
+            f.ink_base = f.ink_base.saturating_add(s.part.inks(col, f.ink_base).len() as u8);
         }
     }
 
@@ -312,7 +320,8 @@ impl Buddy for Assembled {
         let col = self.color();
         let mut pal: Vec<_> = [col, GREEN, RED, WARM, crate::theme::accent_rgb()].into_iter().map(tones).collect();
         for &i in &self.draw {
-            pal.extend(self.slots[i].part.inks(col));
+            let base = pal.len().min(u8::MAX as usize) as u8;
+            pal.extend(self.slots[i].part.inks(col, base));
         }
         pal
     }
@@ -323,7 +332,7 @@ impl Buddy for Assembled {
 
     fn channels(&self, ctx: &Context) -> Vec<(String, f64)> {
         let g = Grid::with_dots(120, 120, 2, 4);
-        let mut f = Frame { ctx, bus: self.bus.clone() };
+        let mut f = Frame { ctx, bus: self.bus.clone(), ink_base: 5 };
         for s in self.slots.iter().filter(|s| !s.off) {
             s.part.layout(&mut f, &g);
         }

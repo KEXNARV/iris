@@ -290,9 +290,16 @@ pub fn sync_drafts(tx: Sender<AppEvent>) {
                 if f.contains('/') || f.contains('\\') || f.starts_with('.') {
                     continue;
                 }
-                if let Some(text) = body.as_str() {
-                    let _ = std::fs::write(dir.join(f), text);
+                let Some(text) = body.as_str() else { continue };
+                // Binary files (a part's .wasm) come in base64, as `<name>.b64`.
+                if let Some(bin) = f.strip_suffix(".b64") {
+                    use base64::Engine;
+                    if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(text.trim()) {
+                        let _ = std::fs::write(dir.join(bin), bytes);
+                    }
+                    continue;
                 }
+                let _ = std::fs::write(dir.join(f), text);
             }
             let _ = std::fs::write(dir.join(".draft"), at);
             let _ = tx.send(AppEvent::Store(StoreEvent::Draft(name.to_string())));

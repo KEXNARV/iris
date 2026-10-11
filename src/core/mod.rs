@@ -62,10 +62,13 @@ impl Core {
         Core { ctx: Context { t, state, since: t, sig: Signals::default(), look: None }, fired: vec![], buddies, custom: None }
     }
 
-    /// A kid: already awake in `state`, with no boot or specks.
-    fn mini(state: State, seed: u64) -> Self {
+    /// A kid: already awake in `state`, with no boot or specks; from `recipe`'s kid parts, or
+    /// the original's (the built-in recipes', or if that one doesn't build).
+    fn mini(state: State, seed: u64, recipe: Option<&recipe::Recipe>) -> Self {
         // Each kid with its own phase, so they don't all breathe and blink in unison.
-        let kid = recipe::Assembled::kid(&recipe::original(), state, seed).expect("a built-in recipe");
+        let kid = recipe
+            .and_then(|r| recipe::Assembled::kid(r, state, seed).ok())
+            .unwrap_or_else(|| recipe::Assembled::kid(&recipe::original(), state, seed).expect("a built-in recipe"));
         Core::with(vec![Box::new(kid)], 3.7 * seed as f64, state)
     }
 

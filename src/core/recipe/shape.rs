@@ -7,6 +7,7 @@ use iris_shape::{Canvas, Env, Instance, Shape};
 use super::bus::{Bus, Ch};
 use super::part::{Frame, Part, World};
 use super::Build;
+use crate::core::color::tones;
 use crate::core::context::{Context, Notice};
 use crate::core::grid::Grid;
 use crate::core::state::{State, ALL};
@@ -95,12 +96,24 @@ impl Part for ShapePart {
     fn paint(&self, g: &mut Grid, f: &Frame) {
         let mut ch = vec![];
         let env = self.env(f.ctx, &f.bus, 0.0, g.du, &mut ch);
-        self.inst.paint(&self.shape, &env, &mut GridCanvas(g));
+        self.inst.paint(&self.shape, &env, &mut GridCanvas(g, f.ink_base));
+    }
+
+    /// Its own colors, after the five base inks.
+    fn inks(&self, _col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
+        self.shape.colors.iter().map(|c| tones(*c)).collect()
     }
 }
 
-/// Iris's grid, as a shape piece sees it.
-struct GridCanvas<'a>(&'a mut Grid);
+/// Iris's grid, as a shape piece sees it, with where its own inks start in the palette.
+struct GridCanvas<'a>(&'a mut Grid, u8);
+
+impl GridCanvas<'_> {
+    /// The shape's ink 5 onwards are its own colors: their place in the palette.
+    fn ink(&self, ink: u8) -> u8 {
+        if ink < 5 { ink } else { self.1.saturating_add(ink - 5) }
+    }
+}
 
 impl Canvas for GridCanvas<'_> {
     fn du(&self) -> f64 {
@@ -108,17 +121,19 @@ impl Canvas for GridCanvas<'_> {
     }
 
     fn plot(&mut self, x: f64, y: f64, tone: u8, ink: u8) {
+        let ink = self.ink(ink);
         self.0.plot(x, y, tone, ink);
     }
 
     fn each(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, f: &mut dyn FnMut(f64, f64, usize, usize) -> Option<(u8, u8)>) {
+        let base = self.1;
         let g = &mut *self.0;
         let ((i0, i1), (j0, j1)) = g.span(x0, y0, x1, y1);
         for j in j0..j1 {
             for i in i0..i1 {
                 let (x, y) = g.center(i, j);
                 if let Some((tone, ink)) = f(x, y, i, j) {
-                    g.dot(i, j, tone, ink);
+                    g.dot(i, j, tone, if ink < 5 { ink } else { base.saturating_add(ink - 5) });
                 }
             }
         }

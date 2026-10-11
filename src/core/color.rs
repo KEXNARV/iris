@@ -20,8 +20,6 @@ pub(crate) const INK_ACCENT: u8 = 4;
 /// The own ink of whatever goes in the center (Baymax's face: the theme color or the one
 /// chosen with `/core`).
 pub(crate) const INK_FACE: u8 = 5;
-/// From here on, one ink per kid: each with the color of what it's doing.
-pub(crate) const INK_KID: u8 = 6;
 pub(crate) const MAX_KID_INKS: usize = 40;
 
 /// If a fixed color lands too close to the theme accent (blue Thinking with a blue theme), its

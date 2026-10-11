@@ -50,8 +50,16 @@ pub(crate) fn sandbox(wasm: &[u8]) -> Result<(Store<HostData>, wasmi::Instance),
     Ok((store, instance))
 }
 
+/// Where a part's own colors are: its ink 5 onwards go to the palette from `base`, and it has
+/// `count` of them. A piece without them (`count` 0) only has the five base inks.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct OwnInks {
+    pub base: u8,
+    pub count: u8,
+}
+
 /// Applies the draw ops a piece left at `r` (address << 32 | count) to the grid.
-pub(crate) fn apply_ops(g: &mut Grid, memory: &Memory, store: &Store<HostData>, r: u64) -> Result<(), String> {
+pub(crate) fn apply_ops(g: &mut Grid, memory: &Memory, store: &Store<HostData>, r: u64, own: OwnInks) -> Result<(), String> {
     let (dir, n) = ((r >> 32) as usize, (r as u32 as usize).min(abi::MAX_OPS));
     let mut buf = vec![0u8; n * std::mem::size_of::<abi::Op>()];
     memory.read(store, dir, &mut buf).map_err(|e| format!("órdenes fuera de su memoria: {e}"))?;
@@ -61,7 +69,12 @@ pub(crate) fn apply_ops(g: &mut Grid, memory: &Memory, store: &Store<HostData>, 
         if !x.is_finite() || !y.is_finite() {
             continue;
         }
-        let (tone, ink) = (o[16].min(3), o[17].min(INKS - 1));
+        let tone = o[16].min(3);
+        let ink = match o[17] {
+            i if i < INKS => i,
+            i if i - INKS < own.count => own.base.saturating_add(i - INKS),
+            _ => INKS - 1,
+        };
         match o[18] {
             abi::MODE_UNDER => g.plot_under(x, y, tone),
             abi::MODE_DOT => {
@@ -188,7 +201,7 @@ impl Host {
             Ok(r) => r,
             Err(e) => return self.fail(format!("falló al dibujar: {e}")),
         };
-        if let Err(e) = apply_ops(g, &self.memory, &self.store, r) {
+        if let Err(e) = apply_ops(g, &self.memory, &self.store, r, OwnInks::default()) {
             self.fail(e);
         }
     }

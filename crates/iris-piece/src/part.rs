@@ -26,6 +26,11 @@
 pub use crate::abi::{head, Event, State};
 pub use crate::{Grid, Rand, INK_ACCENT, INK_GREEN, INK_MAIN, INK_RED, INK_WARM};
 
+/// The ink of the part's `i`-th own color (`Part::COLORS`).
+pub const fn own(i: u8) -> u8 {
+    5 + i
+}
+
 /// A setting a part offers: a number between `min` and `max`. The recipe can set it; otherwise
 /// it takes `default`. (On/off is 0 or 1.)
 #[derive(Clone, Copy, Debug)]
@@ -183,6 +188,8 @@ pub trait Part: Sized {
     const OUTPUTS: &'static [&'static str] = &[];
     /// What a recipe can adjust.
     const SETTINGS: &'static [Setting] = &[];
+    /// Its own colors ("#rrggbb", up to 16): it paints with them as inks 5, 6… (see [`own`]).
+    const COLORS: &'static [&'static str] = &[];
 
     /// Born. Whatever it asks of chance comes from the buddy's randomness, in order.
     fn new(io: &Io, rand: &mut Rand) -> Self;
@@ -201,7 +208,7 @@ pub trait Part: Sized {
 #[doc(hidden)]
 pub fn declaration<P: Part>() -> String {
     let list = |names: &[&str]| names.iter().map(|n| format!("{n:?}")).collect::<Vec<_>>().join(", ");
-    let mut s = format!("inputs = [{}]\noutputs = [{}]\n", list(P::INPUTS), list(P::OUTPUTS));
+    let mut s = format!("inputs = [{}]\noutputs = [{}]\ncolors = [{}]\n", list(P::INPUTS), list(P::OUTPUTS), list(P::COLORS));
     for st in P::SETTINGS {
         s.push_str(&format!("\n[[settings]]\nname = {:?}\ndefault = {:?}\nmin = {:?}\nmax = {:?}\n", st.name, st.default, st.min, st.max));
     }
