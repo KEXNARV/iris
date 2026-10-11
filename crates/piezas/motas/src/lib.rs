@@ -1,0 +1,117 @@
+//! Las partículas de Iris (src/nucleo/piezas/particulas.rs), escritas como pieza de la tienda.
+//! Son la prueba del host WASM: tienen que dibujar lo mismo que las nativas, cuadro por cuadro.
+
+use std::f64::consts::TAU;
+
+use iris_pieza::*;
+
+#[derive(Clone, Copy)]
+struct Mote {
+    a: f64,
+    r: f64,
+    s: f64,
+    z: f64,
+}
+
+struct Motas {
+    motas: Vec<Mote>,
+    cuantas: usize,
+}
+
+impl Pieza for Motas {
+    const ESPACIO: Espacio = Espacio::Particulas;
+
+    fn nueva(azar: &mut Azar) -> Self {
+        let cuantas = 24;
+        let motas = (0..cuantas)
+            .map(|k| {
+                let z = ((k % 3) as f64 / 2.0 + (azar.rand() - 0.5) * 0.2).clamp(0.0, 1.0);
+                let (lo, hi) = mote_band(z, 0.40);
+                Mote { a: k as f64 * TAU / cuantas as f64 + azar.rand(), r: lo + azar.rand() * (hi - lo), s: azar.rand() - 0.5, z }
+            })
+            .collect();
+        Motas { motas, cuantas }
+    }
+
+    fn paso(&mut self, ctx: &Contexto, dt: f64) {
+        let (t, calm) = (ctx.t, ctx.calma);
+        let (r0, level, swallow, groove) = (ctx.p[0], ctx.p[1], ctx.p[2], ctx.p[3]);
+        for m in &mut self.motas {
+            if swallow > 0.01 {
+                m.r += (r0 - m.r) * (dt * 6.0).min(1.0);
+                if m.r < r0 + 0.03 {
+                    m.r = 0.86;
+                }
+            } else if ctx.estado == Estado::Escuchando {
+                m.r -= dt * (0.18 + level * 0.5) * mote_speed(m.z);
+                if m.r < r0 + 0.08 {
+                    m.r = mote_band(m.z, r0).1;
+                }
+            } else if ctx.estado == Estado::Hablando {
+                m.r += dt * 0.22 * mote_speed(m.z);
+                if m.r > mote_band(m.z, r0).1 {
+                    m.r = r0 + 0.1;
+                }
+            } else {
+                let (lo, hi) = mote_band(m.z, r0);
+                m.a += dt * 0.12 * (1.0 + m.s * 0.5) * mote_speed(m.z) * calm * (1.0 + groove * 4.0);
+                m.r += (t * 0.7 + m.a * 3.0).sin() * dt * 0.02;
+                m.r = m.r.clamp(lo, hi);
+            }
+        }
+    }
+
+    fn pintar(&self, g: &mut Rejilla, ctx: &Contexto) {
+        let t = ctx.t;
+        let (motes, boot, press, low) = (ctx.p[4], ctx.p[5], ctx.p[6], ctx.p[9] > 0.5);
+        let c = ctx.calma;
+        let cam = [0.12 * (t * 0.23).sin() * c - ctx.p[7] * 0.8, 0.07 * (t * 0.17 + 1.0).sin() * c - ctx.p[8] * 0.8];
+        if motes > 0.05 && !low {
+            let n = (self.cuantas as f64 * motes * boot).round() as usize;
+            for mo in self.motas.iter().take(n).filter(|mo| mo.z < 0.66) {
+                let (x, y) = mote_pos(mo, cam, press, t);
+                g.plot_under(x, y, 1);
+                if mo.z >= 0.33 {
+                    g.plot_under(x + g.du, y, 1);
+                }
+            }
+        }
+        if motes > 0.05 {
+            let n = (self.cuantas as f64 * motes * boot).round() as usize;
+            let d = g.du;
+            for mo in self.motas.iter().take(n).filter(|mo| mo.z >= 0.66) {
+                let (x, y) = mote_pos(mo, cam, press, t);
+                for (ox, oy) in [(0.0, 0.0), (d, 0.0), (0.0, d), (d, d)] {
+                    g.plot(x + ox, y + oy, 3, TINTA_ACENTO);
+                }
+                for k in 1..3 {
+                    let back = Mote { a: mo.a - k as f64 * 0.05, ..*mo };
+                    let (x, y) = mote_pos(&back, cam, press, t);
+                    g.plot(x, y, if k == 1 { 2 } else { 1 }, TINTA_ACENTO);
+                }
+            }
+        }
+    }
+}
+
+fn mote_pos(m: &Mote, cam: [f64; 2], press: f64, t: f64) -> (f64, f64) {
+    let r = m.r * (1.0 - press * 0.25 * (1.0 + (t * 5.0).sin()));
+    let shift = 0.1 + m.z * m.z * 1.9;
+    (r * m.a.cos() + cam[0] * shift, r * m.a.sin() + cam[1] * shift)
+}
+
+fn mote_band(z: f64, blob_r: f64) -> (f64, f64) {
+    if z < 0.33 {
+        (blob_r + 0.12, 0.72)
+    } else if z < 0.66 {
+        (0.55, 0.88)
+    } else {
+        (0.70, 1.05)
+    }
+}
+
+fn mote_speed(z: f64) -> f64 {
+    0.25 + 2.4 * z * z
+}
+
+exportar!(Motas);

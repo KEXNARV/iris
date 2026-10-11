@@ -1,6 +1,7 @@
 //! El azar de un buddy: xorshift con semilla fija, para que todo sea repetible. Es uno solo
 //! por buddy y lo comparten sus piezas: el orden en que lo piden es parte de cómo se ve.
 
+#[derive(Clone)]
 pub(crate) struct Azar(u64);
 
 impl Azar {

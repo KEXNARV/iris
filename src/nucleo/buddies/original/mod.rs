@@ -107,6 +107,10 @@ pub(crate) struct Original<C: Centro> {
     centro: C,
     hijos: Hijos,
     motas: Motas,
+    /// Las motas de una pieza de la tienda, si hay una instalada (ver `motas_de_la_tienda`). Si
+    /// se rompe, se suelta y vuelven las de fábrica.
+    #[cfg(feature = "piezas")]
+    tienda_motas: Option<std::cell::RefCell<crate::nucleo::huesped::Huesped>>,
     mirada: Mirada,
     gestos: Gestos,
 }
@@ -114,6 +118,10 @@ pub(crate) struct Original<C: Centro> {
 impl<C: Centro> Original<C> {
     pub fn nuevo(centro: C) -> Self {
         let mut azar = Azar::new();
+        // La de la tienda nace con una copia del azar: gasta lo mismo que las de fábrica, así el
+        // resto del buddy se ve igual.
+        #[cfg(feature = "piezas")]
+        let tienda_motas = motas_de_la_tienda(&mut azar.clone()).map(std::cell::RefCell::new);
         let motas = Motas::sembrar(&mut azar);
         Original {
             mini: false,
@@ -141,6 +149,8 @@ impl<C: Centro> Original<C> {
             centro,
             hijos: Hijos::new(BASE.blob_r),
             motas,
+            #[cfg(feature = "piezas")]
+            tienda_motas,
             mirada: Mirada::new(),
             gestos: Gestos::new(),
         }
@@ -153,6 +163,10 @@ impl Original<Blob> {
         let mut o = Original::nuevo(Blob::new());
         o.mini = true;
         o.motas.vaciar();
+        #[cfg(feature = "piezas")]
+        {
+            o.tienda_motas = None;
+        }
         o.animo.p = state.params();
         o.animo.col = state.rgb();
         o.azar.sembrar(seed);
@@ -221,7 +235,16 @@ impl<C: Centro + 'static> Buddy for Original<C> {
             },
             dt,
         );
-        self.motas.step(ctx, particulas::Paso { base: a.p.blob_r, nivel: a.level, traga: a.swallow, baile: a.groove * a.music }, dt);
+        let paso = particulas::Paso { base: a.p.blob_r, nivel: a.level, traga: a.swallow, baile: a.groove * a.music };
+        #[cfg(feature = "piezas")]
+        if let Some(h) = self.tienda_motas.as_mut().map(std::cell::RefCell::get_mut) {
+            h.paso(ctx, &p_motas(&paso, None), None, dt);
+            if h.roto.is_none() {
+                return;
+            }
+            self.tienda_motas = None;
+        }
+        self.motas.step(ctx, paso, dt);
     }
 
     fn cambio(&mut self, de: State, a: State, ctx: &Contexto) {
@@ -233,6 +256,10 @@ impl<C: Centro + 'static> Buddy for Original<C> {
         match aviso {
             Aviso::Evento(ev) => {
                 self.animo.evento(ev, ctx);
+                #[cfg(feature = "piezas")]
+                if let Some(h) = self.tienda_motas.as_mut().map(std::cell::RefCell::get_mut) {
+                    h.evento(ev, ctx, &[0.0; 16]);
+                }
                 self.ondas.evento(ev, ctx, &mut self.azar);
             }
             Aviso::Nace(id) => {
@@ -327,6 +354,17 @@ impl<C: Centro + 'static> Buddy for Original<C> {
         }
         if !self.mini && ve(CAPA_MOTAS) {
             let m = particulas::Pinta { motes: p.motes, boot: e.boot, press: p.press, mirada: self.mirada.gaze, low: e.low };
+            #[cfg(feature = "piezas")]
+            if let Some(celda) = self.tienda_motas.as_ref() {
+                // `paint` recibe &self, pero llamar a la pieza le cambia la memoria: de ahí el
+                // RefCell. Si se rompe aquí, la suelta el próximo `step`.
+                let mut h = celda.borrow_mut();
+                if h.roto.is_none() {
+                    let paso = particulas::Paso { base: p.blob_r, nivel: a.level, traga: a.swallow, baile: a.groove * a.music };
+                    h.pintar(g, ctx, &p_motas(&paso, Some(&m)), Some(ancla));
+                    return;
+                }
+            }
             self.motas.paint(g, ctx, m);
         }
     }
@@ -357,4 +395,25 @@ impl<C: Centro + 'static> Buddy for Original<C> {
     fn como_any(&self) -> &dyn std::any::Any {
         self
     }
+}
+
+/// Los parámetros del espacio de partículas (`iris_pieza::abi::Espacio::Particulas`).
+#[cfg(feature = "piezas")]
+fn p_motas(paso: &particulas::Paso, pinta: Option<&particulas::Pinta>) -> [f64; 16] {
+    let mut p = [0.0; 16];
+    p[..4].copy_from_slice(&[paso.base, paso.nivel, paso.traga, paso.baile]);
+    if let Some(m) = pinta {
+        p[4..10].copy_from_slice(&[m.motes, m.boot, m.press, m.mirada[0], m.mirada[1], if m.low { 1.0 } else { 0.0 }]);
+    }
+    p
+}
+
+/// Si en `~/.config/iris/particulas` hay una ruta a una pieza (.wasm) de partículas, la carga.
+/// Cualquier problema (no está, no es del espacio, no carga) deja las de fábrica.
+#[cfg(feature = "piezas")]
+fn motas_de_la_tienda(azar: &mut Azar) -> Option<crate::nucleo::huesped::Huesped> {
+    let ruta = std::fs::read_to_string(crate::rutas::config()?.join("particulas")).ok()?;
+    let wasm = std::fs::read(ruta.trim()).ok()?;
+    let h = crate::nucleo::huesped::Huesped::cargar(&wasm, azar).ok()?;
+    (h.espacio == iris_pieza::abi::Espacio::Particulas).then_some(h)
 }

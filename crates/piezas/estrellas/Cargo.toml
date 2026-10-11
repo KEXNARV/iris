@@ -1,0 +1,22 @@
+[package]
+name = "estrellas"
+version = "1.0.0"
+edition = "2024"
+description = "Motas en forma de estrella que destellan con cada evento: una pieza de ejemplo para la tienda"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-pieza = { path = "../../iris-pieza" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Fuera del paquete de Iris: se compila aparte, para wasm32-unknown-unknown.
+[workspace]

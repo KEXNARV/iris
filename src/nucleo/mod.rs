@@ -18,6 +18,9 @@ mod buddies;
 mod color;
 mod contexto;
 mod estado;
+// Las piezas de la tienda, en WebAssembly. La web compila el núcleo sin esto.
+#[cfg(feature = "piezas")]
+pub(crate) mod huesped;
 mod piezas;
 mod rejilla;
 mod salida;
