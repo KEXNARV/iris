@@ -97,3 +97,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Iris $GITHUB_REF_NAME" --generate-notes iris-*
+      # Announces it (version.json): installed Iris builds offer the update. The notes are the
+      # annotated tag's message, a line each after its title:
+      #   git tag -a v0.1.6 -m "Iris 0.1.6" -m "First note" -m "Second note"
+      # The token (IRIS_RELEASE_TOKEN) can only announce releases.
+      - name: Announce
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IRIS_RELEASE_TOKEN: ${{ secrets.IRIS_RELEASE_TOKEN }}
+        run: |
+          obj=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.type + " " + .object.sha')
+          msg=""
+          if [ "${obj%% *}" = "tag" ]; then msg=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/${obj#* }" --jq .message); fi
+          python3 - "${GITHUB_REF_NAME#v}" "$msg" > body.json <<'PY'
+          import json, sys
+          lines = [l.strip().lstrip("-•* ").strip() for l in sys.argv[2].splitlines()[1:]]
+          print(json.dumps({"version": sys.argv[1], "notes": [l for l in lines if l]}, ensure_ascii=False))
+          PY
+          cat body.json
+          curl -fsS -X POST https://iris.knarvaez.com/api/admin/iris/versions \
+            -H "Authorization: Bearer $IRIS_RELEASE_TOKEN" -H "Content-Type: application/json" --data-binary @body.json
