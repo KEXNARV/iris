@@ -1,8 +1,0 @@
-[package]
-name = "iris-pieza"
-version = "0.1.0"
-edition = "2024"
-description = "Para escribir piezas de Iris (plugins de la tienda) en Rust y compilarlas a WebAssembly"
-license = "MIT"
-
-[dependencies]

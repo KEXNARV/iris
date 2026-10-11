@@ -1,21 +1,21 @@
-//! El estado de Iris: la conversación, la actividad, los subagentes, la voz y lo que se ve.
+//! Iris's state: the conversation, the activity, the subagents, the voice and what is shown.
 
 use crate::*;
 
 pub enum AppEvent {
-    /// Generación del proceso que lo emitió (ver `Claude::id`).
+    /// Generation of the process that emitted it (see `Claude::id`).
     Claude(u64, ClaudeEvent),
     Voice(VoiceEvent),
-    Habla(habla::HablaEvent),
+    Speech(speech::SpeechEvent),
     Update(update::UpdateEvent),
 }
 
-/// Cuándo contesta en voz alta: `Auto` cuando le hablaste (si escribiste, en silencio).
+/// When it answers out loud: `Auto` when you spoke to it (if you typed, silently).
 #[derive(Clone, Copy, PartialEq)]
-pub enum VozModo {
+pub enum VoiceMode {
     Auto,
-    Siempre,
-    Nunca,
+    Always,
+    Never,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -24,18 +24,18 @@ pub enum Role {
     Assistant,
     System,
     Error,
-    /// Una herramienta que usó, en su lugar de la conversación (`Msg::tool` dice cuál).
+    /// A tool it used, in its place in the conversation (`Msg::tool` says which).
     Tool,
 }
 
 pub struct Msg {
     pub role: Role,
     pub text: String,
-    /// Escrito a mitad de un turno y todavía sin leer: el id que el motor repetirá al tomarlo.
+    /// Typed mid-turn and still unread: the id the engine will echo back when it takes it.
     pub waiting: Option<String>,
-    /// Las imágenes que mandaste con este mensaje, para verlas en el chat.
-    pub images: Vec<std::rc::Rc<miniatura::Thumb>>,
-    /// Para `Role::Tool`: qué actividad es (índice en `App::activity`).
+    /// The images you sent with this message, to see them in the chat.
+    pub images: Vec<std::rc::Rc<thumbnail::Thumb>>,
+    /// For `Role::Tool`: which activity it is (index into `App::activity`).
     pub tool: Option<usize>,
 }
 
@@ -53,43 +53,43 @@ pub struct Activity {
     pub status: ToolStatus,
     pub started: Instant,
     pub took: Option<Duration>,
-    /// La entrada completa (el comando, el archivo y el cambio…) y lo que devolvió.
+    /// The full input (the command, the file and the change…) and what it returned.
     pub input: serde_json::Value,
     pub output: String,
 }
 
-/// Un subagente vivo (o recién terminado): un hijo del núcleo.
+/// A live (or just finished) subagent: a child of the core.
 pub struct Agent {
-    /// Id de la llamada a `Agent` que lo lanzó; sus mensajes llegan con este id.
+    /// Id of the `Agent` call that launched it; its messages arrive with this id.
     pub tool: String,
-    /// Con este número lo conoce el núcleo.
+    /// The number the core knows it by.
     pub kid: u64,
     pub description: String,
     pub kind: String,
     pub started: Instant,
-    /// La herramienta que tiene en curso (nombre y detalle); sin ninguna, está pensando.
+    /// The tool it has in progress (name and detail); with none, it is thinking.
     pub current: Option<(String, String)>,
-    /// La última que terminó y cuándo. Un Write dura 50 ms y el modelo tarda segundos en
-    /// pedir la siguiente: sin esto el hijo se ve siempre «pensando».
+    /// The last one that finished and when. A Write lasts 50 ms and the model takes seconds to
+    /// ask for the next one: without this the child always looks «thinking».
     pub last: Option<(String, String, Instant)>,
     pub tools: usize,
-    /// Cuándo terminó y si salió bien; se queda un momento para que se vea volver.
+    /// When it ended and whether it went well; it lingers a moment so it can be seen returning.
     pub ended: Option<(Instant, bool)>,
-    /// Todo lo que hizo, en orden: herramientas y lo que escribió. Para Ctrl+G, Agentes.
-    pub log: Vec<Paso>,
+    /// Everything it did, in order: tools and what it wrote. For Ctrl+G, Agents.
+    pub log: Vec<Step>,
 }
 
-/// Un paso de un subagente.
-pub enum Paso {
-    Herramienta(Activity),
-    Texto(String),
+/// A step of a subagent.
+pub enum Step {
+    Tool(Activity),
+    Text(String),
 }
 
 impl Agent {
     pub fn state(&self) -> State {
         match (&self.current, &self.last) {
-            (Some((name, detail)), _) => nucleo::tool_state(name, detail),
-            (None, Some((name, detail, t))) if t.elapsed() < Duration::from_secs(3) => nucleo::tool_state(name, detail),
+            (Some((name, detail)), _) => core::tool_state(name, detail),
+            (None, Some((name, detail, t))) if t.elapsed() < Duration::from_secs(3) => core::tool_state(name, detail),
             _ => State::Thinking,
         }
     }
@@ -104,22 +104,22 @@ pub enum VoiceState {
     Off,
 }
 
-/// Lo que se superpone a la conversación y se lleva las flechas y el Enter.
+/// What overlays the conversation and takes the arrows and Enter.
 pub enum Modal {
     Sessions { list: Vec<sessions::Session>, sel: usize },
     Ask(Ask),
     Model { sel: usize },
     Effort { sel: usize },
-    /// `/theme`: moverse ya cambia la pantalla; Esc vuelve a `antes`.
-    Estilo { sel: usize, antes: estilo::Estilo },
-    /// `/core`: el color de la cara de Baymax.
-    Color { sel: usize, antes: baymax::Modo },
-    /// `/buddy`: como `/theme`, con quién vive en el núcleo.
-    Buddy { sel: usize, antes: buddy::Buddy },
-    /// Hay una versión nueva en GitHub: ¿actualizar?
+    /// `/theme`: moving already changes the screen; Esc goes back to `before`.
+    UiStyle { sel: usize, before: style::UiStyle },
+    /// `/core`: the color of Baymax's face.
+    Color { sel: usize, before: baymax::Mode },
+    /// `/buddy`: like `/theme`, with who lives in the core.
+    Buddy { sel: usize, before: buddy::Buddy },
+    /// There is a new version on GitHub: update?
     Update(update::Info),
-    /// La primera vez (o `/welcome`): ajustes paso a paso y el recorrido.
-    Bienvenida(crate::bienvenida::Bienvenida),
+    /// The first time (or `/welcome`): step-by-step settings and the tour.
+    Welcome(crate::welcome::Welcome),
 }
 
 pub struct App {
@@ -133,7 +133,7 @@ pub struct App {
     pub voice_model: String,
     pub levels: Vec<f32>,
     pub model: String,
-    /// Lo que se pidió con `/effort`; vuelve a `auto` cuando el motor se relanza.
+    /// What was requested with `/effort`; goes back to `auto` when the engine relaunches.
     pub effort: String,
     pub session: String,
     pub cost: f64,
@@ -141,133 +141,133 @@ pub struct App {
     pub started: Instant,
     pub alive: bool,
     pub commands: Vec<commands::Command>,
-    /// Fila elegida en el menú de comandos.
+    /// Selected row in the command menu.
     pub menu: usize,
     pub modal: Option<Modal>,
     pub(crate) interrupted: bool,
     pub(crate) assistant_open: bool,
     pub(crate) level: Level,
-    /// La terminal avisa cuándo se suelta una tecla (protocolo de teclado de kitty).
+    /// The terminal reports when a key is released (kitty keyboard protocol).
     pub(crate) key_release: bool,
-    /// Espacio apretado y todavía sin soltar: lo que llegue mientras tanto es auto-repetición.
+    /// Space pressed and not yet released: whatever arrives meanwhile is auto-repeat.
     pub(crate) space_down: bool,
-    /// Sin aviso de soltar, la auto-repetición se reconoce por lo seguido que llega.
+    /// Without release events, auto-repeat is recognized by how closely it arrives.
     pub(crate) last_space: Instant,
-    /// Un soltar recién llegado. Solo cuenta si no lo sigue otro apretar enseguida: hay
-    /// terminales que auto-repiten como pares soltar+apretar.
+    /// A release that just arrived. It only counts if no other press follows right away: some
+    /// terminals auto-repeat as release+press pairs.
     pub(crate) released: Option<Instant>,
-    /// Cuándo empezó a escuchar el espacio en curso; al soltarlo tras un rato, envía.
+    /// When the current space started listening; releasing it after a while sends.
     pub ptt: Option<Instant>,
-    /// Lo último que se dibujó del chat; con eso el mouse sabe qué texto hay debajo.
+    /// The last thing drawn of the chat; with it the mouse knows what text is underneath.
     pub view: std::cell::RefCell<select::View>,
     pub sel: Option<select::Selection>,
-    /// Aviso breve en la barra de abajo («copiado…»).
+    /// Brief notice in the bottom bar («copiado…»).
     pub flash: Option<(String, Instant)>,
-    /// El primer Ctrl+C: si llega otro mientras se ve el aviso, se sale.
+    /// The first Ctrl+C: if another one arrives while the notice is shown, it quits.
     pub(crate) quit_armed: Option<Instant>,
-    /// Versión nueva por ofrecer: se muestra cuando no estorbe.
+    /// New version to offer: shown when it doesn't get in the way.
     pub(crate) update: Option<update::Info>,
-    /// Se instaló la versión nueva: al salir, Iris se vuelve a abrir con ella.
+    /// The new version was installed: on exit, Iris reopens with it.
     pub(crate) reexec: bool,
-    /// El blob del panel NÚCLEO.
-    pub nucleo: nucleo::Core,
-    /// Tokens de contexto en uso y la ventana del modelo.
+    /// The blob of the CORE panel.
+    pub core: core::Core,
+    /// Context tokens in use and the model's window.
     pub ctx_used: u64,
     pub ctx_window: u64,
-    /// Tareas de la última TodoWrite: (total, completadas).
+    /// Tasks from the last TodoWrite: (total, completed).
     pub todos: (usize, usize),
-    /// Se pidió `/compact` y todavía no terminó.
+    /// `/compact` was requested and hasn't finished yet.
     pub(crate) compacting: bool,
-    /// Última tecla, clic o evento del motor; con eso se sabe si está en reposo.
+    /// Last key, click or engine event; with it we know whether it is idle.
     pub(crate) last_activity: Instant,
     pub(crate) last_key: Instant,
-    /// Escuchando: última vez que el nivel superó el piso de ruido, y ese piso.
+    /// Listening: last time the level exceeded the noise floor, and that floor.
     pub(crate) last_voice: Instant,
     pub(crate) noise_floor: f32,
-    /// Al arrancar o reiniciar, el núcleo se arma.
+    /// On start or restart, the core assembles itself.
     pub(crate) booted: Instant,
-    /// `/calm`: menos movimiento en el núcleo.
+    /// `/calm`: less motion in the core.
     pub calm: bool,
-    /// Markdown ya dibujado de cada mensaje, con el largo del texto y el ancho con que se hizo.
-    /// A 60 fps no conviene volver a interpretar toda la conversación en cada cuadro.
+    /// Already-rendered markdown of each message, with the text length and width it was made for.
+    /// At 60 fps it doesn't pay to re-parse the whole conversation on every frame.
     pub(crate) md_cache: std::cell::RefCell<Vec<Option<(usize, usize, Vec<md::Row>)>>>,
-    /// Los archivos que menciona cada respuesta, con el largo del texto del que salieron.
-    pub(crate) adjuntos_cache: std::cell::RefCell<Vec<Option<(usize, Vec<adjunto::Adjunto>)>>>,
-    /// Imágenes pegadas que se van con el próximo mensaje.
+    /// The files each reply mentions, with the length of the text they came from.
+    pub(crate) attachments_cache: std::cell::RefCell<Vec<Option<(usize, Vec<attachment::Attachment>)>>>,
+    /// Pasted images that go out with the next message.
     pub images: Vec<clip::Image>,
-    /// Dónde está el cursor en la orden (en caracteres), y lo que ya enviaste.
+    /// Where the cursor is in the prompt (in characters), and what you already sent.
     pub cur: usize,
-    pub(crate) historial: entrada::Historial,
-    /// Modo flotante (`--flotante`): aparece con un atajo, escucha sola y se esconde al terminar.
-    pub flotante: bool,
-    /// La ventana tiene el foco (la terminal avisa al ganarlo y perderlo).
+    pub(crate) history: input::History,
+    /// Floating mode (`--flotante`): appears with a shortcut, listens on its own and hides when done.
+    pub floating: bool,
+    /// The window has focus (the terminal reports gaining and losing it).
     pub focused: bool,
-    /// Escuchando sin espacio (flotante): se envía solo al callarte. `heard`: ya dijiste algo.
+    /// Listening without space (floating): sends by itself when you go quiet. `heard`: you spoke.
     pub(crate) hands_free: Option<Instant>,
     pub(crate) heard: bool,
-    /// Cuándo esconderse, si no pasa nada antes.
+    /// When to hide, if nothing happens before.
     pub(crate) hide_at: Option<Instant>,
-    /// La voz de Iris (Kokoro) y el que arma las frases de la respuesta para decirlas.
-    pub(crate) habla: habla::Habla,
-    pub(crate) lector: habla::Lector,
-    pub voz_modo: VozModo,
-    /// El próximo mensaje llegó por voz; y si este turno se contesta hablando.
+    /// Iris's voice (Kokoro) and the one that builds the reply's sentences to speak them.
+    pub(crate) speech: speech::Speech,
+    pub(crate) reader: speech::Reader,
+    pub voice_mode: VoiceMode,
+    /// The next message arrived by voice; and whether this turn is answered by speaking.
     pub(crate) spoken_next: bool,
     pub(crate) speak_turn: bool,
-    /// Está sonando su voz, y con qué volumen.
+    /// Its voice is playing, and at what volume.
     pub talking: bool,
     pub(crate) tts_level: f32,
-    /// Lo que suena en el equipo (cava), y la última vez que sonó algo.
-    pub(crate) musica: musica::Musica,
+    /// What is playing on the machine (cava), and the last time something played.
+    pub(crate) music: music::Music,
     pub(crate) surco: surco::Surco,
     pub(crate) music_at: std::cell::Cell<Option<Instant>>,
-    /// Cómo se compone la pantalla (`/theme`).
-    pub estilo: estilo::Estilo,
-    /// Quién vive en el núcleo (`/buddy`).
+    /// How the screen is laid out (`/theme`).
+    pub style: style::UiStyle,
+    /// Who lives in the core (`/buddy`).
     pub buddy: buddy::Buddy,
-    /// Cine: la respuesta abierta entera en el centro (lo decide el dibujo, que sabe si cabe).
+    /// Cine: the open reply in full at the center (decided by the drawing, which knows if it fits).
     pub reading: std::cell::Cell<bool>,
-    /// Cine: la conversación entera desplegada como una cortina (^T).
+    /// Cine: the whole conversation unrolled like a curtain (^T).
     pub transcript: bool,
-    /// Ctrl+G: el visor de herramientas abierto (cuál está elegida y cuánto se bajó su detalle).
+    /// Ctrl+G: the tool viewer open (which one is selected and how far its detail is scrolled).
     pub tools_view: Option<(usize, usize)>,
-    /// En Ctrl+G, la pestaña de subagentes en vez de la de herramientas (Tab alterna).
+    /// In Ctrl+G, the subagents tab instead of the tools one (Tab toggles).
     pub agents_tab: bool,
-    /// Hasta dónde se puede bajar el detalle de Ctrl+G (lo calcula el dibujo); PgUp parte de ahí.
+    /// How far Ctrl+G's detail can scroll (computed by the drawing); PgUp starts from there.
     pub tools_view_max: std::cell::Cell<usize>,
-    /// ^O fuerza leer o volver al núcleo; un mensaje nuevo devuelve la decisión al dibujo.
+    /// ^O forces reading or going back to the core; a new message returns the decision to the drawing.
     pub read_override: Option<bool>,
-    /// Primera fila visible de la respuesta abierta, y qué mensaje era (al cambiar, vuelve arriba).
+    /// First visible row of the open reply, and which message it was (on change, back to the top).
     pub read_top: std::cell::Cell<usize>,
     pub read_msg: std::cell::Cell<usize>,
-    /// Núcleo como imagen de puntos: el tamaño en píxeles de una celda, si la terminal muestra
-    /// Sixel (foot); `None` es braille. Dónde va este cuadro, y dónde quedó la última imagen.
+    /// Core as a dot image: the pixel size of a cell, if the terminal shows Sixel (foot);
+    /// `None` is braille. Where this frame goes, and where the last image ended up.
     pub sixel_cell: Option<(u16, u16)>,
     pub core_rect: std::cell::Cell<Option<ratatui::layout::Rect>>,
-    /// Miniaturas del chat: dónde va cada una en este cuadro (lo llena el dibujo del chat) y
-    /// cuáles quedaron dibujadas (posición e identidad), para redibujar solo si se movieron.
-    pub thumb_slots: std::cell::RefCell<Vec<(usize, u16, u16, u16, std::rc::Rc<miniatura::Thumb>)>>,
-    /// Los adjuntos del chat como las miniaturas: su fila, y dónde quedaron en pantalla para el clic.
-    pub file_slots: std::cell::RefCell<Vec<(usize, u16, u16, adjunto::Adjunto)>>,
-    pub file_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, adjunto::Adjunto)>>,
-    /// (dónde, cuál, (desde, hasta, alto total) en filas de celda: el recorte visible).
-    pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<miniatura::Thumb>, (u16, u16, u16))>>,
+    /// Chat thumbnails: where each one goes in this frame (filled by the chat drawing) and
+    /// which ones were drawn (position and identity), to redraw only if they moved.
+    pub thumb_slots: std::cell::RefCell<Vec<(usize, u16, u16, u16, std::rc::Rc<thumbnail::Thumb>)>>,
+    /// Chat attachments like the thumbnails: their row, and where they landed on screen for clicks.
+    pub file_slots: std::cell::RefCell<Vec<(usize, u16, u16, attachment::Attachment)>>,
+    pub file_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, attachment::Attachment)>>,
+    /// (where, which, (from, to, total height) in cell rows: the visible crop).
+    pub thumb_targets: std::cell::RefCell<Vec<(ratatui::layout::Rect, std::rc::Rc<thumbnail::Thumb>, (u16, u16, u16))>>,
     pub(crate) thumbs_shown: Vec<(ratatui::layout::Rect, usize, (u16, u16, u16))>,
     pub(crate) sixel_shown: Option<ratatui::layout::Rect>,
-    /// Dónde empieza en `activity` el turno en curso, para la línea de tiempo.
+    /// Where the current turn starts in `activity`, for the timeline.
     pub turn_from: usize,
-    /// Subagentes, los hijos del núcleo.
+    /// Subagents, the children of the core.
     pub agents: Vec<Agent>,
-    /// Los subagentes que ya terminaron (los últimos 40), para Ctrl+G.
+    /// Subagents that already finished (the last 40), for Ctrl+G.
     pub agents_done: Vec<Agent>,
     pub(crate) next_kid: u64,
-    /// Claude Code no tiene sesión iniciada: la bienvenida pide /login.
-    pub sin_sesion: bool,
+    /// Claude Code has no logged-in session: the welcome asks for /login.
+    pub no_session: bool,
 }
 
 impl App {
-    /// Qué está haciendo en este momento, para el núcleo y la barra de estado.
-    /// Por prioridad: la voz, luego lo que bloquea (motor caído, una pregunta), luego el trabajo.
+    /// What it is doing right now, for the core and the status bar.
+    /// By priority: the voice, then what blocks (engine down, a question), then the work.
     pub fn state(&self) -> State {
         match self.voice {
             VoiceState::Listening if self.last_voice.elapsed() > Duration::from_secs(2) => return State::NoVoice,
@@ -286,7 +286,7 @@ impl App {
         } else if self.compacting {
             State::Compacting
         } else if let Some(a) = self.current_tool() {
-            nucleo::tool_state(&a.name, &a.detail)
+            core::tool_state(&a.name, &a.detail)
         } else if self.busy && self.thinking {
             State::Thinking
         } else if self.busy {
@@ -296,15 +296,15 @@ impl App {
         } else if self.last_activity.elapsed() > Duration::from_secs(120)
             && self.music_at.get().is_none_or(|t| t.elapsed() > Duration::from_secs(10))
         {
-            // Con música no se duerme: se queda bailando.
+            // With music it doesn't fall asleep: it stays dancing.
             State::Sleeping
         } else {
             State::Idle
         }
     }
 
-    pub fn signals(&self) -> nucleo::Signals {
-        nucleo::Signals {
+    pub fn signals(&self) -> core::Signals {
+        core::Signals {
             level: if self.talking { self.tts_level } else { voice::level_get(&self.level) },
             ctx: self.ctx_used as f64 / self.ctx_window.max(1) as f64,
             queue: self.messages.iter().filter(|m| m.waiting.is_some()).count(),
@@ -316,9 +316,9 @@ impl App {
         }
     }
 
-    /// Lo que suena, como en el teclado: cuenta recién 3 s después de la última tecla.
+    /// What is playing, like with the keyboard: it only counts 3 s after the last key.
     pub(crate) fn music(&self) -> f32 {
-        let l = self.musica.level();
+        let l = self.music.level();
         if l > 0.05 {
             self.music_at.set(Some(Instant::now()));
         }
@@ -340,15 +340,15 @@ impl App {
         }
     }
 
-    pub fn adjuntos(&self, i: usize, text: &str) -> Vec<adjunto::Adjunto> {
-        let mut cache = self.adjuntos_cache.borrow_mut();
+    pub fn attachments(&self, i: usize, text: &str) -> Vec<attachment::Attachment> {
+        let mut cache = self.attachments_cache.borrow_mut();
         if cache.len() <= i {
             cache.resize_with(i + 1, || None);
         }
         match &cache[i] {
             Some((len, list)) if *len == text.len() => list.clone(),
             _ => {
-                let list = adjunto::en_texto(text);
+                let list = attachment::in_text(text);
                 cache[i] = Some((text.len(), list.clone()));
                 list
             }
@@ -365,7 +365,7 @@ impl App {
         self.scroll = 0;
     }
 
-    /// El proceso que los iba a leer ya no existe.
+    /// The process that was going to read them no longer exists.
     pub(crate) fn drop_waiting(&mut self) {
         let lost = self.messages.iter_mut().filter_map(|m| m.waiting.take()).count();
         if lost > 0 {

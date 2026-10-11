@@ -1,5 +1,5 @@
-//! Sesiones anteriores de Claude Code, leídas de sus transcripts en `~/.claude/projects`.
-//! `claude -p` no tiene `/resume`; Iris lo resuelve relanzando el motor con `--resume <id>`.
+//! Previous Claude Code sessions, read from their transcripts in `~/.claude/projects`.
+//! `claude -p` has no `/resume`; Iris handles it by relaunching the engine with `--resume <id>`.
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::claude::{tool_detail, tool_output};
-use crate::{Activity, Agent, Msg, Paso, Role, ToolStatus};
+use crate::{Activity, Agent, Msg, Step, Role, ToolStatus};
 
 pub struct Session {
     pub id: String,
@@ -17,8 +17,8 @@ pub struct Session {
     pub age: String,
 }
 
-/// Claude Code guarda cada proyecto en un directorio con el cwd «aplanado»: todo lo que no es
-/// alfanumérico se vuelve `-` (`/home/kex` → `-home-kex`).
+/// Claude Code stores each project in a directory named after the "flattened" cwd: everything
+/// that isn't alphanumeric becomes `-` (`/home/kex` → `-home-kex`).
 fn project_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let flat: String = cwd
@@ -26,10 +26,10 @@ fn project_dir() -> Option<PathBuf> {
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    Some(crate::rutas::home()?.join(".claude").join("projects").join(flat))
+    Some(crate::paths::home()?.join(".claude").join("projects").join(flat))
 }
 
-/// Las más recientes primero, sin la sesión en curso ni las que no tienen ningún mensaje.
+/// Most recent first, excluding the current session and those without any message.
 pub fn list(current: &str, max: usize) -> Vec<Session> {
     let Some(dir) = project_dir() else { return vec![] };
     let Ok(entries) = fs::read_dir(dir) else { return vec![] };
@@ -55,7 +55,7 @@ pub fn list(current: &str, max: usize) -> Vec<Session> {
         .collect()
 }
 
-/// `N` (posición en la lista) o un prefijo del id.
+/// `N` (position in the list) or an id prefix.
 pub fn find(current: &str, arg: &str) -> Option<String> {
     let all = list(current, usize::MAX);
     if let Ok(n) = arg.parse::<usize>() {
@@ -64,17 +64,17 @@ pub fn find(current: &str, arg: &str) -> Option<String> {
     all.into_iter().find(|s| s.id.starts_with(arg)).map(|s| s.id)
 }
 
-/// Una sesión retomada tal como la habría dejado vivirla: el chat, lo que hizo cada
-/// herramienta y los subagentes que lanzó. Sin esto Ctrl+G quedaba vacío al retomar.
+/// A resumed session just as living through it would have left it: the chat, what each tool
+/// did and the subagents it launched. Without this, Ctrl+G was empty after resuming.
 pub struct Replay {
     pub messages: Vec<Msg>,
     pub activity: Vec<Activity>,
     pub agents: Vec<Agent>,
 }
 
-/// Lee el transcript igual que llegan los eventos en vivo: cada herramienta entra en
-/// `activity` y deja su fila en el chat en el punto de la conversación donde se usó; su
-/// resultado (salida, error, duración) llega después en un mensaje de usuario.
+/// Reads the transcript the same way live events arrive: each tool goes into `activity` and
+/// leaves its row in the chat at the point in the conversation where it was used; its result
+/// (output, error, duration) arrives later in a user message.
 pub fn replay(id: &str) -> Replay {
     let mut out = Replay { messages: vec![], activity: vec![], agents: vec![] };
     let Some(dir) = project_dir() else { return out };
@@ -86,8 +86,8 @@ pub fn replay(id: &str) -> Replay {
         let at = timestamp(&v);
         if let Some((role, text)) = turn(&v) {
             let images = images(&v);
-            // Una respuesta llega en varios mensajes; se juntan mientras no haya una herramienta
-            // de por medio (en vivo, una herramienta también corta el mensaje).
+            // A response arrives in several messages; they're merged as long as no tool comes
+            // in between (live, a tool also splits the message).
             match out.messages.last_mut() {
                 Some(last) if last.role == Role::Assistant && role == Role::Assistant => {
                     last.text.push_str("\n\n");
@@ -103,7 +103,7 @@ pub fn replay(id: &str) -> Replay {
                         id: s(b, "id"),
                         name: s(b, "name"),
                         detail: tool_detail(&b["input"]),
-                        // Sin resultado en el transcript: el turno se cortó con ella en curso.
+                        // No result in the transcript: the turn was cut off while it was running.
                         status: ToolStatus::Err,
                         started: at,
                         took: None,
@@ -131,8 +131,8 @@ pub fn replay(id: &str) -> Replay {
     out
 }
 
-/// Los subagentes de la sesión, de `<sesión>/subagents/agent-*.jsonl` y su `.meta.json`
-/// (`toolUseId`, `description`, `agentType`), en el orden en que se lanzaron.
+/// The session's subagents, from `<session>/subagents/agent-*.jsonl` and their `.meta.json`
+/// (`toolUseId`, `description`, `agentType`), in the order they were launched.
 fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
     let Ok(entries) = fs::read_dir(dir) else { return vec![] };
     let mut out: Vec<Agent> = entries
@@ -144,7 +144,7 @@ fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
             let transcript = PathBuf::from(meta_path.to_string_lossy().replace(".meta.json", ".jsonl"));
             let tool = s(&meta, "toolUseId");
             let call = activity.iter().find(|a| a.id == tool);
-            let mut log: Vec<Paso> = vec![];
+            let mut log: Vec<Step> = vec![];
             let mut first: Option<Instant> = None;
             let mut last = None;
             for v in lines(&transcript) {
@@ -155,7 +155,7 @@ fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
                     Some("assistant") => {
                         for b in v["message"]["content"].as_array().into_iter().flatten() {
                             match b["type"].as_str() {
-                                Some("tool_use") => log.push(Paso::Herramienta(Activity {
+                                Some("tool_use") => log.push(Step::Tool(Activity {
                                     id: s(b, "id"),
                                     name: s(b, "name"),
                                     detail: tool_detail(&b["input"]),
@@ -165,7 +165,7 @@ fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
                                     input: b["input"].clone(),
                                     output: String::new(),
                                 })),
-                                Some("text") if !s(b, "text").trim().is_empty() => log.push(Paso::Texto(s(b, "text"))),
+                                Some("text") if !s(b, "text").trim().is_empty() => log.push(Step::Text(s(b, "text"))),
                                 _ => {}
                             }
                         }
@@ -173,11 +173,11 @@ fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
                     Some("user") => {
                         for b in blocks(&v, "tool_result") {
                             let id = s(b, "tool_use_id");
-                            let paso = log.iter_mut().rev().find_map(|p| match p {
-                                Paso::Herramienta(t) if t.id == id => Some(t),
+                            let step = log.iter_mut().rev().find_map(|p| match p {
+                                Step::Tool(t) if t.id == id => Some(t),
                                 _ => None,
                             });
-                            if let Some(t) = paso {
+                            if let Some(t) = step {
                                 t.status = if b["is_error"] == true { ToolStatus::Err } else { ToolStatus::Ok };
                                 t.took = at.checked_duration_since(t.started);
                                 t.output = tool_output(&b["content"]);
@@ -187,7 +187,7 @@ fn agents(dir: &PathBuf, activity: &[Activity]) -> Vec<Agent> {
                     _ => {}
                 }
             }
-            let tools = log.iter().filter(|p| matches!(p, Paso::Herramienta(_))).count();
+            let tools = log.iter().filter(|p| matches!(p, Step::Tool(_))).count();
             let started = call.map(|a| a.started).or(first)?;
             Some(Agent {
                 tool,
@@ -215,8 +215,8 @@ fn s(v: &Value, k: &str) -> String {
     v[k].as_str().unwrap_or_default().to_string()
 }
 
-/// El `timestamp` del transcript (`2026-10-06T21:24:17.840Z`, siempre UTC) llevado a un
-/// `Instant` de este proceso, para que duraciones y «hace cuánto» salgan como en vivo.
+/// The transcript's `timestamp` (`2026-10-06T21:24:17.840Z`, always UTC) mapped to an
+/// `Instant` of this process, so durations and "how long ago" come out as they do live.
 fn timestamp(v: &Value) -> Instant {
     let now = Instant::now();
     let Some(ms) = v["timestamp"].as_str().and_then(epoch_ms) else { return now };
@@ -233,7 +233,7 @@ fn epoch_ms(t: &str) -> Option<u64> {
         let digits: String = r[1..].chars().take_while(char::is_ascii_digit).take(3).collect();
         format!("{digits:0<3}").parse::<i64>().unwrap_or(0)
     });
-    // Días desde 1970-01-01 (algoritmo de Howard Hinnant, calendario civil).
+    // Days since 1970-01-01 (Howard Hinnant's algorithm, civil calendar).
     let (y, m) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;
@@ -259,17 +259,17 @@ fn first_prompt(path: &PathBuf) -> Option<String> {
     })
 }
 
-/// Solo texto escrito por una persona o por Claude en el hilo principal: fuera resultados de
-/// herramientas, subagentes, mensajes meta y las salidas de comandos locales (`<local-command…>`).
-/// Las imágenes que mandaste en ese mensaje, como miniaturas para el chat.
-fn images(v: &Value) -> Vec<std::rc::Rc<crate::miniatura::Thumb>> {
+/// Only text written by a person or by Claude in the main thread: no tool results, subagents,
+/// meta messages or local command outputs (`<local-command…>`).
+/// The images you sent in that message, as thumbnails for the chat.
+fn images(v: &Value) -> Vec<std::rc::Rc<crate::thumbnail::Thumb>> {
     v["message"]["content"]
         .as_array()
         .into_iter()
         .flatten()
         .filter(|b| b["type"] == "image")
         .filter_map(|b| b["source"]["data"].as_str())
-        .filter_map(crate::miniatura::from_base64)
+        .filter_map(crate::thumbnail::from_base64)
         .collect()
 }
 

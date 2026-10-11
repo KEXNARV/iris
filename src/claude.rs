@@ -1,4 +1,4 @@
-//! Motor: un proceso `claude -p` vivo que habla stream-json por stdin/stdout.
+//! Engine: a live `claude -p` process that speaks stream-json over stdin/stdout.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -15,37 +15,37 @@ pub enum ClaudeEvent {
     Init { model: String, session: String, skills: Vec<String> },
     Thinking,
     Text(String),
-    /// `input` va entero: de ahí salen, por ejemplo, las tareas de TodoWrite.
+    /// `input` goes whole: that's where, for example, TodoWrite's tasks come from.
     ToolUse { id: String, name: String, detail: String, input: Value },
-    /// `output`: lo que devolvió la herramienta (texto), para verlo con Ctrl+G.
+    /// `output`: what the tool returned (text), to view it with Ctrl+G.
     ToolResult { id: String, is_error: bool, output: String },
-    /// `window`: ventana de contexto del modelo, si el motor la informó.
+    /// `window`: the model's context window, if the engine reported it.
     Done { cost: f64, secs: f64, is_error: bool, window: Option<u64> },
-    /// Tokens de contexto que lleva la conversación (entrada + caché del último mensaje).
+    /// Context tokens the conversation is using (input + cache of the last message).
     Usage(u64),
-    /// El motor espera respuesta del usuario: una `AskUserQuestion` o un permiso.
-    /// `suggestions`: las reglas que el motor propone para no volver a preguntar.
+    /// The engine awaits a reply from the user: an `AskUserQuestion` or a permission.
+    /// `suggestions`: the rules the engine proposes so it doesn't ask again.
     Ask { request_id: String, tool: String, input: Value, suggestions: Value },
-    /// El motor tomó el mensaje con este id (lo repite al leerlo, por `--replay-user-messages`).
+    /// The engine took the message with this id (echoed on read, via `--replay-user-messages`).
     Taken(String),
-    /// `/compact` terminó: tokens de contexto antes y después.
+    /// `/compact` finished: context tokens before and after.
     Compacted { pre: u64, post: u64 },
-    /// Nació un subagente (`task_started` de tipo agente). `tool` es el id de la llamada a
-    /// `Agent` que lo lanzó: con eso se le atribuyen sus mensajes (`parent_tool_use_id`).
+    /// A subagent was born (`task_started` of agent type). `tool` is the id of the `Agent` call
+    /// that launched it: that's how its messages are attributed to it (`parent_tool_use_id`).
     AgentStarted { tool: String, description: String, kind: String },
-    /// Un subagente pidió una herramienta (`id` es el de esa llamada), o recibió su resultado.
+    /// A subagent requested a tool (`id` is that call's), or received its result.
     AgentTool { tool: String, id: String, name: String, detail: String, input: Value },
     AgentToolResult { tool: String, id: String, is_error: bool, output: String },
-    /// Lo que escribió un subagente entre herramientas (llega por mensaje completo, no en vivo).
+    /// What a subagent wrote between tools (arrives as a whole message, not live).
     AgentText { tool: String, text: String },
-    /// Terminó un subagente: `ok` si completó, no si falló o lo mataron.
+    /// A subagent finished: `ok` if it completed, not if it failed or was killed.
     AgentDone { tool: String, ok: bool },
     Stderr(String),
     Exited,
 }
 
-/// Cada proceso lanzado lleva su número: al reiniciar o retomar, el viejo muere y su `Exited`
-/// llega después de lanzar el nuevo; con el número, la app lo reconoce y lo ignora.
+/// Each launched process carries its number: on restart or resume, the old one dies and its
+/// `Exited` arrives after launching the new one; with the number, the app spots and ignores it.
 static GEN: AtomicU64 = AtomicU64::new(0);
 
 pub struct Claude {
@@ -66,22 +66,22 @@ impl Claude {
                 "stream-json",
                 "--verbose",
                 "--include-partial-messages",
-                // Repite cada mensaje nuestro en el momento en que lo lee: así se sabe cuándo
-                // uno escrito a mitad de turno deja de estar en espera.
+                // Echoes each of our messages the moment it reads it: that's how we know when one
+                // written mid-turn stops being pending.
                 "--replay-user-messages",
-                // Sin esto `AskUserQuestion` no existe en `-p`; con esto el motor nos pregunta a
-                // nosotros por stdout (`control_request` `can_use_tool`) y espera la respuesta.
+                // Without this `AskUserQuestion` doesn't exist in `-p`; with it the engine asks us
+                // over stdout (`control_request` `can_use_tool`) and waits for the reply.
                 "--permission-prompt-tool",
                 "stdio",
-                // La interfaz convierte en adjunto toda ruta a un archivo que exista (adjunto.rs).
+                // The UI turns any path to an existing file into an attachment (attachment.rs).
                 "--append-system-prompt",
                 "Hablas con el usuario a través de Iris, una TUI propia. Cuando le entregues un archivo \
                  (un reporte, un Excel, una imagen…), escribe su ruta completa en la respuesta: Iris la \
                  muestra como adjunto y un clic lo copia al portapapeles para pegarlo donde quiera. \
                  No digas que no puedes pasarle archivos.",
             ])
-            // Permisos, modelo y esfuerzo elegidos en la bienvenida.
-            .args(crate::ajustes::args_motor(extra_args))
+            // Permissions, model and effort chosen in the welcome screen.
+            .args(crate::settings::engine_args(extra_args))
             .args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -117,10 +117,10 @@ impl Claude {
         Ok(Self { id, child, stdin, next_req: 0 })
     }
 
-    /// Devuelve el id con que el motor avisará que lo tomó.
+    /// Returns the id with which the engine will report that it took it.
     pub fn send(&mut self, text: &str, images: &[crate::clip::Image]) -> Result<String> {
         let uuid = uuid();
-        // Con imágenes el contenido va en bloques: primero las imágenes, después el texto.
+        // With images the content goes in blocks: first the images, then the text.
         let content = if images.is_empty() {
             json!(text)
         } else {
@@ -150,22 +150,22 @@ impl Claude {
         }))
     }
 
-    /// Deja correr la herramienta; para `AskUserQuestion`, `input` ya lleva las `answers`.
+    /// Lets the tool run; for `AskUserQuestion`, `input` already carries the `answers`.
     pub fn allow(&mut self, request_id: &str, input: Value) -> Result<()> {
         self.respond(request_id, json!({ "behavior": "allow", "updatedInput": input }))
     }
 
-    /// Deja correr la herramienta y suma las reglas (`updatedPermissions`) para lo que queda
-    /// de la sesión del motor: no vuelve a preguntar por lo mismo.
-    pub fn allow_siempre(&mut self, request_id: &str, input: Value, reglas: Value) -> Result<()> {
-        self.respond(request_id, json!({ "behavior": "allow", "updatedInput": input, "updatedPermissions": reglas }))
+    /// Lets the tool run and adds the rules (`updatedPermissions`) for the rest of the engine's
+    /// session: it won't ask about the same thing again.
+    pub fn allow_always(&mut self, request_id: &str, input: Value, rules: Value) -> Result<()> {
+        self.respond(request_id, json!({ "behavior": "allow", "updatedInput": input, "updatedPermissions": rules }))
     }
 
     pub fn deny(&mut self, request_id: &str, why: &str) -> Result<()> {
         self.respond(request_id, json!({ "behavior": "deny", "message": why }))
     }
 
-    /// Vale desde el turno siguiente; el `init` de ese turno trae el modelo nuevo.
+    /// Takes effect from the next turn; that turn's `init` brings the new model.
     pub fn set_model(&mut self, model: &str) -> Result<()> {
         self.next_req += 1;
         self.write(json!({
@@ -175,7 +175,7 @@ impl Claude {
         }))
     }
 
-    /// `None` vuelve al nivel por defecto del modelo.
+    /// `None` goes back to the model's default level.
     pub fn set_effort(&mut self, level: Option<&str>) -> Result<()> {
         self.next_req += 1;
         self.write(json!({
@@ -202,7 +202,7 @@ impl Claude {
 impl Drop for Claude {
     fn drop(&mut self) {
         let _ = self.child.kill();
-        // Sin esto el proceso muerto queda como zombi hasta que Iris termina.
+        // Without this the dead process stays a zombie until Iris exits.
         let _ = self.child.wait();
     }
 }
@@ -241,13 +241,13 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
                 kind: s(v, "subagent_type"),
             }]
         }
-        // El final llega dos veces (`task_updated` con el estado y `task_notification` con el
-        // resumen) y no siempre en ese orden: la app lo toma una vez.
+        // The end arrives twice (`task_updated` with the status and `task_notification` with the
+        // summary) and not always in that order: the app takes it once.
         Some("system") if v["subtype"] == "task_notification" && !v["tool_use_id"].is_null() => {
             vec![ClaudeEvent::AgentDone { tool: s(v, "tool_use_id"), ok: v["status"] == "completed" }]
         }
-        // Lo de un subagente llega con el id de la llamada que lo lanzó: sus herramientas (el
-        // núcleo las muestra en el hijo) y lo que escribe (para verlo en Ctrl+G, Agentes).
+        // A subagent's stuff arrives with the id of the call that launched it: its tools (the core
+        // shows them on the kid) and what it writes (to see it in Ctrl+G, Agents).
         Some("assistant") if !v["parent_tool_use_id"].is_null() => v["message"]["content"]
             .as_array()
             .into_iter()
@@ -274,7 +274,7 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
                 output: tool_output(&b["content"]),
             })
             .collect(),
-        // El texto ya llegó por deltas; de los mensajes completos solo interesan las herramientas.
+        // The text already arrived via deltas; from complete messages only the tools matter.
         Some("assistant") => {
             let mut out: Vec<ClaudeEvent> = v["message"]["content"]
                 .as_array()
@@ -320,7 +320,7 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
             cost: v["total_cost_usd"].as_f64().unwrap_or(0.0),
             secs: v["duration_ms"].as_f64().unwrap_or(0.0) / 1000.0,
             is_error: v["is_error"].as_bool().unwrap_or(false),
-            // Con subagentes hay varios modelos; la ventana de la conversación es la mayor.
+            // With subagents there are several models; the conversation's window is the largest.
             window: v["modelUsage"]
                 .as_object()
                 .and_then(|m| m.values().filter_map(|x| x["contextWindow"].as_u64()).max()),
@@ -329,12 +329,12 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
     }
 }
 
-/// Los bloques de contenido de un mensaje que son de tipo `kind`.
+/// The content blocks of a message that are of type `kind`.
 fn blocks<'a>(v: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a Value> {
     v["message"]["content"].as_array().into_iter().flatten().filter(move |b| b["type"] == kind)
 }
 
-/// UUID v4 de /dev/urandom; el motor lo guarda tal cual en el transcript.
+/// UUID v4 from /dev/urandom; the engine stores it as is in the transcript.
 fn uuid() -> String {
     use std::io::Read;
     let mut b = [0u8; 16];
@@ -348,7 +348,7 @@ fn uuid() -> String {
     format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
 }
 
-/// Lo más representativo de la entrada de una herramienta, en una línea.
+/// The most representative part of a tool's input, on one line.
 pub fn tool_detail(input: &Value) -> String {
     const KEYS: &[&str] = &[
         "command", "file_path", "path", "pattern", "query", "url", "description", "prompt",
@@ -358,7 +358,7 @@ pub fn tool_detail(input: &Value) -> String {
         .find_map(|k| input.get(*k).and_then(Value::as_str))
         .or_else(|| input.as_object()?.values().find_map(Value::as_str))
         .unwrap_or("");
-    let home = crate::rutas::home().map(|h| h.display().to_string()).unwrap_or_default();
+    let home = crate::paths::home().map(|h| h.display().to_string()).unwrap_or_default();
     let line = raw.lines().next().unwrap_or("");
     if !home.is_empty() && line.contains(&home) {
         line.replace(&home, "~")
@@ -367,8 +367,8 @@ pub fn tool_detail(input: &Value) -> String {
     }
 }
 
-/// El texto que devolvió una herramienta: viene como texto o como bloques; se corta en
-/// 40 000 caracteres para no guardar salidas enormes.
+/// The text a tool returned: it comes as text or as blocks; it is cut at 40,000 characters
+/// so huge outputs aren't stored.
 pub fn tool_output(c: &Value) -> String {
     let text = match c {
         Value::String(s) => s.clone(),
@@ -395,10 +395,10 @@ pub fn tool_output(c: &Value) -> String {
 mod tests {
     use super::*;
 
-    /// Eventos reales de `claude -p` con un subagente (recortados): nace, pide un Bash, recibe
-    /// su resultado y termina.
+    /// Real `claude -p` events with a subagent (trimmed): it is born, requests a Bash, receives
+    /// its result and finishes.
     #[test]
-    fn sigue_a_un_subagente() {
+    fn follows_a_subagent() {
         let lines = [
             r#"{"type":"system","subtype":"task_started","task_id":"a9","tool_use_id":"toolu_A","description":"Ejecutar ls","subagent_type":"general-purpose","is_backgrounded":false,"task_type":"local_agent"}"#,
             r#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_B","description":"Loop","is_backgrounded":true,"task_type":"local_bash"}"#,
@@ -408,7 +408,7 @@ mod tests {
         ];
         let evs: Vec<ClaudeEvent> = lines.iter().flat_map(|l| parse(&serde_json::from_str(l).unwrap())).collect();
         assert!(matches!(&evs[0], ClaudeEvent::AgentStarted { tool, kind, .. } if tool == "toolu_A" && kind == "general-purpose"));
-        // El bash de fondo no es un hijo.
+        // The background bash is not a kid.
         assert!(matches!(&evs[1], ClaudeEvent::AgentTool { tool, name, .. } if tool == "toolu_A" && name == "Bash"));
         assert!(matches!(&evs[2], ClaudeEvent::AgentToolResult { tool, id, is_error: false, output } if tool == "toolu_A" && id == "toolu_C" && output == "x"));
         assert!(matches!(&evs[3], ClaudeEvent::AgentDone { tool, ok: true } if tool == "toolu_A"));
@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn texto_de_un_subagente() {
+    fn subagent_text() {
         let v: Value = serde_json::from_str(r#"{"type":"assistant","parent_tool_use_id":"toolu_A","message":{"content":[{"type":"text","text":"Reviso los logs."},{"type":"tool_use","id":"toolu_D","name":"Read","input":{"file_path":"/x"}}]}}"#).unwrap();
         let evs = parse(&v);
         assert!(matches!(&evs[0], ClaudeEvent::AgentText { tool, text } if tool == "toolu_A" && text == "Reviso los logs."));

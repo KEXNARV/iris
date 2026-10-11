@@ -1,7 +1,7 @@
-//! Voz: captura del micrófono con cpal y transcripción local con whisper.cpp.
+//! Voice: microphone capture with cpal and local transcription with whisper.cpp.
 //!
-//! Todo vive en un hilo propio: el `Stream` de cpal no es `Send` y whisper bloquea
-//! varios segundos, así que la interfaz solo manda órdenes y recibe eventos.
+//! Everything lives on its own thread: cpal's `Stream` is not `Send` and whisper blocks for
+//! several seconds, so the UI only sends commands and receives events.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -29,13 +29,13 @@ pub enum VoiceEvent {
     Listening,
     Transcribing,
     Transcript(String),
-    /// Whisper devolvió una de sus frases inventadas sobre ruido; se descartó.
+    /// Whisper returned one of its made-up phrases over noise; it was discarded.
     Discarded(String),
     Cancelled,
     Error(String),
 }
 
-/// Nivel RMS del micrófono (f32 en bits) para dibujar la onda sin pasar por el canal.
+/// Microphone RMS level (f32 as bits) to draw the wave without going through the channel.
 pub type Level = Arc<AtomicU32>;
 
 pub fn level_get(l: &Level) -> f32 {
@@ -54,15 +54,15 @@ pub fn spawn(tx: Sender<AppEvent>) -> (Sender<VoiceCmd>, Level) {
             Ok(m) => m,
             Err(e) => return send(VoiceEvent::Unavailable(e.to_string())),
         };
-        let _ = transcribe(&ctx, &vec![0.0; WHISPER_RATE as usize]); // compila shaders ahora y no al primer uso
+        let _ = transcribe(&ctx, &vec![0.0; WHISPER_RATE as usize]); // compiles shaders now instead of on first use
         send(VoiceEvent::Ready(name));
         run(&ctx, cmd_rx, lvl, &send);
     });
     (cmd_tx, level)
 }
 
-/// En laptops híbridas ggml toma la integrada (la primera en la lista de Vulkan) y es
-/// ~15× más lenta. Se restringe a la primera GPU dedicada. Llamar antes de crear hilos.
+/// On hybrid laptops ggml picks the integrated GPU (the first in Vulkan's list) and is
+/// ~15× slower. It is restricted to the first discrete GPU. Call before creating threads.
 pub fn prefer_discrete_gpu() {
     if std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_some() {
         return;
@@ -76,17 +76,17 @@ pub fn prefer_discrete_gpu() {
         .filter(|l| l.contains("deviceType"))
         .position(|l| l.contains("DISCRETE_GPU"));
     if let Some(i) = discrete {
-        // SAFETY: se llama al inicio de main, antes de lanzar cualquier hilo.
+        // SAFETY: called at the start of main, before spawning any thread.
         unsafe { std::env::set_var("GGML_VK_VISIBLE_DEVICES", i.to_string()) };
     }
 }
 
 fn models_dir() -> Result<PathBuf> {
-    Ok(crate::rutas::datos().ok_or_else(|| anyhow::anyhow!("sin carpeta de datos"))?.join("models"))
+    Ok(crate::paths::data().ok_or_else(|| anyhow::anyhow!("sin carpeta de datos"))?.join("models"))
 }
 
 fn model_path() -> Result<PathBuf> {
-    if let Ok(p) = crate::rutas::var("MODEL").ok_or(()) {
+    if let Ok(p) = crate::paths::var("MODEL").ok_or(()) {
         return Ok(PathBuf::from(p));
     }
     let dir = models_dir()?;
@@ -98,7 +98,7 @@ fn model_path() -> Result<PathBuf> {
 }
 
 fn load_model() -> Result<(WhisperContext, String)> {
-    whisper_rs::install_logging_hooks(); // silencia a whisper.cpp; si no, ensucia la TUI
+    whisper_rs::install_logging_hooks(); // silences whisper.cpp; otherwise it garbles the TUI
     let path = model_path()?;
     let name = path
         .file_stem()
@@ -164,7 +164,7 @@ impl Recording {
         let rate = config.sample_rate;
         let buf = Arc::new(Mutex::new(Vec::new()));
 
-        // Mezcla a mono y actualiza el nivel en cada bloque.
+        // Mixes down to mono and updates the level on every block.
         let sink = {
             let buf = buf.clone();
             move |mono: &mut dyn Iterator<Item = f32>| {
@@ -203,35 +203,35 @@ impl Recording {
         Ok(Self { _stream: stream, buf, rate })
     }
 
-    /// Detiene la captura y devuelve el audio mono a 16 kHz.
+    /// Stops the capture and returns mono audio at 16 kHz.
     fn finish(self) -> Vec<f32> {
         let rate = self.rate;
         let samples = std::mem::take(&mut *self.buf.lock().unwrap());
         drop(self);
-        // Al abrir el micrófono interno llega un golpe que satura; nadie habla tan pronto.
+        // Opening the internal mic produces a clipping pop; nobody speaks that soon.
         let skip = (rate as usize / 5).min(samples.len());
         normalize(resample(&samples[skip..], rate, WHISPER_RATE))
     }
 }
 
-/// Sube la grabación a un nivel parejo antes de whisper. La ganancia del micrófono tiene que
-/// quedar baja (al 97% recortaba y whisper inventaba frases; al 35% ya no, pero la voz llega
-/// floja y hay que acercarse y hablar fuerte): lo que falta se sube acá, sin recortar.
+/// Brings the recording up to an even level before whisper. The mic gain has to stay low
+/// (at 97% it clipped and whisper made up phrases; at 35% it doesn't, but the voice comes in
+/// weak and you have to lean in and speak loudly): what's missing is raised here, without clipping.
 fn normalize(mut audio: Vec<f32>) -> Vec<f32> {
     if audio.is_empty() {
         return audio;
     }
-    // El «pico» es lo que supera solo el 0,1% de las muestras: un golpe suelto no frena la subida.
+    // The «peak» is what only 0.1% of the samples exceed: a stray pop doesn't hold back the gain.
     let mut mags: Vec<f32> = audio.iter().map(|x| x.abs()).collect();
     let k = ((mags.len() as f32 * 0.999) as usize).min(mags.len() - 1);
     let peak = *mags.select_nth_unstable_by(k, f32::total_cmp).1;
-    // Casi nada grabado: no se inventa voz subiendo el ruido de fondo.
+    // Almost nothing recorded: don't make up a voice by raising the background noise.
     if peak < 0.003 {
         return audio;
     }
-    // Sin subir el ruido: el micrófono interno tiene un piso de RMS ~0,04 al 40%, y amplificado
-    // whisper inventa frases sobre él («¿Qué es el baile?»). El piso es el tramo de 50 ms más
-    // callado (percentil 10); después de la ganancia tiene que quedar por debajo de 0,03.
+    // Without raising the noise: the internal mic has an RMS floor of ~0.04 at 40%, and amplified
+    // whisper makes up phrases over it («¿Qué es el baile?»). The floor is the quietest 50 ms
+    // stretch (10th percentile); after the gain it must stay below 0.03.
     let mut rms: Vec<f32> = audio
         .chunks(800)
         .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
@@ -269,13 +269,13 @@ fn resample(input: &[f32], from: u32, to: u32) -> Vec<f32> {
 }
 
 fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
-    // Menos de ~0.3 s es un toque accidental.
+    // Less than ~0.3 s is an accidental tap.
     if audio.len() < WHISPER_RATE as usize * 3 / 10 {
         return Ok(String::new());
     }
     let mut state = ctx.create_state().map_err(|e| anyhow!("{e:?}"))?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    let lang = crate::rutas::var("LANG").ok_or(()).unwrap_or_else(|_| "es".into());
+    let lang = crate::paths::var("LANG").ok_or(()).unwrap_or_else(|_| "es".into());
     params.set_language(Some(&lang));
     params.set_n_threads(threads());
     params.set_no_context(true);
@@ -285,8 +285,8 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
     params.set_print_special(false);
     params.set_print_timestamps(false);
 
-    // Silero VAD: whisper solo ve los tramos con voz. Sin él, sobre ruido de fondo
-    // inventa frases ("¡Hasta la vuelta!", "Gracias por ver el video").
+    // Silero VAD: whisper only sees the stretches with voice. Without it, over background noise
+    // it makes up phrases ("¡Hasta la vuelta!", "Gracias por ver el video").
     let vad = models_dir().ok().map(|d| d.join("ggml-silero-v5.1.2.bin")).filter(|p| p.exists());
     let vad = vad.as_deref().and_then(|p| p.to_str());
     if vad.is_some() {
@@ -298,7 +298,7 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
         params.enable_vad(true);
     }
 
-    // whisper espera al menos 1 s; se rellena con silencio.
+    // whisper expects at least 1 s; it is padded with silence.
     let mut padded = audio.to_vec();
     padded.resize(padded.len().max(WHISPER_RATE as usize + 1600), 0.0);
     state.full(params, &padded).map_err(|e| anyhow!("{e:?}"))?;
@@ -308,12 +308,12 @@ fn transcribe(ctx: &WhisperContext, audio: &[f32]) -> Result<String> {
         .filter(|s| s.no_speech_probability() < 0.6)
         .filter_map(|s| s.to_str_lossy().ok().map(|t| t.into_owned()))
         .collect();
-    // Las alucinaciones las filtra quien llama (`is_hallucination`), para poder avisar.
+    // Hallucinations are filtered by the caller (`is_hallucination`), so it can notify.
     Ok(clean(&text))
 }
 
-/// Frases que whisper produce sobre ruido o silencio (vienen de subtítulos de YouTube
-/// en su entrenamiento). Solo se descartan si son la transcripción completa.
+/// Phrases whisper produces over noise or silence (they come from YouTube subtitles in its
+/// training). They are only discarded if they are the whole transcript.
 fn is_hallucination(text: &str) -> bool {
     const KNOWN: &[&str] = &[
         "gracias",
@@ -337,7 +337,7 @@ fn is_hallucination(text: &str) -> bool {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    // "¡Hasta la vuelta! ¡Hasta la vuelta!" → también cuenta si es la misma frase repetida.
+    // "¡Hasta la vuelta! ¡Hasta la vuelta!" → it also counts if it's the same phrase repeated.
     let parts: Vec<&str> = norm.split('.').map(str::trim).filter(|p| !p.is_empty()).collect();
     !parts.is_empty() && parts.iter().all(|p| KNOWN.contains(p))
         || KNOWN.iter().any(|k| {
@@ -346,7 +346,7 @@ fn is_hallucination(text: &str) -> bool {
         })
 }
 
-/// Quita las marcas que whisper inventa sobre silencio ("[BLANK_AUDIO]", "(música)", …).
+/// Strips the marks whisper makes up over silence ("[BLANK_AUDIO]", "(música)", …).
 fn clean(text: &str) -> String {
     let mut out = String::new();
     let mut depth = 0;
@@ -368,7 +368,7 @@ fn threads() -> i32 {
     thread::available_parallelism().map_or(4, |n| n.get().min(12) as i32)
 }
 
-/// `iris --transcribe audio.wav`: prueba la transcripción sin la interfaz.
+/// `iris --transcribe audio.wav`: tests transcription without the UI.
 pub fn transcribe_file(path: &str) -> Result<()> {
     let out = std::process::Command::new("ffmpeg")
         .args(["-loglevel", "error", "-i", path, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"])
@@ -378,11 +378,11 @@ pub fn transcribe_file(path: &str) -> Result<()> {
         .chunks_exact(4)
         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .collect();
-    let audio = normalize(audio); // igual que una grabación de la interfaz
+    let audio = normalize(audio); // same as a recording from the UI
     let t0 = std::time::Instant::now();
     let (ctx, name) = load_model()?;
     let load = t0.elapsed();
-    transcribe(&ctx, &audio)?; // calentamiento: la primera pasada compila shaders
+    transcribe(&ctx, &audio)?; // warm-up: the first pass compiles shaders
     let t1 = std::time::Instant::now();
     let text = transcribe(&ctx, &audio)?;
     println!(
@@ -400,30 +400,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normaliza_la_voz_floja_sin_recortar() {
-        // Voz baja (pico 0,1) entre silencios, como una grabación real, con un golpe suelto.
+    fn normalizes_quiet_voice_without_clipping() {
+        // Quiet voice (peak 0.1) between silences, like a real recording, with a stray pop.
         let mut a: Vec<f32> =
             (0..16000).map(|i| if (4000..12000).contains(&i) { 0.1 * (i as f32 * 0.05).sin() } else { 0.0005 }).collect();
         a[10] = 0.8;
         let out = normalize(a);
         let peak = out.iter().skip(100).fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(peak > 0.8 && peak <= 1.0, "{peak}");
-        // El silencio queda como está.
+        // Silence stays as it is.
         assert_eq!(normalize(vec![0.001; 1000]), vec![0.001; 1000]);
-        // Con ruido de fondo alto no se sube: amplificado, whisper inventa frases.
-        let ruidoso: Vec<f32> = (0..16000)
+        // With loud background noise it isn't raised: amplified, whisper makes up phrases.
+        let noisy: Vec<f32> = (0..16000)
             .map(|i| 0.04 * ((i * 7919 % 101) as f32 / 50.0 - 1.0) + if i > 8000 { 0.15 * (i as f32 * 0.05).sin() } else { 0.0 })
             .collect();
-        let out = normalize(ruidoso.clone());
-        let g = out[100] / ruidoso[100];
+        let out = normalize(noisy.clone());
+        let g = out[100] / noisy[100];
         assert!(g < 1.3, "subió el ruido ×{g}");
-        // Lo que ya llega fuerte no se toca.
-        let fuerte: Vec<f32> = (0..1000).map(|i| 0.95 * (i as f32 * 0.1).sin()).collect();
-        assert_eq!(normalize(fuerte.clone()), fuerte);
+        // What already comes in loud is left untouched.
+        let loud: Vec<f32> = (0..1000).map(|i| 0.95 * (i as f32 * 0.1).sin()).collect();
+        assert_eq!(normalize(loud.clone()), loud);
     }
 
     #[test]
-    fn alucinaciones() {
+    fn hallucinations() {
         for t in ["¡Gracias!", "Gracias.", "¡Hasta la vuelta! ¡Hasta la vuelta!", "Gracias por ver el video."] {
             assert!(is_hallucination(t), "{t}");
         }
@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn limpia_marcas() {
+    fn strips_marks() {
         assert_eq!(clean(" [BLANK_AUDIO] "), "");
         assert_eq!(clean(" (música) hola mundo"), "hola mundo");
         assert_eq!(clean("."), "");

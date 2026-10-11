@@ -1,40 +1,40 @@
-mod adjunto;
-mod ajustes;
-mod bienvenida;
-mod enlace;
+mod attachment;
+mod settings;
+mod welcome;
+mod link;
 mod ask;
 mod baymax;
 mod buddy;
 mod claude;
 mod clip;
 mod commands;
-mod entrada;
-mod habla;
+mod input;
+mod speech;
 mod login;
-mod estilo;
+mod style;
 mod md;
-mod musica;
+mod music;
 mod surco;
-mod miniatura;
-mod nucleo;
+mod thumbnail;
+mod core;
 mod select;
 mod sessions;
 mod sixel;
-mod teclado;
+mod keyboard;
 mod theme;
 mod ui;
-mod rutas;
+mod paths;
 mod update;
 mod voice;
 mod app;
-mod eventos;
-mod teclas;
-mod raton;
-mod ordenes;
-mod enviar;
-mod escucha;
-mod flotante;
-mod pantalla;
+mod events;
+mod keys;
+mod mouse;
+mod actions;
+mod send;
+mod listen;
+mod floating;
+mod screen;
 
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
@@ -43,36 +43,36 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 
 use ask::{Ask, Outcome};
-use nucleo::{Event as Gesto, State};
+use core::{Event as Gesture, State};
 use claude::{Claude, ClaudeEvent};
 use voice::{Level, VoiceCmd, VoiceEvent};
 
 use app::*;
-use teclas::*;
-use raton::*;
-use ordenes::*;
-use enviar::*;
-use escucha::*;
-use flotante::*;
-use pantalla::*;
+use keys::*;
+use mouse::*;
+use actions::*;
+use send::*;
+use listen::*;
+use floating::*;
+use screen::*;
 
 fn main() -> Result<()> {
-    rutas::migrar();
+    paths::migrate();
     voice::prefer_discrete_gpu();
     let mut extra: Vec<String> = std::env::args().skip(1).collect();
     if extra.first().map(String::as_str) == Some("--transcribe") {
         return voice::transcribe_file(extra.get(1).map_or("", String::as_str));
     }
-    // --flotante: la ventana que se llama con un atajo, te escucha sola, ejecuta y se esconde.
-    let flotante = extra.iter().any(|a| a == "--flotante");
+    // --flotante: the window summoned with a shortcut; it listens on its own, runs and hides.
+    let floating = extra.iter().any(|a| a == "--flotante");
     extra.retain(|a| a != "--flotante");
-    if flotante {
-        extra.extend(["--append-system-prompt".into(), FLOTANTE_PROMPT.into()]);
+    if floating {
+        extra.extend(["--append-system-prompt".into(), FLOATING_PROMPT.into()]);
     }
     let (tx, rx) = mpsc::channel();
 
-    let cuenta = login::cuenta();
-    if cuenta.is_none() {
+    let account = login::account();
+    if account.is_none() {
         eprintln!("Iris va encima de Claude Code y no lo encuentro (el comando claude).");
         eprintln!("Instálalo con: curl -fsSL https://claude.ai/install.sh | bash");
         std::process::exit(1);
@@ -81,7 +81,7 @@ fn main() -> Result<()> {
     let (voice_tx, level) = voice::spawn(tx.clone());
     update::spawn(tx.clone());
 
-    // `iris --resume <id>`: además de pasárselo al motor, se muestra la conversación.
+    // `iris --resume <id>`: besides passing it to the engine, the conversation is shown.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::replay(id));
     let (messages, activity, agents_done) = resumed.map(|r| (r.messages, r.activity, r.agents)).unwrap_or_default();
     let turn_from = activity.len();
@@ -96,7 +96,7 @@ fn main() -> Result<()> {
         voice_model: String::new(),
         levels: vec![0.0; 256],
         model: String::new(),
-        effort: ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into()),
+        effort: settings::read("esfuerzo").unwrap_or_else(|| "auto".into()),
         session: String::new(),
         cost: 0.0,
         turns: 0,
@@ -116,7 +116,7 @@ fn main() -> Result<()> {
         view: Default::default(),
         sel: None,
         flash: None,
-        nucleo: nucleo::Core::new(),
+        core: core::Core::new(),
         ctx_used: 0,
         ctx_window: 200_000,
         todos: (0, 0),
@@ -129,34 +129,34 @@ fn main() -> Result<()> {
         last_voice: Instant::now(),
         noise_floor: 0.0,
         booted: Instant::now(),
-        calm: rutas::hay_var("CALM"),
+        calm: paths::has_var("CALM"),
         md_cache: Default::default(),
-        adjuntos_cache: Default::default(),
+        attachments_cache: Default::default(),
         images: vec![],
         cur: 0,
-        historial: entrada::Historial::load(),
-        flotante,
+        history: input::History::load(),
+        floating,
         focused: true,
         hands_free: None,
         heard: false,
         hide_at: None,
-        habla: habla::Habla::new(tx.clone()),
-        lector: habla::Lector::new(),
-        voz_modo: match rutas::var("HABLA").as_deref() {
-            _ if flotante => VozModo::Siempre,
-            Some("always") | Some("siempre") => VozModo::Siempre,
-            Some("never") | Some("nunca") | Some("0") => VozModo::Nunca,
-            _ => bienvenida::voz_guardada().unwrap_or(VozModo::Auto),
+        speech: speech::Speech::new(tx.clone()),
+        reader: speech::Reader::new(),
+        voice_mode: match paths::var("HABLA").as_deref() {
+            _ if floating => VoiceMode::Always,
+            Some("always") | Some("siempre") => VoiceMode::Always,
+            Some("never") | Some("nunca") | Some("0") => VoiceMode::Never,
+            _ => welcome::saved_voice().unwrap_or(VoiceMode::Auto),
         },
         spoken_next: false,
         speak_turn: false,
         talking: false,
         tts_level: 0.0,
-        musica: musica::Musica::spawn(),
+        music: music::Music::spawn(),
         surco: surco::Surco::spawn(),
         music_at: std::cell::Cell::new(None),
-        estilo: estilo::cargar(),
-        buddy: buddy::cargar(),
+        style: style::load(),
+        buddy: buddy::load(),
         reading: Default::default(),
         transcript: false,
         tools_view: None,
@@ -177,17 +177,17 @@ fn main() -> Result<()> {
         agents: vec![],
         agents_done,
         next_kid: 0,
-        sin_sesion: matches!(cuenta, Some(login::Cuenta::SinSesion)),
+        no_session: matches!(account, Some(login::Account::NoSession)),
     };
-    if !flotante && ajustes::primera_vez() {
-        app.modal = Some(Modal::Bienvenida(bienvenida::Bienvenida::new(&app)));
+    if !floating && settings::first_run() {
+        app.modal = Some(Modal::Welcome(welcome::Welcome::new(&app)));
     }
 
-    let mut term = abrir_terminal(&mut app);
+    let mut term = open_terminal(&mut app);
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
-    cerrar_terminal(&app);
+    close_terminal(&app);
     if res.is_ok() && app.reexec {
-        // Se instaló la versión nueva: se reabre con ella y retoma esta misma sesión.
+        // The new version was installed: reopen with it and resume this same session.
         drop(claude);
         let mut args: Vec<String> = vec![];
         let mut old = std::env::args().skip(1);
@@ -202,8 +202,8 @@ fn main() -> Result<()> {
             args.extend(["--resume".into(), app.session.clone()]);
         }
         drop(app);
-        // En Linux la versión nueva toma el lugar de esta; Windows no tiene exec, así que la
-        // abre, la espera y sale con lo que ella devuelva.
+        // On Linux the new version takes this one's place; Windows has no exec, so it opens it,
+        // waits for it and exits with whatever it returns.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -219,31 +219,31 @@ fn main() -> Result<()> {
     res
 }
 
-/// La pantalla de Iris: ratatui más lo que la terminal tiene que avisar.
-fn abrir_terminal(app: &mut App) -> ratatui::DefaultTerminal {
+/// Iris's screen: ratatui plus what the terminal has to report.
+fn open_terminal(app: &mut App) -> ratatui::DefaultTerminal {
     let term = ratatui::init();
-    // Para mantener espacio y hablar hace falta saber cuándo se suelta. Con «desambiguar» y
-    // «tipos de evento» las letras siguen llegando como texto (acentos y tildes muertas
-    // intactos) y además llega el soltar. «Todas las teclas como códigos» duplica la é en foot.
+    // Holding space to talk requires knowing when it is released. With «disambiguate» and
+    // «event types» letters keep arriving as text (accents and dead keys intact) and the
+    // release arrives too. «All keys as escape codes» duplicates the é in foot.
     use crossterm::event::{KeyboardEnhancementFlags as K, PushKeyboardEnhancementFlags};
     if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
         let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
         app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
     }
-    // Con el mouse en manos de Iris, arrastrar copia solo texto del chat; Shift+arrastrar
-    // sigue siendo la selección de la terminal.
+    // With the mouse in Iris's hands, dragging copies only chat text; Shift+drag is still
+    // the terminal's selection.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
-    // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
-    // primer salto, y una ruta de imagen arrastrada a la terminal se puede adjuntar.
+    // Pasted content arrives in a single event: that way a multi-line text isn't sent at the
+    // first newline, and an image path dragged onto the terminal can be attached.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
-    // Saber si la ventana tiene el foco: para avisar con una notificación y, en el modo
-    // flotante, para empezar a escuchar al aparecer.
+    // Knowing whether the window has focus: to alert with a notification and, in floating
+    // mode, to start listening when it appears.
     let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
     term
 }
 
-/// Devuelve la terminal como estaba: al salir y mientras corre `claude auth login`.
-fn cerrar_terminal(app: &App) {
+/// Restores the terminal to how it was: on exit and while `claude auth login` runs.
+fn close_terminal(app: &App) {
     if app.key_release {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
     }
@@ -253,14 +253,14 @@ fn cerrar_terminal(app: &App) {
     ratatui::restore();
 }
 
-/// Relanza el motor en la misma conversación, con lo que haya guardado ahora (cuenta,
-/// permisos, modelo, esfuerzo).
-fn relanzar(app: &mut App, claude: &mut Option<Claude>, extra: &[String], tx: &Sender<AppEvent>) -> Result<()> {
+/// Relaunches the engine in the same conversation, with whatever is saved now (account,
+/// permissions, model, effort).
+fn relaunch(app: &mut App, claude: &mut Option<Claude>, extra: &[String], tx: &Sender<AppEvent>) -> Result<()> {
     let mut args: Vec<String> = vec![];
-    let mut viejos = extra.iter();
-    while let Some(a) = viejos.next() {
+    let mut stale = extra.iter();
+    while let Some(a) = stale.next() {
         if a == "--resume" {
-            viejos.next();
+            stale.next();
         } else {
             args.push(a.clone());
         }
@@ -271,7 +271,7 @@ fn relanzar(app: &mut App, claude: &mut Option<Claude>, extra: &[String], tx: &S
     *claude = None;
     app.drop_waiting();
     *claude = Some(Claude::spawn(&args, tx.clone())?);
-    app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
+    app.effort = settings::read("esfuerzo").unwrap_or_else(|| "auto".into());
     app.alive = true;
     app.busy = false;
     Ok(())
@@ -286,42 +286,42 @@ fn run(
     rx: &mpsc::Receiver<AppEvent>,
     extra: &[String],
 ) -> Result<()> {
-    // 60 fps: lo que más se mueve es el núcleo.
+    // 60 fps: what moves the most is the core.
     let tick = Duration::from_millis(16);
     let mut frame = Instant::now();
     let mut frames: u64 = 0;
-    let mut teclado = teclado::Teclado::new();
+    let mut keyboard = keyboard::Keyboard::new();
     let mut theme_check = Instant::now();
     theme::poll();
-    // Los colores con que se dibujó el markdown guardado. /buddy, /core y sus vistas
-    // previas los cambian sin pasar por `poll`, así que se compara en cada vuelta.
-    let mut colores = (theme::acento_u32(), theme::texto_u32(), theme::fondo_rgb());
+    // The colors the cached markdown was drawn with. /buddy, /core and their previews
+    // change them without going through `poll`, so they are compared on every loop.
+    let mut colors = (theme::accent_u32(), theme::text_u32(), theme::background_rgb());
     loop {
-        // El tema puede cambiar en cualquier momento (Omarchy, Aether): se mira una vez por segundo.
+        // The theme can change at any time (Omarchy, Aether): it is checked once per second.
         if theme_check.elapsed() >= Duration::from_secs(1) {
             theme_check = Instant::now();
             theme::poll();
         }
-        let ahora = (theme::acento_u32(), theme::texto_u32(), theme::fondo_rgb());
-        if ahora != colores {
-            colores = ahora;
-            app.md_cache.borrow_mut().clear(); // el markdown guardado lleva los colores viejos
+        let now = (theme::accent_u32(), theme::text_u32(), theme::background_rgb());
+        if now != colors {
+            colors = now;
+            app.md_cache.borrow_mut().clear(); // the cached markdown carries the old colors
         }
-        // La onda avanza aunque no haya audio, para que se vea viva.
+        // The waveform advances even without audio, so it looks alive.
         let lvl = if app.voice == VoiceState::Listening { voice::level_get(&app.level) } else { 0.0 };
         app.levels.remove(0);
         app.levels.push(lvl);
         if app.voice == VoiceState::Listening {
             hear(app, lvl);
         }
-        flotante_tick(app, voice_tx);
-        // La música de surco calla mientras escucha, transcribe, piensa lo que va a decir o habla.
+        floating_tick(app, voice_tx);
+        // surco's music goes quiet while it listens, transcribes, thinks what to say or speaks.
         let quiet = matches!(app.voice, VoiceState::Listening | VoiceState::Transcribing)
             || app.talking
             || (app.busy && app.speak_turn);
         app.surco.quiet(quiet);
-        // La versión nueva se ofrece cuando no estorba: si apareciera mientras escribes, el
-        // Enter de tu mensaje la aceptaría.
+        // The new version is offered when it's not in the way: if it showed up while you type,
+        // your message's Enter would accept it.
         if app.update.is_some()
             && app.modal.is_none()
             && app.tools_view.is_none()
@@ -334,20 +334,20 @@ fn run(
 
         let dt = frame.elapsed().as_secs_f64();
         frame = Instant::now();
-        // Los que terminaron se quedan unos segundos en ACTIVIDAD y luego se van.
-        // Los que terminaron hace rato dejan el núcleo, pero quedan para verlos en Ctrl+G.
-        let (viejos, vivos): (Vec<Agent>, Vec<Agent>) =
+        // Finished ones stay a few seconds in ACTIVITY and then leave.
+        // Ones that finished a while ago leave the core, but stay to be seen in Ctrl+G.
+        let (stale, alive): (Vec<Agent>, Vec<Agent>) =
             std::mem::take(&mut app.agents).into_iter().partition(|a| a.ended.is_some_and(|(t, _)| t.elapsed() >= Duration::from_secs(4)));
-        app.agents = vivos;
-        app.agents_done.extend(viejos);
-        let sobra = app.agents_done.len().saturating_sub(40);
-        app.agents_done.drain(..sobra);
+        app.agents = alive;
+        app.agents_done.extend(stale);
+        let excess = app.agents_done.len().saturating_sub(40);
+        app.agents_done.drain(..excess);
         let (want, sig) = (app.state(), app.signals());
-        app.nucleo.step(dt, want, &sig);
-        // El teclado acompaña al núcleo: su estado, la voz y los eventos.
-        teclado.tick(app.nucleo.state(), sig.level);
-        for ev in app.nucleo.take_fired() {
-            teclado.event(ev);
+        app.core.step(dt, want, &sig);
+        // The keyboard follows the core: its state, the voice and the events.
+        keyboard.tick(app.core.state(), sig.level);
+        for ev in app.core.take_fired() {
+            keyboard.event(ev);
         }
 
         app.core_rect.set(None);
@@ -355,11 +355,11 @@ fn run(
         app.thumb_targets.borrow_mut().clear();
         app.file_slots.borrow_mut().clear();
         app.file_targets.borrow_mut().clear();
-        // Lo que se dibujó en este cuadro: hace falta para reescribir el texto que tapaba una
-        // miniatura que se movió.
+        // What was drawn in this frame: needed to rewrite the text that a thumbnail which moved
+        // was covering.
         let snap = term.draw(|f| ui::draw(f, app))?.buffer.clone();
         if sixel_frame(term, app, &mut frames)? {
-            app.thumbs_shown.clear(); // la pantalla se limpió: hay que volver a dibujarlas
+            app.thumbs_shown.clear(); // the screen was cleared: they must be redrawn
         }
         thumbs_frame(term, app, &snap)?;
         follow_drag(app);
@@ -373,7 +373,7 @@ fn run(
                 Event::FocusGained => {
                     app.focused = true;
                     app.hide_at = None;
-                    if app.flotante && app.voice == VoiceState::Ready && !app.busy && !app.talking {
+                    if app.floating && app.voice == VoiceState::Ready && !app.busy && !app.talking {
                         let _ = voice_tx.send(VoiceCmd::Start);
                         app.hands_free = Some(Instant::now());
                         app.heard = false;
@@ -392,7 +392,7 @@ fn run(
                     app.space_down = false;
                     app.released = Some(Instant::now());
                 }
-                // Las repeticiones sirven para borrar o moverse con la tecla apretada.
+                // Repeats are for deleting or moving with the key held down.
                 if k.kind == KeyEventKind::Press || (k.kind == KeyEventKind::Repeat && !space) {
                     match handle_key(app, k, claude, voice_tx) {
                         Flow::Quit => return Ok(()),
@@ -400,13 +400,13 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
-                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
+                            app.effort = settings::read("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.modal = None;
                             app.ctx_used = 0;
                             app.todos = (0, 0);
                             app.booted = Instant::now();
-                            app.nucleo.reboot();
+                            app.core.reboot();
                             app.agents.clear();
                             app.push(Role::System, "claude reiniciado — sesión nueva");
                         }
@@ -414,18 +414,18 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
-                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
+                            app.effort = settings::read("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;
                             app.messages.clear();
                             app.md_cache.borrow_mut().clear();
-                            app.adjuntos_cache.borrow_mut().clear();
+                            app.attachments_cache.borrow_mut().clear();
                             app.activity.clear();
                             app.ctx_used = 0;
                             app.todos = (0, 0);
                             app.booted = Instant::now();
-                            app.nucleo.reboot();
+                            app.core.reboot();
                             app.agents.clear();
                             app.push(Role::System, "conversación nueva · la anterior se retoma con /resume");
                             term.clear()?;
@@ -435,50 +435,50 @@ fn run(
                             args.extend(["--resume".into(), id.clone()]);
                             *claude = None;
                             *claude = Some(Claude::spawn(&args, tx.clone())?);
-                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
+                            app.effort = settings::read("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;
                             app.activity.clear();
                             app.todos = (0, 0);
                             app.booted = Instant::now();
-                            app.nucleo.reboot();
+                            app.core.reboot();
                             app.agents.clear();
-                            // Chat, herramientas y subagentes de la sesión: Ctrl+G los vuelve a ver.
+                            // The session's chat, tools and subagents: Ctrl+G shows them again.
                             let replay = sessions::replay(&id);
                             app.messages = replay.messages;
                             app.activity = replay.activity;
                             app.agents_done = replay.agents;
                             app.turn_from = app.activity.len();
                             app.md_cache.borrow_mut().clear();
-                            app.adjuntos_cache.borrow_mut().clear();
+                            app.attachments_cache.borrow_mut().clear();
                             app.push(Role::System, format!("sesión {} retomada", &id[..8]));
                             term.clear()?;
                         }
                         Flow::Redraw => term.clear()?,
-                        Flow::Relanzar => {
-                            relanzar(app, claude, extra, tx)?;
+                        Flow::Relaunch => {
+                            relaunch(app, claude, extra, tx)?;
                             app.push(Role::System, "motor relanzado con los ajustes nuevos");
                             term.clear()?;
                         }
                         Flow::Login => {
-                            cerrar_terminal(app);
-                            let hecho = login::iniciar();
-                            *term = abrir_terminal(app);
+                            close_terminal(app);
+                            let logged_in = login::log_in();
+                            *term = open_terminal(app);
                             term.clear()?;
                             app.sixel_shown = None;
                             app.thumbs_shown.clear();
-                            match hecho {
+                            match logged_in {
                                 Ok(true) => {
-                                    // El motor leyó las credenciales al arrancar: se relanza para
-                                    // que use la cuenta nueva.
-                                    relanzar(app, claude, extra, tx)?;
-                                    let quien = match login::cuenta() {
-                                        Some(login::Cuenta::Conectada(Some(email))) => format!(" como {email}"),
+                                    // The engine read the credentials at startup: relaunch it so
+                                    // it uses the new account.
+                                    relaunch(app, claude, extra, tx)?;
+                                    let who = match login::account() {
+                                        Some(login::Account::Connected(Some(email))) => format!(" como {email}"),
                                         _ => String::new(),
                                     };
-                                    app.sin_sesion = false;
-                                    app.push(Role::System, format!("sesión iniciada{quien}"));
+                                    app.no_session = false;
+                                    app.push(Role::System, format!("sesión iniciada{who}"));
                                 }
                                 Ok(false) => app.push(Role::Error, "no se inició sesión; vuelve a intentarlo con /login"),
                                 Err(e) => app.push(Role::Error, format!("no pude abrir claude auth login: {e}")),
@@ -506,17 +506,17 @@ fn run(
                 }
                 AppEvent::Claude(..) => {}
                 AppEvent::Voice(e) => on_voice(app, e, claude),
-                AppEvent::Habla(e) => match e {
-                    habla::HablaEvent::Start => app.talking = true,
-                    habla::HablaEvent::Level(l) => app.tts_level = l,
-                    habla::HablaEvent::Idle => {
+                AppEvent::Speech(e) => match e {
+                    speech::SpeechEvent::Start => app.talking = true,
+                    speech::SpeechEvent::Level(l) => app.tts_level = l,
+                    speech::SpeechEvent::Idle => {
                         app.talking = false;
                         app.tts_level = 0.0;
-                        if app.flotante && !app.busy {
+                        if app.floating && !app.busy {
                             app.hide_at = Some(Instant::now() + Duration::from_secs(3));
                         }
                     }
-                    habla::HablaEvent::Unavailable(why) => {
+                    speech::SpeechEvent::Unavailable(why) => {
                         app.push(Role::Error, format!("sin voz: {why}"));
                     }
                 },
@@ -537,16 +537,16 @@ fn run(
 
 enum Flow {
     Go,
-    /// `/clear`: conversación nueva, como en Claude Code. La anterior queda guardada.
+    /// `/clear`: new conversation, like in Claude Code. The previous one stays saved.
     NewChat,
     Redraw,
     Quit,
     Restart,
     Resume(String),
-    /// Bajar e instalar la versión nueva.
+    /// Download and install the new version.
     Update,
-    /// `/login`: iniciar sesión en Claude con la terminal entera.
+    /// `/login`: log in to Claude with the whole terminal.
     Login,
-    /// Relanzar el motor en la misma conversación: cambiaron permisos, modelo o esfuerzo.
-    Relanzar,
+    /// Relaunch the engine in the same conversation: permissions, model or effort changed.
+    Relaunch,
 }

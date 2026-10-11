@@ -1,9 +1,9 @@
-//! surco (~/code/surco), el reproductor: mientras Iris escucha o habla, la música se pausa,
-//! y al terminar se reanuda. Solo lo que Iris pausó: si ya la habías parado tú, no la toca.
+//! surco (~/code/surco), the player: while Iris listens or speaks, the music is paused, and
+//! when it ends it resumes. Only what Iris paused: if you had already stopped it, it's left alone.
 //!
-//! surco se activa por socket (systemd), así que `surco.sock` existe aunque no haya nada
-//! corriendo, y conectarse lo despertaría. Por eso primero se pregunta a systemd si el
-//! servicio ya está vivo; si no, no hay música que pausar.
+//! surco is socket-activated (systemd), so `surco.sock` exists even when nothing is running,
+//! and connecting would wake it up. That's why systemd is asked first whether the service is
+//! already alive; if not, there is no music to pause.
 
 use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
@@ -14,8 +14,8 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
-/// Entre frases, o mientras el motor piensa la respuesta que va a decir, el estado se apaga
-/// un momento: reanudar en seguida haría que la música asome a pedazos.
+/// Between sentences, or while the engine thinks up the reply it is going to say, the state
+/// goes off for a moment: resuming right away would make the music peek through in bits.
 const RESUME_DELAY: Duration = Duration::from_millis(1200);
 const IO_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -28,7 +28,7 @@ impl Surco {
     pub fn spawn() -> Self {
         let (tx, rx) = mpsc::channel::<bool>();
         thread::spawn(move || {
-            // Si fue Iris quien pausó, y por lo tanto le toca reanudar.
+            // Whether it was Iris that paused, and therefore its job to resume.
             let mut paused_by_us = false;
             let mut pending_resume = false;
             loop {
@@ -44,8 +44,8 @@ impl Surco {
                     Err(RecvTimeoutError::Timeout) => {
                         pending_resume = false;
                         paused_by_us = false;
-                        // Si mientras tanto le diste play tú, ya suena; si ya no hay pista, no hay
-                        // nada que reanudar.
+                        // If you pressed play yourself meanwhile, it's already playing; if there's no
+                        // track, there is nothing to resume.
                         if playing() == Some(false) {
                             send(r#"{"cmd":"resume"}"#);
                         }
@@ -57,7 +57,7 @@ impl Surco {
         Surco { tx, quiet: false }
     }
 
-    /// Se llama en cada vuelta: `true` mientras haga falta silencio. Solo los cambios viajan.
+    /// Called on every loop: `true` while silence is needed. Only the changes travel.
     pub fn quiet(&mut self, want: bool) {
         if want != self.quiet {
             self.quiet = want;
@@ -75,7 +75,7 @@ fn socket() -> PathBuf {
 }
 
 fn alive() -> bool {
-    // Con SURCO_SOCKET se apunta a una instancia de pruebas, fuera de systemd.
+    // With SURCO_SOCKET it points to a test instance, outside systemd.
     if std::env::var_os("SURCO_SOCKET").is_some() {
         return true;
     }
@@ -87,8 +87,8 @@ fn alive() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// `Some(true)` sonando, `Some(false)` en pausa con algo cargado, `None` sin surco o sin pista.
-/// El `idle` de surco no sirve aquí: es el `core-idle` de mpv, que también es cierto en pausa.
+/// `Some(true)` playing, `Some(false)` paused with something loaded, `None` no surco or no track.
+/// surco's `idle` is no use here: it's mpv's `core-idle`, which is also true while paused.
 fn playing() -> Option<bool> {
     let v = send(r#"{"cmd":"status"}"#)?;
     let p = v.get("payload")?;
@@ -98,9 +98,9 @@ fn playing() -> Option<bool> {
     Some(!p.get("playback")?.get("paused")?.as_bool()?)
 }
 
-/// Una petición, una línea de vuelta. Nada de esto debe colgar a Iris: todo con timeout.
+/// One request, one line back. None of this may hang Iris: everything with a timeout.
 fn send(req: &str) -> Option<serde_json::Value> {
-    // surco es de Linux (socket UNIX y systemd): en Windows no hay nada que pausar.
+    // surco is Linux-only (UNIX socket and systemd): on Windows there is nothing to pause.
     #[cfg(not(unix))]
     {
         let _ = req;

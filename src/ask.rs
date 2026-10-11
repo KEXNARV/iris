@@ -1,5 +1,5 @@
-//! Preguntas que el motor le hace al usuario (`AskUserQuestion`, o un permiso) y que esperan
-//! respuesta antes de seguir.
+//! Questions the engine asks the user (`AskUserQuestion`, or a permission) that wait for an
+//! answer before continuing.
 
 use serde_json::{Map, Value};
 
@@ -7,17 +7,17 @@ pub struct Question {
     pub header: String,
     pub text: String,
     pub multi: bool,
-    /// (etiqueta, descripción)
+    /// (label, description)
     pub options: Vec<(String, String)>,
 }
 
 pub struct Ask {
     pub request_id: String,
-    /// Un permiso para otra herramienta, no una `AskUserQuestion`.
+    /// A permission for another tool, not an `AskUserQuestion`.
     pub permission: bool,
     input: Value,
-    /// Las reglas propuestas por el motor, ya para esta sesión; vacío si no propuso ninguna.
-    reglas: Value,
+    /// The rules proposed by the engine, already scoped to this session; empty if it proposed none.
+    rules: Value,
     pub questions: Vec<Question>,
     pub step: usize,
     pub sel: usize,
@@ -28,23 +28,23 @@ pub struct Ask {
 pub enum Outcome {
     Next,
     Allow(Value),
-    /// Permitir y no volver a preguntar por lo mismo en esta sesión: (input, reglas).
-    Siempre(Value, Value),
+    /// Allow and don't ask again about the same thing in this session: (input, rules).
+    Always(Value, Value),
     Deny(String),
 }
 
 const ALLOW: &str = "Permitir";
-const SIEMPRE: &str = "Siempre";
+const ALWAYS: &str = "Siempre";
 
 impl Ask {
     pub fn new(request_id: String, tool: String, input: Value, suggestions: Value) -> Self {
         let s = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
         let permission = tool != "AskUserQuestion";
-        let reglas = if permission { para_la_sesion(&suggestions) } else { Value::Null };
+        let rules = if permission { session_rules(&suggestions) } else { Value::Null };
         let questions = if permission {
             let mut options = vec![(ALLOW.into(), "una vez".into())];
-            if !reglas.is_null() {
-                options.push((SIEMPRE.into(), format!("en esta sesión: {}", resumen(&reglas))));
+            if !rules.is_null() {
+                options.push((ALWAYS.into(), format!("en esta sesión: {}", summary(&rules))));
             }
             options.push(("Rechazar".into(), "Claude sigue sin esta herramienta".into()));
             vec![Question {
@@ -76,7 +76,7 @@ impl Ask {
             request_id,
             permission,
             input,
-            reglas,
+            rules,
             questions,
             step: 0,
             sel: 0,
@@ -100,7 +100,7 @@ impl Ask {
         }
     }
 
-    /// Responde la pregunta en curso: con `typed` si escribió algo, si no con lo elegido.
+    /// Answers the current question: with `typed` if something was typed, otherwise with the selection.
     pub fn answer(&mut self, typed: &str) -> Outcome {
         let q = self.current();
         let answer = if !typed.trim().is_empty() {
@@ -120,8 +120,8 @@ impl Ask {
         if self.permission {
             return if answer == ALLOW {
                 Outcome::Allow(self.input.clone())
-            } else if answer == SIEMPRE {
-                Outcome::Siempre(self.input.clone(), self.reglas.clone())
+            } else if answer == ALWAYS {
+                Outcome::Always(self.input.clone(), self.rules.clone())
             } else {
                 Outcome::Deny(format!("el usuario no lo permitió: {answer}"))
             };
@@ -140,11 +140,11 @@ impl Ask {
     }
 }
 
-/// Las reglas que propone el motor, pero solo para esta sesión: las sugerencias vienen para
-/// guardarse en `.claude/settings.local.json` y aquí no se quiere tocar ningún archivo.
-/// `Null` si no hay ninguna.
-fn para_la_sesion(sugerencias: &Value) -> Value {
-    let reglas: Vec<Value> = sugerencias
+/// The rules the engine proposes, but only for this session: the suggestions come meant to be
+/// saved in `.claude/settings.local.json` and here we don't want to touch any file.
+/// `Null` if there are none.
+fn session_rules(suggestions: &Value) -> Value {
+    let rules: Vec<Value> = suggestions
         .as_array()
         .into_iter()
         .flatten()
@@ -154,26 +154,26 @@ fn para_la_sesion(sugerencias: &Value) -> Value {
             r
         })
         .collect();
-    if reglas.is_empty() { Value::Null } else { Value::Array(reglas) }
+    if rules.is_empty() { Value::Null } else { Value::Array(rules) }
 }
 
-/// «Bash(touch /tmp/x), carpeta /tmp»: lo que queda permitido, para la opción del menú.
-fn resumen(reglas: &Value) -> String {
-    let mut partes = vec![];
-    for r in reglas.as_array().into_iter().flatten() {
+/// «Bash(touch /tmp/x), carpeta /tmp»: what stays allowed, for the menu option.
+fn summary(rules: &Value) -> String {
+    let mut parts = vec![];
+    for r in rules.as_array().into_iter().flatten() {
         for x in r["rules"].as_array().into_iter().flatten() {
             let tool = x["toolName"].as_str().unwrap_or("");
             match x["ruleContent"].as_str() {
-                Some(c) => partes.push(format!("{tool}({c})")),
-                None => partes.push(tool.to_string()),
+                Some(c) => parts.push(format!("{tool}({c})")),
+                None => parts.push(tool.to_string()),
             }
         }
         for d in r["directories"].as_array().into_iter().flatten() {
-            partes.push(format!("carpeta {}", d.as_str().unwrap_or("")));
+            parts.push(format!("carpeta {}", d.as_str().unwrap_or("")));
         }
         if let Some(m) = r["mode"].as_str() {
-            partes.push(format!("modo {m}"));
+            parts.push(format!("modo {m}"));
         }
     }
-    partes.join(", ")
+    parts.join(", ")
 }

@@ -1,15 +1,15 @@
-//! Menú de comandos: aparece en cuanto la orden empieza con `/`.
+//! Command menu: shows up as soon as the input starts with `/`.
 
 use std::path::Path;
 
 pub struct Command {
     pub name: String,
     pub desc: String,
-    /// Lo resuelve Iris; si no, la orden se le pasa tal cual al motor.
+    /// Handled by Iris; otherwise the command is passed as-is to the engine.
     pub local: bool,
 }
 
-/// Los que `claude -p` no entiende y Iris resuelve él mismo.
+/// The ones `claude -p` doesn't understand and Iris handles itself.
 const LOCAL: &[(&str, &str)] = &[
     ("resume", "retomar una sesión anterior · /resume N"),
     ("model", "cambiar de modelo · /model sonnet"),
@@ -28,20 +28,20 @@ const LOCAL: &[(&str, &str)] = &[
     ("quit", "salir de Iris (^C)"),
 ];
 
-/// Comandos propios más los skills del usuario. Los que traen los plugins solo se conocen
-/// cuando el motor manda su `init`, en el primer turno; esos se suman con `add_skills`.
+/// Built-in commands plus the user's skills. Those from plugins are only known when the engine
+/// sends its `init`, on the first turn; they are added with `add_skills`.
 pub fn load() -> Vec<Command> {
     let mut out: Vec<Command> = LOCAL
         .iter()
         .map(|(n, d)| Command { name: n.to_string(), desc: d.to_string(), local: true })
         .collect();
-    // Este sí lo entiende `claude -p`; va aquí para que salga en el menú desde el arranque.
+    // `claude -p` does understand this one; it goes here so it shows in the menu from startup.
     out.push(Command {
         name: "compact".into(),
         desc: "resumir la conversación para liberar contexto".into(),
         local: false,
     });
-    let home = crate::rutas::home().unwrap_or_default();
+    let home = crate::paths::home().unwrap_or_default();
     for dir in [home.join(".claude").join("skills"), ".claude/skills".into()] {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
         for e in entries.flatten() {
@@ -55,7 +55,7 @@ pub fn load() -> Vec<Command> {
     out
 }
 
-/// (nivel, para qué); `auto` deja el que trae el modelo.
+/// (level, what for); `auto` keeps the model's default.
 pub const EFFORTS: &[(&str, &str)] = &[
     ("auto", "el que trae el modelo"),
     ("low", "rápido, piensa poco"),
@@ -65,7 +65,7 @@ pub const EFFORTS: &[(&str, &str)] = &[
     ("max", "piensa todo lo que haga falta"),
 ];
 
-/// (id, nombre, para qué)
+/// (id, name, what for)
 pub const MODELS: &[(&str, &str, &str)] = &[
     ("claude-opus-5-5", "Opus 5.5", ""),
     ("claude-fable-5-1", "Fable 5.1", ""),
@@ -81,7 +81,7 @@ pub fn add_skills(cmds: &mut Vec<Command>, names: &[String]) {
     }
 }
 
-/// `name` y la primera línea de `description` del frontmatter (admite `description: >`).
+/// `name` and the first line of `description` from the frontmatter (supports `description: >`).
 fn skill_meta(path: &Path) -> Option<(String, String)> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut lines = text.lines().skip_while(|l| l.trim() != "---").skip(1);
@@ -104,8 +104,8 @@ fn skill_meta(path: &Path) -> Option<(String, String)> {
     Some((name?, desc))
 }
 
-/// Lo que cabe con lo escrito: primero los que empiezan así, luego los que lo contienen.
-/// Solo mientras se escribe el nombre; con el primer espacio el menú se cierra.
+/// What matches the input: first those that start with it, then those that contain it.
+/// Only while typing the name; the first space closes the menu.
 pub fn matches<'a>(cmds: &'a [Command], input: &str) -> Vec<&'a Command> {
     let Some(q) = input.strip_prefix('/') else { return vec![] };
     if q.contains(char::is_whitespace) {

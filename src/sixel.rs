@@ -1,15 +1,15 @@
-//! Codificador Sixel mínimo para el núcleo: una imagen de índices de paleta (0 = transparente)
-//! con pocos colores fijos. Sin cuantizar ni difuminar: los puntos tienen colores exactos.
+//! Minimal Sixel encoder for the core: an image of palette indices (0 = transparent) with a
+//! few fixed colors. No quantizing or dithering: the dots have exact colors.
 //!
-//! Formato: `ESC P 0;1;0 q`, atributos de trama 1:1 con el tamaño, la paleta en RGB 0-100 y
-//! la imagen en franjas de 6 filas; por cada color de la franja, un carácter por columna con
-//! los 6 bits de esas filas, y las repeticiones comprimidas como `!n`.
+//! Format: `ESC P 0;1;0 q`, 1:1 raster attributes with the size, the palette in RGB 0-100 and
+//! the image in 6-row bands; for each color in the band, one character per column with the
+//! 6 bits of those rows, and repeats compressed as `!n`.
 
 use std::fmt::Write;
 
 pub fn encode(img: &[u8], w: usize, h: usize, colors: &[[f64; 3]]) -> String {
     let mut out = String::with_capacity(w * h / 4);
-    // P2 = 1: los píxeles sin color quedan transparentes (se ve lo que hay detrás).
+    // P2 = 1: uncolored pixels stay transparent (what's behind shows through).
     let _ = write!(out, "\x1bP0;1;0q\"1;1;{w};{h}");
     for (i, c) in colors.iter().enumerate() {
         let pct = |v: f64| (v / 255.0 * 100.0).round().clamp(0.0, 100.0) as u32;
@@ -43,11 +43,11 @@ pub fn encode(img: &[u8], w: usize, h: usize, colors: &[[f64; 3]]) -> String {
                 continue;
             }
             if !first {
-                out.push('$'); // volver al principio de la franja para el siguiente color
+                out.push('$'); // back to the start of the band for the next color
             }
             first = false;
             let _ = write!(out, "#{}", c + 1);
-            // Lo vacío del final no hace falta mandarlo.
+            // Trailing empty space doesn't need to be sent.
             let end = cols[c].iter().rposition(|&b| b != 0).map_or(0, |e| e + 1);
             let mut x = 0;
             while x < end {
@@ -78,21 +78,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codifica_un_punto() {
-        // 2×7: un píxel del color 1 arriba a la izquierda, otro del 2 en la segunda franja.
+    fn encodes_a_dot() {
+        // 2×7: one pixel of color 1 at the top left, another of color 2 in the second band.
         let mut img = vec![0u8; 2 * 7];
         img[0] = 1;
         img[6 * 2 + 1] = 2;
         let s = encode(&img, 2, 7, &[[255.0, 0.0, 0.0], [0.0, 0.0, 255.0]]);
         assert!(s.starts_with("\x1bP0;1;0q\"1;1;2;7#1;2;100;0;0#2;2;0;0;100"), "{s:?}");
-        // Franja 1: color 1, bit 0 en la columna 0. Franja 2: color 2, bit 0 en la columna 1.
+        // Band 1: color 1, bit 0 in column 0. Band 2: color 2, bit 0 in column 1.
         assert!(s.contains("#1@-"), "{s:?}");
         assert!(s.contains("#2?@-"), "{s:?}");
         assert!(s.ends_with("\x1b\\"));
     }
 
     #[test]
-    fn comprime_repeticiones() {
+    fn compresses_repeats() {
         let img = vec![1u8; 10];
         let s = encode(&img, 10, 1, &[[0.0, 0.0, 0.0]]);
         assert!(s.contains("#1!10@"), "{s:?}");

@@ -16,9 +16,9 @@ serde_json = "1.0.151"
 textwrap = "0.16.4"
 unicode-width = "0.2.2"
 wasmi = { version = "2", optional = true }
-iris-pieza = { path = "crates/iris-pieza", optional = true }
+iris-piece = { path = "crates/iris-piece", optional = true }
 
-# Whisper con Vulkan donde hay SDK a mano (Linux); en Windows, por ahora en CPU.
+# Whisper with Vulkan where the SDK is at hand (Linux); on Windows, CPU for now.
 [target.'cfg(not(windows))'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["vulkan"] }
 
@@ -27,9 +27,9 @@ whisper-rs = "0.16.0"
 
 
 [features]
-# El host de piezas en WebAssembly (la tienda). La web compila el mismo núcleo sin esto.
-default = ["piezas"]
-piezas = ["dep:wasmi", "dep:iris-pieza"]
+# The WebAssembly piece host (the store). The web build compiles the same core without it.
+default = ["pieces"]
+pieces = ["dep:wasmi", "dep:iris-piece"]
 
 [dev-dependencies]
 wat = "1.261.0"

@@ -1,5 +1,5 @@
-//! Selección con el mouse dentro de la conversación. La de la terminal agarra filas enteras de
-//! pantalla (núcleo, bordes, actividad); esta solo ve el texto del chat.
+//! Mouse selection inside the conversation. The terminal's grabs whole screen rows (core,
+//! borders, activity); this one only sees the chat text.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -7,16 +7,16 @@ use std::process::{Command, Stdio};
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-/// Una fila del chat tal como se ve.
+/// A chat row as it is shown.
 pub struct Row {
     pub text: String,
-    /// Columnas de decoración al inicio (sangría, `│ ` del código, `· ` de los avisos).
+    /// Decoration columns at the start (indent, the code's `│ `, the notices' `· `).
     pub skip: usize,
-    /// Sigue a la fila anterior porque el párrafo no cupo en una línea.
+    /// Continues the previous row because the paragraph didn't fit on one line.
     pub cont: bool,
 }
 
-/// Lo último que se dibujó del chat: dónde está, todas sus filas y cuál es la primera visible.
+/// The last thing drawn of the chat: where it is, all its rows and which is the first visible.
 #[derive(Default)]
 pub struct View {
     pub area: Rect,
@@ -25,12 +25,12 @@ pub struct View {
 }
 
 impl View {
-    /// Hasta dónde se puede subir: más allá ya no hay texto.
+    /// How far up you can scroll: beyond that there is no more text.
     pub fn max_scroll(&self) -> usize {
         self.rows.len().saturating_sub(self.area.height as usize)
     }
 
-    /// De pantalla a (fila de la conversación, columna), recortado al área del chat.
+    /// From screen to (conversation row, column), clamped to the chat area.
     pub fn locate(&self, (x, y): (u16, u16)) -> (usize, usize) {
         let a = self.area;
         let y = y.clamp(a.y, a.bottom().saturating_sub(1));
@@ -39,17 +39,17 @@ impl View {
     }
 }
 
-/// En coordenadas de la conversación, no de pantalla: al desplazar el chat la selección se
-/// queda pegada al texto.
+/// In conversation coordinates, not screen ones: when the chat scrolls the selection stays
+/// stuck to the text.
 pub struct Selection {
     pub anchor: (usize, usize),
     pub head: (usize, usize),
-    /// Dónde está el puntero mientras se arrastra; al desplazar, la punta se recalcula con él.
+    /// Where the pointer is while dragging; when scrolling, the head is recomputed with it.
     pub pointer: Option<(u16, u16)>,
 }
 
 impl Selection {
-    /// (inicio, fin) en orden de lectura.
+    /// (start, end) in reading order.
     fn ordered(&self) -> ((usize, usize), (usize, usize)) {
         if self.anchor <= self.head { (self.anchor, self.head) } else { (self.head, self.anchor) }
     }
@@ -58,7 +58,7 @@ impl Selection {
         self.anchor == self.head
     }
 
-    /// Las celdas de pantalla a resaltar, solo de las filas que se ven.
+    /// The screen cells to highlight, only from the visible rows.
     pub fn cells(&self, view: &View) -> Vec<(u16, u16)> {
         let ((r0, c0), (r1, c1)) = self.ordered();
         let a = view.area;
@@ -77,7 +77,7 @@ impl Selection {
         out
     }
 
-    /// El texto seleccionado, sin decoración y con los párrafos partidos vueltos a unir.
+    /// The selected text, without decoration and with broken paragraphs joined back together.
     pub fn text(&self, view: &View) -> String {
         let ((r0, c0), (r1, c1)) = self.ordered();
         let mut out = String::new();
@@ -95,7 +95,7 @@ impl Selection {
     }
 }
 
-/// Lo que cae entre las columnas `from` y `to` (ancho de pantalla, no bytes).
+/// What falls between columns `from` and `to` (screen width, not bytes).
 fn columns(s: &str, from: usize, to: usize) -> String {
     let mut col = 0;
     let mut out = String::new();
@@ -111,7 +111,7 @@ fn columns(s: &str, from: usize, to: usize) -> String {
     out
 }
 
-/// Al portapapeles de Wayland; si no hay `wl-copy`, por OSC 52, que foot entiende.
+/// To the Wayland clipboard; if there is no `wl-copy`, via OSC 52, which foot understands.
 pub fn copy(text: &str) -> bool {
     let wl = Command::new("wl-copy").stdin(Stdio::piped()).spawn().and_then(|mut c| {
         c.stdin.take().unwrap().write_all(text.as_bytes())?;
@@ -164,19 +164,19 @@ mod tests {
     }
 
     #[test]
-    fn quita_decoracion_y_une_parrafos() {
+    fn strips_decoration_and_joins_paragraphs() {
         assert_eq!(sel((1, 0), (3, 39)).text(&view(0)), "Un párrafo largo que no cupo en una línea.\ncargo build");
     }
 
     #[test]
-    fn respeta_columnas_en_la_primera_y_ultima_fila() {
-        // «párrafo» empieza en la columna 5; «largo» termina en la 17.
+    fn keeps_columns_on_first_and_last_row() {
+        // «párrafo» starts at column 5; «largo» ends at 17.
         assert_eq!(sel((1, 18), (1, 5)).text(&view(0)), "párrafo largo");
     }
 
     #[test]
-    fn copia_lo_que_quedo_fuera_de_pantalla() {
-        // Solo se ven las filas 2 y 3, pero la selección empezó en la 1.
+    fn copies_what_scrolled_off_screen() {
+        // Only rows 2 and 3 are visible, but the selection started at 1.
         let v = view(2);
         assert_eq!(v.locate((5, 1)), (2, 4));
         let s = sel((1, 0), v.locate((40, 2)));
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn base64_estandar() {
+    fn base64_standard() {
         assert_eq!(base64(b"hola"), "aG9sYQ==");
         assert_eq!(base64("ñ".as_bytes()), "w7E=");
     }

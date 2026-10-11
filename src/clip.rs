@@ -1,20 +1,20 @@
-//! Imágenes para adjuntar: del portapapeles (Ctrl+V) o de rutas pegadas o arrastradas a la
-//! terminal. La terminal solo pega texto, así que el portapapeles se lee con `wl-paste`.
+//! Images to attach: from the clipboard (Ctrl+V) or from paths pasted or dragged into the
+//! terminal. The terminal only pastes text, so the clipboard is read with `wl-paste`.
 
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{anyhow, bail, Result};
 
-/// La API acepta hasta 5 MB por imagen; más que eso se achica.
+/// The API accepts up to 5 MB per image; anything bigger gets shrunk.
 const MAX_BYTES: usize = 5 * 1024 * 1024;
 
 pub struct Image {
     pub media: String,
-    /// En base64, listo para el bloque `image` del mensaje.
+    /// In base64, ready for the message's `image` block.
     pub data: String,
     pub bytes: usize,
-    /// Los bytes tal cual, para la miniatura del chat.
+    /// The raw bytes, for the chat thumbnail.
     pub raw: Vec<u8>,
 }
 
@@ -32,7 +32,7 @@ pub enum Clip {
 
 const TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-/// Lo que haya en el portapapeles: una imagen si la hay, si no el texto.
+/// Whatever is on the clipboard: an image if there is one, otherwise the text.
 pub fn paste() -> Result<Clip> {
     let out = Command::new("wl-paste").arg("--list-types").output().map_err(|_| anyhow!("falta wl-paste (wl-clipboard)"))?;
     let types = String::from_utf8_lossy(&out.stdout);
@@ -43,7 +43,7 @@ pub fn paste() -> Result<Clip> {
     if types.lines().any(|l| l.starts_with("text/")) {
         let raw = Command::new("wl-paste").arg("--no-newline").output()?.stdout;
         let text = String::from_utf8_lossy(&raw).into_owned();
-        // Copiar un archivo en el gestor de archivos deja su ruta (o un file://) como texto.
+        // Copying a file in the file manager leaves its path (or a file://) as text.
         if let Some(imgs) = paths(&text) {
             if let [one] = &imgs[..] {
                 return Ok(Clip::Image(read(one)?));
@@ -54,8 +54,8 @@ pub fn paste() -> Result<Clip> {
     Ok(Clip::Nothing)
 }
 
-/// Si el texto pegado son solo rutas a imágenes (arrastrar archivos a foot las pega así),
-/// las rutas; si no, `None` y se trata como texto.
+/// If the pasted text is only paths to images (dragging files into foot pastes them like this),
+/// the paths; otherwise `None` and it is treated as text.
 pub fn paths(text: &str) -> Option<Vec<String>> {
     let items: Vec<String> = text
         .split(['\n', '\r'])
@@ -85,7 +85,7 @@ fn image(raw: Vec<u8>, media: &str) -> Result<Image> {
     Ok(Image { media: media.into(), bytes: raw.len(), data: crate::select::base64(&raw), raw })
 }
 
-/// Achica con ImageMagick a JPEG de 2000 px de lado como máximo.
+/// Shrinks with ImageMagick to a JPEG at most 2000 px on a side.
 fn shrink(raw: &[u8]) -> Result<Vec<u8>> {
     use std::io::Write;
     use std::process::Stdio;
@@ -114,7 +114,7 @@ fn media_of(p: &Path) -> Option<&'static str> {
     }
 }
 
-/// Palabras como las separa un shell: comillas simples o dobles y `\ ` para los espacios.
+/// Words as a shell splits them: single or double quotes and `\ ` for spaces.
 fn shell_words(line: &str) -> Vec<String> {
     let mut out = vec![];
     let mut cur = String::new();
@@ -170,7 +170,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reconoce_rutas_de_imagenes() {
+    fn recognizes_image_paths() {
         let dir = std::env::temp_dir().join("iris-clip-test");
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("captura de pantalla.png");
@@ -179,17 +179,17 @@ mod tests {
         assert_eq!(paths(&format!("'{s}'")), Some(vec![s.clone()]));
         assert_eq!(paths(&s.replace(' ', "\\ ")), Some(vec![s.clone()]));
         assert_eq!(paths(&format!("file://{}", s.replace(' ', "%20"))), Some(vec![s.clone()]));
-        // Texto normal, o una ruta que no es imagen, se pega como texto.
+        // Plain text, or a path that is not an image, is pasted as text.
         assert_eq!(paths("hola mundo"), None);
         assert_eq!(paths("/etc/hostname"), None);
     }
 }
 
-/// `cargo test clip::de_verdad -- --ignored --nocapture`: lee el portapapeles real.
+/// `cargo test clip::real_clipboard -- --ignored --nocapture`: reads the real clipboard.
 #[cfg(test)]
 #[test]
 #[ignore]
-fn de_verdad() {
+fn real_clipboard() {
     match paste().unwrap() {
         Clip::Image(i) => println!("imagen {} · {} bytes · base64 {}", i.media, i.bytes, i.data.len()),
         Clip::Text(t) => println!("texto: {t:?}"),

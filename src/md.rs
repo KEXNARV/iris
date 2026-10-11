@@ -1,10 +1,10 @@
-//! Markdown de las respuestas, dibujado para la terminal: títulos, párrafos, listas anidadas
-//! y numeradas, tareas, citas, código con su lenguaje, tablas con columnas que caben en el
-//! ancho, enlaces, cursiva, tachado y líneas horizontales.
+//! Markdown from the replies, drawn for the terminal: headings, paragraphs, nested and
+//! numbered lists, tasks, quotes, code with its language, tables with columns that fit the
+//! width, links, italics, strikethrough and horizontal rules.
 //!
-//! Cada fila sale con `(línea, skip, cont)`, lo que necesita la selección del mouse: `skip`
-//! son las columnas de decoración que no se copian y `cont` marca las filas que continúan la
-//! anterior (al copiar se unen con un espacio en vez de un salto).
+//! Each row comes out as `(line, skip, cont)`, which is what mouse selection needs: `skip`
+//! is the decoration columns that aren't copied and `cont` marks rows that continue the
+//! previous one (when copying they are joined with a space instead of a newline).
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Color, Modifier, Style};
@@ -22,11 +22,11 @@ struct Seg {
     style: Style,
 }
 
-/// Lo que va delante de cada fila según dónde está: sangría de listas y barras de cita.
+/// What goes in front of each row depending on where it is: list indentation and quote bars.
 #[derive(Clone)]
 enum Frame {
     Quote,
-    /// Ítem de lista: el ancho de su marca, para que las líneas siguientes queden colgadas.
+    /// List item: the width of its marker, so the following lines hang.
     Item(usize),
 }
 
@@ -49,7 +49,7 @@ struct R {
     segs: Vec<Seg>,
     frames: Vec<Frame>,
     lists: Vec<List>,
-    /// La marca del ítem recién abierto («• », «3. », «○ »): va en su primera fila.
+    /// The marker of the item just opened («• », «3. », «○ »): goes on its first row.
     marker: Option<String>,
     bold: u32,
     italic: u32,
@@ -82,7 +82,7 @@ pub fn render(text: &str, width: usize) -> Vec<Row> {
     }
     r.flush();
     if let Some((lang, body)) = r.code.take() {
-        r.code_block(&lang, &body); // bloque todavía abierto mientras llega el streaming
+        r.code_block(&lang, &body); // block still open while streaming arrives
     }
     while r.out.last().is_some_and(|l| is_blank(&l.0)) {
         r.out.pop();
@@ -122,15 +122,15 @@ impl R {
         s
     }
 
-    /// Texto corrido: las URL sueltas salen como enlace (subrayadas, en el acento), porque un
-    /// clic sobre ellas las abre (enlace.rs).
-    fn texto(&mut self, t: &str) {
+    /// Running text: bare URLs come out as links (underlined, in the accent), because a
+    /// click on them opens them (link.rs).
+    fn text(&mut self, t: &str) {
         let base = self.style();
         if self.link.is_some() {
             return self.push(t, base);
         }
         let mut rest = t;
-        for url in crate::enlace::urls(t) {
+        for url in crate::link::urls(t) {
             let Some(i) = rest.find(&url) else { continue };
             if i > 0 {
                 self.push(&rest[..i], base);
@@ -151,7 +151,7 @@ impl R {
         }
     }
 
-    /// Prefijo de las filas: sangría (no se copia) y barras de cita.
+    /// Row prefix: indentation (not copied) and quote bars.
     fn prefix(&self, first: bool) -> (Vec<Span<'static>>, usize) {
         let mut spans = vec![Span::raw("  ")];
         let mut w = 2;
@@ -162,7 +162,7 @@ impl R {
                     spans.push(Span::styled("▎ ", Style::new().fg(theme::dim())));
                     w += 2;
                 }
-                // La marca del ítem más interno va en su primera fila; en las demás, el hueco.
+                // The innermost item's marker goes on its first row; on the others, the gap.
                 Frame::Item(mw) if Some(i) == last_item && first && self.marker.is_some() => {
                     let _ = mw;
                 }
@@ -181,7 +181,7 @@ impl R {
         }
     }
 
-    /// Separación antes de un bloque: solo fuera de las listas, que van juntas.
+    /// Spacing before a block: only outside lists, which stay together.
     fn gap(&mut self) {
         if self.lists.is_empty() {
             self.blank();
@@ -228,7 +228,7 @@ impl R {
         match ev {
             Event::Start(tag) => self.start(tag),
             Event::End(tag) => self.end(tag),
-            Event::Text(t) => self.texto(&t),
+            Event::Text(t) => self.text(&t),
             Event::Code(t) => {
                 let st = Style::new().fg(GREEN);
                 self.push(&t, st);
@@ -261,7 +261,7 @@ impl R {
         match tag {
             Tag::Paragraph => {
                 self.flush();
-                // Dentro de un ítem, el primer párrafo va en la fila de la marca.
+                // Inside an item, the first paragraph goes on the marker's row.
                 if self.marker.is_none() {
                     self.gap();
                 }
@@ -297,7 +297,7 @@ impl R {
             }
             Tag::Item => {
                 self.flush();
-                // El símbolo cambia por nivel de viñetas; las numeradas no cuentan.
+                // The symbol changes per bullet level; numbered ones don't count.
                 let depth = self.lists.iter().filter(|l| l.next.is_none()).count().saturating_sub(1);
                 let marker = match self.lists.last_mut().and_then(|l| l.next.as_mut()) {
                     Some(n) => {
@@ -417,8 +417,8 @@ impl R {
         let room = self.width.saturating_sub(w + 2).max(10);
         for line in body.trim_end_matches('\n').lines() {
             let line = line.replace('\t', "    ");
-            // El código no se reparte por palabras: se corta justo al ancho y se marca la
-            // continuación con «↪», para no confundirla con una línea nueva.
+            // Code isn't split by words: it's cut right at the width and the continuation is
+            // marked with «↪», so it isn't mistaken for a new line.
             for (i, piece) in hard_wrap(&line, room.saturating_sub(2)).into_iter().enumerate() {
                 let mut spans = base.clone();
                 spans.push(Span::styled(if i == 0 { "│ " } else { "│↪" }, dim));
@@ -444,8 +444,8 @@ impl R {
             .collect();
         let (base, w) = self.prefix(false);
         let avail = self.width.saturating_sub(w + 3 * (n - 1)).max(n * 4);
-        // Si no cabe, se angosta la columna más ancha una y otra vez; el texto se reparte en
-        // varias filas dentro de su celda.
+        // If it doesn't fit, the widest column is narrowed again and again; the text wraps onto
+        // several rows within its cell.
         while widths.iter().sum::<usize>() > avail {
             let (j, &m) = widths.iter().enumerate().max_by_key(|(_, w)| **w).unwrap();
             if m <= 4 {
@@ -509,8 +509,8 @@ impl R {
     }
 }
 
-/// Reparte segmentos con estilo en filas de `width` columnas, cortando entre palabras; una
-/// palabra más larga que la fila se corta donde toca.
+/// Wraps styled segments into rows of `width` columns, breaking between words; a word
+/// longer than the row is cut wherever it falls.
 fn wrap(segs: &[Seg], width: usize) -> Vec<Vec<Seg>> {
     let width = width.max(1);
     let mut lines: Vec<Vec<Seg>> = vec![vec![]];
@@ -533,7 +533,7 @@ fn wrap(segs: &[Seg], width: usize) -> Vec<Vec<Seg>> {
                 continue;
             }
             if col + ww > width && col > 0 {
-                // El espacio que quedó al final de la fila no se ve ni se copia.
+                // The space left at the end of the row is neither shown nor copied.
                 if let Some(s) = lines.last_mut().unwrap().last_mut() {
                     let t = s.text.trim_end().to_string();
                     s.text = t;
@@ -601,26 +601,26 @@ mod tests {
     }
 
     #[test]
-    fn listas_anidadas_y_numeradas() {
+    fn nested_and_numbered_lists() {
         let t = text(&render("1. uno\n2. dos\n   - a\n   - b\n     - c\n3. tres", 60));
         assert_eq!(t, vec!["  1. uno", "  2. dos", "     • a", "     • b", "       ◦ c", "  3. tres"]);
     }
 
     #[test]
-    fn la_lista_cuelga_las_lineas_partidas() {
+    fn list_hangs_wrapped_lines() {
         let t = text(&render("- una frase bastante larga que no cabe en el ancho", 24));
         assert_eq!(t[0], "  • una frase bastante");
         assert!(t[1].starts_with("    "), "{t:?}");
     }
 
     #[test]
-    fn tabla_con_columnas_alineadas() {
+    fn table_with_aligned_columns() {
         let t = text(&render("| a | bb |\n|---|--:|\n| ccc | d |", 60));
         assert_eq!(t, vec!["  a   │ bb", "  ────┼───", "  ccc │  d"]);
     }
 
     #[test]
-    fn tabla_ancha_se_reparte_en_filas() {
+    fn wide_table_wraps_into_rows() {
         let md = "| col | descripción |\n|---|---|\n| x | una descripción muy larga que no entra en la pantalla de ninguna manera |";
         let rows = render(md, 40);
         for (l, _, _) in &rows {
@@ -630,16 +630,16 @@ mod tests {
     }
 
     #[test]
-    fn codigo_con_lenguaje_y_corte() {
+    fn code_with_language_and_wrap() {
         let t = text(&render("```rust\nfn main() {}\n```", 60));
         assert_eq!(t, vec!["  ╭─ rust", "  │ fn main() {}", "  ╰─"]);
-        let largo = format!("```\n{}\n```", "x".repeat(80));
-        let t = text(&render(&largo, 40));
+        let long_line = format!("```\n{}\n```", "x".repeat(80));
+        let t = text(&render(&long_line, 40));
         assert!(t[2].starts_with("  │↪"), "{t:?}");
     }
 
     #[test]
-    fn enlaces_tareas_y_citas() {
+    fn links_tasks_and_quotes() {
         let t = text(&render("[docs](https://x.y) y <https://a.b>", 80));
         assert_eq!(t[0], "  docs (https://x.y) y https://a.b");
         let t = text(&render("- [x] hecho\n- [ ] falta", 80));
@@ -649,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn parrafos_separados_y_bloque_abierto_en_streaming() {
+    fn separate_paragraphs_and_open_block_while_streaming() {
         let t = text(&render("uno\n\ndos", 80));
         assert_eq!(t, vec!["  uno", "", "  dos"]);
         let t = text(&render("```sh\nls", 80));
@@ -657,11 +657,11 @@ mod tests {
     }
 }
 
-/// `IRIS_SNAPSHOT=1 cargo test md::snapshot` deja target/md.html con una respuesta de muestra.
+/// `IRIS_SNAPSHOT=1 cargo test md::snapshot` writes target/md.html with a sample reply.
 #[cfg(test)]
 #[test]
 fn snapshot() {
-    if !crate::rutas::hay_var("SNAPSHOT") {
+    if !crate::paths::has_var("SNAPSHOT") {
         return;
     }
     crate::theme::poll();

@@ -1,4 +1,4 @@
-//! La conversación: filas de mensajes y herramientas, con su markdown, y cómo se pinta en un panel.
+//! The conversation: rows of messages and tools, with their markdown, and how it is painted in a panel.
 
 use super::*;
 
@@ -7,7 +7,7 @@ pub(in crate::ui) fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let width = inner.width.saturating_sub(4).max(10) as usize;
-    let rows = chat_rows(app, width, Voz::Clasico);
+    let rows = chat_rows(app, width, Voice::Clasico);
     render_chat(f, inner, app, rows);
     let scroll = app.scroll.min(app.view.borrow().rows.len().saturating_sub(inner.height as usize));
     if scroll > 0 {
@@ -17,32 +17,32 @@ pub(in crate::ui) fn draw_chat(f: &mut Frame, area: Rect, app: &App) {
     }
 }
 
-/// Cómo se rotula quién habla en la conversación.
+/// How who is speaking gets labeled in the conversation.
 #[derive(Clone, Copy, PartialEq)]
-pub(in crate::ui) enum Voz {
-    /// «TÚ» / «Iris» en su propia fila.
+pub(in crate::ui) enum Voice {
+    /// «TÚ» / «Iris» on their own row.
     Clasico,
-    /// Un margen de 10 columnas con el nombre alineado a la derecha: un guion.
-    Guion,
-    /// «▸ TÚ» / «◆ Iris», como un canal de radio.
-    Canal,
+    /// A 10-column margin with the name right-aligned: a script.
+    Script,
+    /// «▸ TÚ» / «◆ Iris», like a radio channel.
+    Channel,
 }
 
-pub(in crate::ui) const GUION: usize = 10;
+pub(in crate::ui) const SCRIPT_PAD: usize = 10;
 
-/// Las filas de la conversación. Cada una lleva cuántas columnas de decoración tiene al
-/// inicio y si sigue a la anterior por el ajuste de línea: al copiar se quita lo primero y
-/// se vuelven a unir los párrafos.
-pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'static>, usize, bool)> {
+/// The conversation rows. Each carries how many columns of decoration it has at the
+/// start and whether it continues the previous one through line wrapping: when copying, the
+/// former is stripped and paragraphs are joined back together.
+pub(in crate::ui) fn chat_rows(app: &App, width: usize, voice: Voice) -> Vec<(Line<'static>, usize, bool)> {
     let mut rows: Vec<(Line<'static>, usize, bool)> = Vec::new();
     let blank = || (Line::default(), 0, false);
-    let pad = if voz == Voz::Guion { GUION } else { 2 };
-    // En el guion, el margen se come columnas del texto.
-    let width = if voz == Voz::Guion { width.saturating_sub(GUION - 2).max(10) } else { width };
-    if app.messages.is_empty() && voz != Voz::Guion {
+    let pad = if voice == Voice::Script { SCRIPT_PAD } else { 2 };
+    // In the script, the margin eats columns from the text.
+    let width = if voice == Voice::Script { width.saturating_sub(SCRIPT_PAD - 2).max(10) } else { width };
+    if app.messages.is_empty() && voice != Voice::Script {
         rows.push(blank());
         rows.push((
-            Line::from(Span::styled(format!("  {}. {}", greeting(), pregunta(app)), Style::new().fg(theme::text()).bold())),
+            Line::from(Span::styled(format!("  {}. {}", greeting(), question(app)), Style::new().fg(theme::text()).bold())),
             2,
             false,
         ));
@@ -52,7 +52,7 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
             false,
         ));
     }
-    let gutter = |name: &str, st: Style| Span::styled(format!("{name:>w$}  ", w = GUION - 2), st);
+    let gutter = |name: &str, st: Style| Span::styled(format!("{name:>w$}  ", w = SCRIPT_PAD - 2), st);
     let indent = " ".repeat(pad);
 
     for (i, m) in app.messages.iter().enumerate() {
@@ -60,24 +60,24 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
             Role::User => {
                 rows.push(blank());
                 let fg = if m.waiting.is_some() { theme::faint() } else { theme::text() };
-                let who = Style::new().fg(if voz == Voz::Clasico { WARM } else { theme::text() }).bold();
+                let who = Style::new().fg(if voice == Voice::Clasico { WARM } else { theme::text() }).bold();
                 let lines = wrap_cont(&m.text, width);
-                match voz {
-                    Voz::Guion => {
+                match voice {
+                    Voice::Script => {
                         for (k, (l, cont)) in lines.into_iter().enumerate() {
-                            let head = if k == 0 { gutter("tú", who) } else { Span::raw(" ".repeat(GUION)) };
-                            rows.push((Line::from(vec![head, Span::styled(l, Style::new().fg(fg))]), GUION, cont));
+                            let head = if k == 0 { gutter("tú", who) } else { Span::raw(" ".repeat(SCRIPT_PAD)) };
+                            rows.push((Line::from(vec![head, Span::styled(l, Style::new().fg(fg))]), SCRIPT_PAD, cont));
                         }
                         if m.waiting.is_some() {
                             rows.push((
-                                Line::from(vec![Span::raw(" ".repeat(GUION)), Span::styled("◷ en cola · lo lee al terminar", Style::new().fg(theme::dim()))]),
-                                GUION,
+                                Line::from(vec![Span::raw(" ".repeat(SCRIPT_PAD)), Span::styled("◷ en cola · lo lee al terminar", Style::new().fg(theme::dim()))]),
+                                SCRIPT_PAD,
                                 false,
                             ));
                         }
                     }
                     _ => {
-                        let name = if voz == Voz::Canal { "  ▸ TÚ" } else { "  TÚ" };
+                        let name = if voice == Voice::Channel { "  ▸ TÚ" } else { "  TÚ" };
                         let mut head = vec![Span::styled(name, who)];
                         if m.waiting.is_some() {
                             head.push(Span::styled("  ◷ en espera", Style::new().fg(theme::faint())));
@@ -89,9 +89,9 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
                         }
                     }
                 }
-                // Las imágenes que mandaste: se reserva su lugar y la app las dibuja encima.
+                // The images you sent: their space is reserved and the app draws them on top.
                 if let Some(cell) = app.sixel_cell {
-                    let x = if voz == Voz::Guion { GUION } else { pad } as u16;
+                    let x = if voice == Voice::Script { SCRIPT_PAD } else { pad } as u16;
                     for t in &m.images {
                         let (cols, h) = t.cells(cell, (width as u16).saturating_sub(2));
                         rows.push(blank());
@@ -106,34 +106,34 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
                 rows.push(blank());
                 let who = Style::new().fg(theme::accent()).bold();
                 let md = app.md_rows(i, &m.text, width);
-                match voz {
-                    Voz::Guion => {
-                        // Las filas del markdown traen su sangría de 2; delante va el margen.
+                match voice {
+                    Voice::Script => {
+                        // The markdown rows bring their 2-column indent; the margin goes in front.
                         for (k, (line, skip, cont)) in md.into_iter().enumerate() {
                             let head = if k == 0 {
-                                Span::styled(format!("{:>w$}", "iris", w = GUION - 2), who)
+                                Span::styled(format!("{:>w$}", "iris", w = SCRIPT_PAD - 2), who)
                             } else {
-                                Span::raw(" ".repeat(GUION - 2))
+                                Span::raw(" ".repeat(SCRIPT_PAD - 2))
                             };
                             let mut spans = vec![head];
                             spans.extend(line.spans);
-                            // Las filas de pura decoración marcan `usize::MAX`: siguen sin copiarse.
-                            rows.push((Line::from(spans), skip.saturating_add(GUION - 2), cont));
+                            // Pure decoration rows are marked `usize::MAX`: they still aren't copied.
+                            rows.push((Line::from(spans), skip.saturating_add(SCRIPT_PAD - 2), cont));
                         }
                     }
                     _ => {
-                        let name = if voz == Voz::Canal { "  ◆ IRIS" } else { "  IRIS" };
+                        let name = if voice == Voice::Channel { "  ◆ IRIS" } else { "  IRIS" };
                         rows.push((Line::from(Span::styled(name, who)), 2, false));
                         rows.extend(md);
                     }
                 }
-                // Los archivos que entrega: un clic los copia al portapapeles.
-                let adjuntos = app.adjuntos(i, &m.text);
-                if !adjuntos.is_empty() {
+                // The files it delivers: a click copies them to the clipboard.
+                let attachments = app.attachments(i, &m.text);
+                if !attachments.is_empty() {
                     rows.push(blank());
                 }
-                let x = if voz == Voz::Guion { GUION } else { pad };
-                for a in adjuntos {
+                let x = if voice == Voice::Script { SCRIPT_PAD } else { pad };
+                for a in attachments {
                     let label = truncate(&format!(" ⎘ {} ", a.label()), width.saturating_sub(18).max(8));
                     let w = label.chars().count() + 1 + "clic para copiar".len();
                     let line = Line::from(vec![
@@ -165,8 +165,8 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
     rows
 }
 
-/// Una herramienta en el chat: su línea (estado, nombre, qué hizo, cuánto tardó) y, para
-/// Bash, las primeras líneas de la salida. El detalle completo, con Ctrl+G.
+/// A tool in the chat: its line (status, name, what it did, how long it took) and, for
+/// Bash, the first lines of the output. The full detail, with Ctrl+G.
 pub(in crate::ui) fn tool_rows(a: &crate::Activity, indent: &str, pad: usize, width: usize) -> Vec<(Line<'static>, usize, bool)> {
     use crate::ToolStatus;
     let (icon, col) = match a.status {
@@ -188,7 +188,7 @@ pub(in crate::ui) fn tool_rows(a: &crate::Activity, indent: &str, pad: usize, wi
         pad,
         false,
     )];
-    // Bash: un vistazo a la salida (o al error).
+    // Bash: a glimpse of the output (or the error).
     if a.name == "Bash" && !a.output.trim().is_empty() {
         let lines: Vec<&str> = a.output.lines().filter(|l| !l.trim().is_empty()).collect();
         for (k, l) in lines.iter().take(3).enumerate() {
@@ -207,10 +207,10 @@ pub(in crate::ui) fn tool_rows(a: &crate::Activity, indent: &str, pad: usize, wi
     out
 }
 
-/// Lo que hizo una herramienta, en una línea: el comando, el archivo y el cambio, lo buscado…
+/// What a tool did, in one line: the command, the file and the change, what was searched…
 pub(crate) fn tool_summary(a: &crate::Activity) -> String {
     let s = |k: &str| a.input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let home = crate::rutas::home().map(|h| h.display().to_string()).unwrap_or_default();
+    let home = crate::paths::home().map(|h| h.display().to_string()).unwrap_or_default();
     let short = |p: String| if home.is_empty() { p } else { p.replace(&home, "~") };
     match a.name.as_str() {
         "Bash" => s("command").lines().next().unwrap_or("").to_string(),
@@ -228,8 +228,8 @@ pub(crate) fn tool_summary(a: &crate::Activity) -> String {
     }
 }
 
-/// Dibuja las filas que caben (respetando el desplazamiento), pinta la selección y deja la
-/// vista para que el mouse sepa qué texto hay debajo.
+/// Draws the rows that fit (respecting the scroll), paints the selection and leaves the
+/// view so the mouse knows what text is underneath.
 pub(in crate::ui) fn render_chat(f: &mut Frame, inner: Rect, app: &App, rows: Vec<(Line<'static>, usize, bool)>) {
     let h = inner.height as usize;
     let max_scroll = rows.len().saturating_sub(h);
@@ -246,13 +246,13 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, inner: Rect, app: &App, rows: Ve
     }
     f.render_widget(Paragraph::new(visible), inner);
 
-    // Las miniaturas que entran enteras en lo visible (las cortadas se ven al desplazar).
-    // Con un menú o la lista de comandos encima, ninguna: se pintarían sobre el menú.
+    // Thumbnails that fit whole within the visible area (cut-off ones show when scrolling).
+    // With a menu or the command list on top, none: they would be painted over the menu.
     let menu = app.modal.is_some() || app.tools_view.is_some() || !crate::commands::matches(&app.commands, &app.input).is_empty();
     if !menu {
         let end = start + h_rows(inner);
         for (row, x, cols, h, t) in app.thumb_slots.borrow().iter() {
-            // La parte de la imagen que cae en lo visible (puede estar cortada arriba o abajo).
+            // The part of the image that falls within the visible area (may be cut at the top or bottom).
             let (top, bottom) = ((*row).max(start), (row + *h as usize).min(end));
             if top < bottom {
                 let r = Rect { x: inner.x + x, y: inner.y + (top - start) as u16, width: *cols, height: (bottom - top) as u16 };
@@ -278,9 +278,9 @@ pub(in crate::ui) fn render_chat(f: &mut Frame, inner: Rect, app: &App, rows: Ve
     *app.view.borrow_mut() = view;
 }
 
-/// Markdown aplanado para leerlo en una línea: sin asteriscos, comillas invertidas ni almohadillas.
+/// Markdown flattened to read it in one line: no asterisks, backticks or hashes.
 pub(in crate::ui) fn plain(s: &str) -> String {
-    // Los bloques de código no se leen en voz alta: se van enteros.
+    // Code blocks aren't read aloud: they go away entirely.
     let mut code = false;
     s.lines()
         .filter(|l| {
@@ -294,7 +294,7 @@ pub(in crate::ui) fn plain(s: &str) -> String {
         .filter(|l| !l.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-        // Negrita y cursiva (** y *); los guiones bajos se quedan: son parte de nombres como ghub_palette.
+        // Bold and italics (** and *); underscores stay: they are part of names like ghub_palette.
         .replace('*', "")
         .replace('`', "")
 }

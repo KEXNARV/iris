@@ -1,5 +1,5 @@
-//! Colores del tema activo de Omarchy (los que aplica Aether): el acento reemplaza al celeste
-//! de siempre y los tonos apagados salen de él. Se relee solo cuando cambia el tema.
+//! Colors of the active Omarchy theme (the ones Aether applies): the accent replaces the usual
+//! light blue and the dim tones derive from it. It's only reread when the theme changes.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -7,50 +7,50 @@ use std::sync::Mutex;
 
 use ratatui::style::Color;
 
-// Los de siempre, por si no hay tema.
+// The usual ones, in case there's no theme.
 static ACCENT: AtomicU32 = AtomicU32::new(0x00c8ff);
 static TEXT: AtomicU32 = AtomicU32::new(0xcde1eb);
 static FAINT: AtomicU32 = AtomicU32::new(0x5a6e7d);
 static BG: AtomicU32 = AtomicU32::new(0x05090d);
-/// El contenido leído la última vez: Omarchy copia los temas conservando sus fechas, así que
-/// la fecha del archivo no alcanza para saber si cambió.
+/// The content read last time: Omarchy copies themes preserving their dates, so the file's
+/// date isn't enough to tell whether it changed.
 static SEEN: Mutex<String> = Mutex::new(String::new());
-/// El archivo del buddy (Baymax), donde se guarda el color de su cara (`nucleo`, con `/core`).
-/// Los demás colores salen siempre del tema de Omarchy.
-static PALETA: Mutex<Option<PathBuf>> = Mutex::new(None);
-/// Los colores con nombre del tema (rojo, verde…): con ellos se pintan los estados con
-/// Baymax. Los que el tema no trae quedan en 0 (y se usan los de siempre).
+/// The buddy's file (Baymax), where its face color is stored (`nucleo`, with `/core`).
+/// The other colors always come from the Omarchy theme.
+static PALETTE: Mutex<Option<PathBuf>> = Mutex::new(None);
+/// The theme's named colors (red, green…): states are painted with them under Baymax.
+/// The ones the theme doesn't provide stay at 0 (and the usual ones are used).
 static ANSI: Mutex<[u32; 8]> = Mutex::new([0; 8]);
-const ANSI_NOMBRES: [&str; 8] = ["red", "green", "yellow", "blue", "magenta", "cyan", "orange", "muted"];
+const ANSI_NAMES: [&str; 8] = ["red", "green", "yellow", "blue", "magenta", "cyan", "orange", "muted"];
 
-/// Cambia al archivo de un buddy (`None`: el original, sin archivo). Si es otro, vuelve a los
-/// colores de fábrica y relee el tema.
-pub fn usar(p: Option<PathBuf>) {
-    let mut actual = PALETA.lock().unwrap();
-    if *actual == p {
+/// Switches to a buddy's file (`None`: the original, no file). If it's a different one, goes back
+/// to the factory colors and rereads the theme.
+pub fn use_palette(p: Option<PathBuf>) {
+    let mut current = PALETTE.lock().unwrap();
+    if *current == p {
         return;
     }
-    *actual = p;
-    drop(actual);
-    recargar();
+    *current = p;
+    drop(current);
+    reload();
 }
 
-/// Un color con nombre del tema (`red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`,
-/// `muted`), solo con Baymax y si el tema lo trae.
-pub fn ansi(nombre: &str) -> Option<[f64; 3]> {
+/// A named theme color (`red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `orange`,
+/// `muted`), only with Baymax and if the theme provides it.
+pub fn ansi(name: &str) -> Option<[f64; 3]> {
     if !baymax() {
         return None;
     }
-    let i = ANSI_NOMBRES.iter().position(|n| *n == nombre)?;
+    let i = ANSI_NAMES.iter().position(|n| *n == name)?;
     let v = ANSI.lock().unwrap()[i];
     (v != 0).then(|| rgb(v))
 }
 
-pub fn texto_u32() -> u32 {
+pub fn text_u32() -> u32 {
     TEXT.load(Ordering::Relaxed)
 }
 
-fn luz(c: u32) -> f64 {
+fn luminance(c: u32) -> f64 {
     let lin = |v: u32| {
         let x = v as f64 / 255.0;
         if x <= 0.03928 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
@@ -58,14 +58,14 @@ fn luz(c: u32) -> f64 {
     0.2126 * lin(c >> 16 & 0xff) + 0.7152 * lin(c >> 8 & 0xff) + 0.0722 * lin(c & 0xff)
 }
 
-/// Contraste WCAG entre dos colores (1 a 21).
-pub fn contraste(a: u32, b: u32) -> f64 {
-    let (a, b) = (luz(a), luz(b));
+/// WCAG contrast between two colors (1 to 21).
+pub fn contrast(a: u32, b: u32) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Vuelve a los colores de fábrica y relee lo que toque (también deshace `probar_acento`).
-pub fn recargar() {
+/// Goes back to the factory colors and rereads whatever applies (also undoes `preview_accent`).
+pub fn reload() {
     ACCENT.store(0x00c8ff, Ordering::Relaxed);
     TEXT.store(0xcde1eb, Ordering::Relaxed);
     FAINT.store(0x5a6e7d, Ordering::Relaxed);
@@ -75,69 +75,69 @@ pub fn recargar() {
     poll();
 }
 
-/// El fondo de la fila elegida en las listas.
-pub fn seleccion() -> Color {
+/// The background of the selected row in lists.
+pub fn selection() -> Color {
     Color::Rgb(15, 45, 65)
 }
 
-/// El fondo de ahora, como `0xrrggbb`.
-pub fn fondo_rgb() -> u32 {
+/// The current background, as `0xrrggbb`.
+pub fn background_rgb() -> u32 {
     BG.load(Ordering::Relaxed)
 }
 
-/// ¿Está Baymax en el núcleo?
+/// Is Baymax in the core?
 pub fn baymax() -> bool {
-    PALETA.lock().unwrap().is_some()
+    PALETTE.lock().unwrap().is_some()
 }
 
-pub fn acento_u32() -> u32 {
+pub fn accent_u32() -> u32 {
     ACCENT.load(Ordering::Relaxed)
 }
 
-/// Escribe `clave = "valor"` en el archivo del buddy (sin buddy con archivo, no hace nada).
-pub fn guardar(clave: &str, valor: &str) -> std::io::Result<()> {
-    let Some(p) = PALETA.lock().unwrap().clone() else { return Ok(()) };
+/// Writes `key = "value"` to the buddy's file (with no buddy that has a file, does nothing).
+pub fn save(key: &str, value: &str) -> std::io::Result<()> {
+    let Some(p) = PALETTE.lock().unwrap().clone() else { return Ok(()) };
     let text = std::fs::read_to_string(&p).unwrap_or_default();
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&p, con_clave(&text, clave, valor))
+    std::fs::write(&p, with_key(&text, key, value))
 }
 
-/// El toml con `clave` cambiada (o agregada al final si no estaba).
-fn con_clave(toml: &str, clave: &str, valor: &str) -> String {
-    let linea = format!("{clave} = \"{valor}\"");
-    let mut hay = false;
+/// The toml with `key` changed (or appended at the end if it wasn't there).
+fn with_key(toml: &str, key: &str, value: &str) -> String {
+    let line = format!("{key} = \"{value}\"");
+    let mut found = false;
     let mut out: Vec<String> = toml
         .lines()
         .map(|l| match l.split_once('=') {
-            Some((k, _)) if k.trim() == clave => {
-                hay = true;
-                linea.clone()
+            Some((k, _)) if k.trim() == key => {
+                found = true;
+                line.clone()
             }
             _ => l.to_string(),
         })
         .collect();
-    if !hay {
-        out.push(linea);
+    if !found {
+        out.push(line);
     }
     out.join("\n") + "\n"
 }
 
 fn path() -> Option<PathBuf> {
-    if let Some(p) = crate::rutas::var("THEME") {
+    if let Some(p) = crate::paths::var("THEME") {
         return Some(p.into());
     }
-    Some(crate::rutas::home()?.join(".local/state/omarchy/current/theme/colors.toml"))
+    Some(crate::paths::home()?.join(".local/state/omarchy/current/theme/colors.toml"))
 }
 
-/// ¿Hay un tema de Omarchy que seguir? Sin él, el acento es el que se eligió en la bienvenida.
-pub fn hay_omarchy() -> bool {
+/// Is there an Omarchy theme to follow? Without it, the accent is the one chosen in the welcome.
+pub fn has_omarchy() -> bool {
     path().is_some_and(|p| p.exists())
 }
 
-/// Los acentos para elegir sin Omarchy: (id, nombre, color). El primero es el de siempre.
-pub const ACENTOS: [(&str, &str, u32); 8] = [
+/// The accents to choose from without Omarchy: (id, name, color). The first is the usual one.
+pub const ACCENTS: [(&str, &str, u32); 8] = [
     ("celeste", "Celeste", 0x00c8ff),
     ("menta", "Menta", 0x3ee8b0),
     ("verde", "Verde", 0x7bd88f),
@@ -148,21 +148,21 @@ pub const ACENTOS: [(&str, &str, u32); 8] = [
     ("hielo", "Hielo", 0xd8e6f0),
 ];
 
-/// Pone el acento ya, sin guardarlo: la vista previa mientras se elige.
-pub fn probar_acento(c: u32) {
+/// Sets the accent right away, without saving it: the preview while choosing.
+pub fn preview_accent(c: u32) {
     ACCENT.store(c, Ordering::Relaxed);
 }
 
-/// Relee el tema si cambió desde la última vez. Devuelve true si cambió algo.
+/// Rereads the theme if it changed since last time. Returns true if anything changed.
 pub fn poll() -> bool {
     let Some(p) = path() else { return false };
-    // Sin Omarchy, el acento guardado en la bienvenida hace de tema (solo trae ese color). Se lee
-    // aquí y no con `ajustes`: este archivo también se compila en el núcleo de la web.
-    let propio = || {
-        let a = std::fs::read_to_string(crate::rutas::config()?.join("acento")).ok()?;
+    // Without Omarchy, the accent saved in the welcome acts as the theme (it only brings that color).
+    // It's read here and not via `settings`: this file is also compiled into the web core.
+    let own_file = || {
+        let a = std::fs::read_to_string(crate::paths::config()?.join("acento")).ok()?;
         Some(format!("accent = \"{}\"\n", a.trim()))
     };
-    let Some(text) = std::fs::read_to_string(&p).ok().or_else(propio) else { return false };
+    let Some(text) = std::fs::read_to_string(&p).ok().or_else(own_file) else { return false };
     let mut seen = SEEN.lock().unwrap();
     if *seen == text {
         return false;
@@ -186,25 +186,25 @@ fn apply(toml: &str) -> bool {
     if let Some(bg) = get("background") {
         BG.store(bg, Ordering::Relaxed);
     }
-    // El texto apagado: de los que traiga el tema, el que menos resalta sobre el fondo. Aether
-    // trae los dos y su «light» es más brillante que el texto en los temas oscuros.
+    // The dim text: of the ones the theme provides, the one that stands out least on the background.
+    // Aether provides both and its «light» is brighter than the text in dark themes.
     let bg = BG.load(Ordering::Relaxed);
-    let apagado = [get("light_foreground"), get("dark_foreground")]
+    let dimmed = [get("light_foreground"), get("dark_foreground")]
         .into_iter()
         .flatten()
-        .min_by(|a, b| contraste(*a, bg).total_cmp(&contraste(*b, bg)));
-    if let Some(f) = apagado {
+        .min_by(|a, b| contrast(*a, bg).total_cmp(&contrast(*b, bg)));
+    if let Some(f) = dimmed {
         FAINT.store(f, Ordering::Relaxed);
     }
     let mut ansi = ANSI.lock().unwrap();
-    for (i, n) in ANSI_NOMBRES.iter().enumerate() {
+    for (i, n) in ANSI_NAMES.iter().enumerate() {
         ansi[i] = get(n).unwrap_or(0);
     }
     drop(ansi);
     if baymax() {
-        // El color de su cara está en su archivo; los demás, en el tema.
-        let propia = PALETA.lock().unwrap().clone().and_then(|p| std::fs::read_to_string(p).ok());
-        crate::baymax::leer(propia.as_deref().unwrap_or(""));
+        // His face color is in his file; the rest, in the theme.
+        let own = PALETTE.lock().unwrap().clone().and_then(|p| std::fs::read_to_string(p).ok());
+        crate::baymax::read(own.as_deref().unwrap_or(""));
     }
     true
 }
@@ -230,7 +230,7 @@ pub fn accent_rgb() -> [f64; 3] {
     rgb(ACCENT.load(Ordering::Relaxed))
 }
 
-/// El acento apagado hacia el fondo: bordes, marcas de la escala, lo secundario.
+/// The accent dimmed toward the background: borders, scale marks, secondary stuff.
 pub fn dim_rgb() -> [f64; 3] {
     mix(accent_rgb(), rgb(BG.load(Ordering::Relaxed)), 0.6)
 }
@@ -251,7 +251,7 @@ pub fn faint() -> Color {
     color(rgb(FAINT.load(Ordering::Relaxed)))
 }
 
-/// Variantes del acento para los estados de «presencia» del núcleo.
+/// Accent variants for the core's «presence» states.
 pub fn accent_toward_white(f: f64) -> [f64; 3] {
     mix(accent_rgb(), [255.0; 3], f)
 }
@@ -262,37 +262,37 @@ pub fn accent_darker(f: f64) -> [f64; 3] {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    /// Los colores son globales: las pruebas que los tocan se turnan.
-    pub(crate) static TURNO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Colors are global: the tests that touch them take turns.
+    pub(crate) static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 
     use super::*;
 
     #[test]
-    fn lee_el_acento_del_tema() {
-        let _turno = TURNO.lock().unwrap_or_else(|e| e.into_inner());
+    fn reads_theme_accent() {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         let toml = "mode = \"dark\"\naccent = \"#e68e0d\"\nforeground = \"#bebebe\"\nbackground = \"#121212\"\n";
         assert_eq!(parse_hex("#e68e0d"), Some(0xe68e0d));
         assert_eq!(parse_hex("e68e0d"), None);
         assert!(apply(toml));
         assert_eq!(accent(), Color::Rgb(0xe6, 0x8e, 0x0d));
         assert_eq!(text(), Color::Rgb(0xbe, 0xbe, 0xbe));
-        // Un archivo sin acento no toca nada.
+        // A file without an accent touches nothing.
         assert!(!apply("foreground = \"#ffffff\""));
         assert_eq!(text(), Color::Rgb(0xbe, 0xbe, 0xbe));
     }
 
     #[test]
-    fn cambia_una_clave_sin_tocar_lo_demas() {
+    fn changes_one_key_leaving_the_rest() {
         let toml = "# Cara:\naccent = \"#F56FA1\"\nnucleo = \"rosa\"\n";
-        assert_eq!(con_clave(toml, "nucleo", "#1A2332"), "# Cara:\naccent = \"#F56FA1\"\nnucleo = \"#1A2332\"\n");
-        assert_eq!(con_clave("accent = \"#F56FA1\"\n", "nucleo", "auto"), "accent = \"#F56FA1\"\nnucleo = \"auto\"\n");
+        assert_eq!(with_key(toml, "nucleo", "#1A2332"), "# Cara:\naccent = \"#F56FA1\"\nnucleo = \"#1A2332\"\n");
+        assert_eq!(with_key("accent = \"#F56FA1\"\n", "nucleo", "auto"), "accent = \"#F56FA1\"\nnucleo = \"auto\"\n");
     }
 }
 
 #[cfg(test)]
 #[test]
 #[ignore]
-fn tema_real() {
+fn real_theme() {
     println!("poll={} accent={:?} dim={:?} text={:?}", poll(), accent(), dim(), text());
 }

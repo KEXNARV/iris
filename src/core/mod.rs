@@ -1,0 +1,189 @@
+//! CORE: the top-right panel, where the buddy lives. It shows what Iris is doing through
+//! shape, motion and a gaze that turns toward where things are happening.
+//!
+//! The design was made in `docs/blob-hibrido.html`; this is its terminal version. It's drawn
+//! on its own braille grid (2×4 dots per cell) and not with ratatui's `Canvas`, because there
+//! each cell takes the color of the last dot drawn: here it keeps the brightest dot's color,
+//! which is what makes the layers readable.
+//!
+//! The core only orchestrates: it keeps the clock and the shown state (with its minimum, so it
+//! doesn't flicker), passes the signals, events and subagents to the buddy, and outputs what
+//! it draws in braille or Sixel. What is shown is up to each buddy (`buddies`) with its pieces
+//! (`pieces`).
+
+use ratatui::style::Color;
+
+mod rand;
+mod buddies;
+mod color;
+mod context;
+mod state;
+// The store's pieces, in WebAssembly. The web build compiles the core without this.
+#[cfg(feature = "pieces")]
+pub(crate) mod host;
+mod pieces;
+mod grid;
+mod output;
+
+pub use state::{tool_state, Event, Signals, State};
+
+use buddies::baymax::{Baymax, Face};
+use buddies::original::Original;
+use buddies::Buddy;
+use color::rgb;
+use context::{Notice, Context};
+use pieces::body::Blob;
+use grid::Grid;
+
+pub struct Core {
+    ctx: Context,
+    fired: Vec<Event>,
+    /// The buddies that can live in the core, all running at once: that way switching from one
+    /// to another (`/buddy`, even in the preview) doesn't reset them. The first is the original;
+    /// the second, Baymax. Kids only have the first.
+    buddies: Vec<Box<dyn Buddy>>,
+}
+
+/// Which pieces of the original buddy are drawn, one bit per piece (`LAYER_*` in
+/// `buddies::original`); `u32::MAX` is all. For the Iris web page, which shows it taken apart.
+#[allow(dead_code)]
+pub fn layers(mask: u32) {
+    buddies::original::LAYERS.store(mask, std::sync::atomic::Ordering::Relaxed);
+}
+
+impl Core {
+    pub fn new() -> Self {
+        let baymax: Baymax = Original::new(Face::new());
+        Core::with(vec![Box::new(Original::new(Blob::new())), Box::new(baymax)], 0.0, State::Booting)
+    }
+
+    fn with(buddies: Vec<Box<dyn Buddy>>, t: f64, state: State) -> Self {
+        Core { ctx: Context { t, state, since: t, sig: Signals::default(), look: None }, fired: vec![], buddies }
+    }
+
+    /// A kid: already awake in `state`, with no boot or specks.
+    fn mini(state: State, seed: u64) -> Self {
+        // Each kid with its own phase, so they don't all breathe and blink in unison.
+        Core::with(vec![Box::new(Original::mini(state, seed))], 3.7 * seed as f64, state)
+    }
+
+    /// The one shown: Baymax if its palette is set (and it's not a kid).
+    fn active_buddy(&self) -> &dyn Buddy {
+        let i = if self.buddies.len() > 1 && crate::theme::baymax() { 1 } else { 0 };
+        &*self.buddies[i]
+    }
+
+    fn notify(&mut self, notice: Notice) {
+        for b in &mut self.buddies {
+            b.notice(notice, &self.ctx);
+        }
+    }
+
+    /// The shown state, which may lag a bit behind the requested one (see `State::dwell`).
+    pub fn state(&self) -> State {
+        self.ctx.state
+    }
+
+    /// The current color, with transitions and the red of errors.
+    pub fn color(&self) -> Color {
+        rgb(self.active_buddy().color())
+    }
+
+    /// Restarts the boot animation (when the engine is relaunched).
+    pub fn reboot(&mut self) {
+        self.kids_clear();
+        self.switch(State::Booting);
+    }
+
+    /// A subagent is born: it sprouts from the body toward its spot in the orbit.
+    pub fn kid_born(&mut self, id: u64) {
+        self.notify(Notice::Born(id));
+    }
+
+    /// The kid did something (requested a tool or got its result): a particle rises.
+    pub fn kid_pulse(&mut self, id: u64, error: bool) {
+        self.notify(Notice::Pulse(id, error));
+    }
+
+    /// The subagent finished: if it went well it returns to the body; if not, it fades out in red.
+    pub fn kid_end(&mut self, id: u64, ok: bool) {
+        self.notify(Notice::Finish(id, ok));
+    }
+
+    /// The engine is gone: the kids go with it, without ceremony.
+    pub fn kids_clear(&mut self) {
+        self.notify(Notice::Gone);
+    }
+
+    /// How many kids there are (alive or saying goodbye).
+    #[cfg(test)]
+    pub fn kid_count(&self) -> usize {
+        self.active_buddy().kids()
+    }
+
+    /// The events fired since last time, to notify the keyboard.
+    pub fn take_fired(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.fired)
+    }
+
+    pub fn fire(&mut self, ev: Event) {
+        self.fired.push(ev);
+        self.notify(Notice::Event(ev));
+    }
+
+    fn switch(&mut self, to: State) {
+        let from = self.ctx.state;
+        self.ctx.state = to;
+        self.ctx.since = self.ctx.t;
+        for b in &mut self.buddies {
+            b.change(from, to, &self.ctx);
+        }
+    }
+
+    /// Advances the animation `dt` seconds toward the `want` state.
+    pub fn step(&mut self, dt: f64, want: State, sig: &Signals) {
+        let dt = dt.clamp(0.0, 0.1);
+        self.ctx.t += dt;
+        self.ctx.sig = sig.clone();
+        let shown = self.ctx.state;
+        let shown_for = self.ctx.t - self.ctx.since;
+        if want != shown && (want.urgent() || shown.urgent() || shown_for >= shown.dwell()) {
+            self.switch(want);
+        }
+        for b in &mut self.buddies {
+            b.step(&self.ctx, dt);
+        }
+    }
+
+    /// If set, the gaze goes there (−1..1) instead of wherever the state says.
+    fn look_at(&mut self, look: Option<[f64; 2]>) {
+        self.ctx.look = look;
+    }
+
+    /// How much error it's carrying (0..1).
+    fn alarm(&self) -> f64 {
+        self.active_buddy().alarm()
+    }
+
+    /// Its color before converting for the terminal: for a kid's ink.
+    fn ink(&self) -> [f64; 3] {
+        self.active_buddy().color()
+    }
+
+    fn paint(&self, g: &mut Grid) {
+        self.active_buddy().paint(g, &self.ctx);
+    }
+
+    fn palette(&self) -> Vec<[[f64; 3]; 4]> {
+        self.active_buddy().palette()
+    }
+}
+
+impl Default for Core {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests;

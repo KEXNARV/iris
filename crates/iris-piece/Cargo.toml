@@ -1,0 +1,8 @@
+[package]
+name = "iris-piece"
+version = "0.1.0"
+edition = "2024"
+description = "For writing Iris pieces (store plugins) in Rust and compiling them to WebAssembly"
+license = "MIT"
+
+[dependencies]
