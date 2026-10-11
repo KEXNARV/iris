@@ -177,6 +177,8 @@ pub(crate) struct Assembled {
     col: [Ch; 3],
     red: Ch,
     out: Vec<Msg>,
+    /// Whether some part sets the color (the script). Without one, the buddy wears the state's.
+    own_color: bool,
 }
 
 /// What a part gets when it's built.
@@ -230,7 +232,13 @@ impl Assembled {
         let draw = recipe.draw.iter().filter_map(|d| slots.iter().position(|s| &s.id == d)).collect();
         let col = [bus.ch("col.r"), bus.ch("col.g"), bus.ch("col.b")];
         let red = bus.ch("red");
-        Ok(Assembled { slots, draw, bus, rand, col, red, out: vec![] })
+        let own_color = recipe.pieces.iter().any(|p| p.uses == "builtin:script" && (!kid || p.kid));
+        if !own_color {
+            for (c, v) in col.iter().zip(state.rgb()) {
+                bus.set(*c, v);
+            }
+        }
+        Ok(Assembled { slots, draw, bus, rand, col, red, out: vec![], own_color })
     }
 
     /// Runs `f` on each part in order, delivering the messages each one sends before the next.
@@ -270,6 +278,11 @@ impl Assembled {
 
 impl Buddy for Assembled {
     fn step(&mut self, ctx: &Context, dt: f64) {
+        if !self.own_color {
+            for (c, v) in self.col.iter().zip(ctx.state.rgb()) {
+                self.bus.set(*c, v);
+            }
+        }
         self.each(ctx, |p, w| p.step(w, dt));
     }
 
