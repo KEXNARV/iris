@@ -43,7 +43,10 @@ use crate::core::state::{Event, State, ALL};
 
 /// Builds the part a recipe asks for.
 pub(crate) fn make(b: &mut Build) -> Result<Box<dyn Part>, String> {
-    let name = b.spec.uses.strip_prefix("builtin:").ok_or_else(|| format!("«{}»: por ahora solo hay piezas de fábrica (builtin:…)", b.spec.uses))?;
+    if let Some(path) = b.spec.uses.strip_prefix("file:") {
+        return wasm_file(b, path);
+    }
+    let name = b.spec.uses.strip_prefix("builtin:").ok_or_else(|| format!("«{}»: no sé de dónde sacar esa pieza", b.spec.uses))?;
     Ok(match name {
         "script" => Box::new(ScriptPart::new(b)?),
         "spring" => Box::new(SpringPart::new(b)),
@@ -83,6 +86,18 @@ pub(crate) fn make(b: &mut Build) -> Result<Box<dyn Part>, String> {
         "zees" => Box::new(Simple::new(b, Zees::new(), &["zzz", "low"], |p, g, ctx, a, v| p.paint(g, ctx, zees::Paint { anchor: a, zzz: v[0], low: v[1] > 0.5 }))),
         other => return Err(format!("no hay ninguna pieza de fábrica «{other}»")),
     })
+}
+
+/// A part in WebAssembly, from a file.
+#[cfg(feature = "pieces")]
+fn wasm_file(b: &mut Build, path: &str) -> Result<Box<dyn Part>, String> {
+    let wasm = std::fs::read(path).map_err(|e| format!("«{path}»: {e}"))?;
+    Ok(Box::new(super::wasm::WasmPart::load(&wasm, b).map_err(|e| format!("«{path}»: {e}"))?))
+}
+
+#[cfg(not(feature = "pieces"))]
+fn wasm_file(_b: &mut Build, path: &str) -> Result<Box<dyn Part>, String> {
+    Err(format!("«{path}»: este Iris no carga piezas en WebAssembly"))
 }
 
 /// Where the body is, read from the bus (what `presence` publishes).

@@ -9,6 +9,8 @@
 mod builtin;
 pub(crate) mod bus;
 pub(crate) mod part;
+#[cfg(feature = "pieces")]
+pub(crate) mod wasm;
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};

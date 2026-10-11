@@ -1,19 +1,75 @@
-//! The contract between Iris and a piece (ABI 1). Both sides use it: the piece when compiled to
+//! The contract between Iris and a piece. Both sides use it: the piece when compiled to
 //! WebAssembly and the Iris host when loading it, so they can't drift apart.
 //!
-//! Piece exports: `iris_abi() -> u32`, `iris_space() -> u32`, `iris_input() -> u32`
-//! (where Iris writes the [`Input`]), `iris_new()`, `iris_step()`, `iris_event(u32)` and
-//! `iris_paint() -> u64` (address << 32 | number of [`Op`]s).
-//! Imports: only `iris.rand() -> f64`.
+//! **ABI 1** (a piece for one space, today only the particles): exports `iris_abi() -> u32`,
+//! `iris_space() -> u32`, `iris_input() -> u32` (where Iris writes the [`Input`]),
+//! `iris_new()`, `iris_step()`, `iris_event(u32)` and `iris_paint() -> u64`
+//! (address << 32 | number of [`Op`]s).
+//!
+//! **ABI 2** (a part of a recipe, anything): exports `iris_abi() -> u32` (2), `iris_decl() ->
+//! u64` (address << 32 | length of its declaration, TOML text: `inputs`, `outputs` and
+//! `[[settings]]` with `name`, `default`, `min`, `max`), `iris_io() -> u32` (its block of `f64`:
+//! the [`head`] slots, then its inputs, its settings and its outputs, in declared order) and
+//! `iris_new()`; optionally `iris_step()`, `iris_event(u32, f64, f64)` (see [`happening`]),
+//! `iris_layout()` and `iris_paint() -> u64`.
+//!
+//! Imports, both: only `iris.rand() -> f64`.
 
-/// The contract version. A piece built for another one is not loaded.
+/// The contract version of a piece for one space. A piece built for another one is not loaded.
 pub const VERSION: u32 = 1;
+
+/// The contract version of a recipe part.
+pub const VERSION_PART: u32 = 2;
+
+/// ABI 2: the slots at the start of a part's io block, which Iris fills before every call.
+pub mod head {
+    /// Seconds since the core was born, this frame's `dt`, and when the visible state started.
+    pub const T: usize = 0;
+    pub const DT: usize = 1;
+    pub const SINCE: usize = 2;
+    /// The visible state (its index in [`super::State::ALL`]).
+    pub const STATE: usize = 3;
+    /// 1 normally, less with `/calm`.
+    pub const CALM: usize = 4;
+    /// Voice and music level (0..1) and Claude context used (0..1).
+    pub const VOICE: usize = 5;
+    pub const MUSIC: usize = 6;
+    pub const CONTEXT: usize = 7;
+    /// The grid, while laying out and painting (0 otherwise): the size of a dot in world units,
+    /// its dots across and down, and how it maps dots to the world (see `Io::center`).
+    pub const DU: usize = 8;
+    pub const DW: usize = 9;
+    pub const DH: usize = 10;
+    pub const ASP: usize = 11;
+    pub const S: usize = 12;
+    pub const OX: usize = 13;
+    pub const OY: usize = 14;
+    pub const K: usize = 15;
+    /// How many slots the head takes.
+    pub const LEN: usize = 16;
+}
+
+/// ABI 2: what `iris_event(kind, a, b)` can say.
+pub mod happening {
+    /// 0..=7: one of the [`super::Event`]s (`a` and `b` unused).
+    pub const EVENT_LAST: u32 = 7;
+    /// The visible state changed: `a` from, `b` to (indices in [`super::State::ALL`]).
+    pub const CHANGE: u32 = 16;
+    /// A subagent was born (`a` its id), did something (`a` id, `b` 1 if it was an error),
+    /// finished (`a` id, `b` 1 if it went well) or they all left with the engine.
+    pub const BORN: u32 = 17;
+    pub const PULSE: u32 = 18;
+    pub const FINISH: u32 = 19;
+    pub const GONE: u32 = 20;
+}
 
 /// Maximum number of draw ops per frame; the rest are ignored.
 pub const MAX_OPS: usize = 20_000;
 
 pub const MODE_PLOT: u8 = 0;
 pub const MODE_UNDER: u8 = 1;
+/// ABI 2: `x` and `y` are the column and row of a dot of the grid, not world coordinates.
+pub const MODE_DOT: u8 = 2;
 
 /// What Iris writes into the piece's memory before each call. All `f64`/`u32`, no pointers:
 /// the same layout on the host (64 bits) and on wasm32.

@@ -12,8 +12,8 @@ use super::color::{INK_ACCENT, INK_MAIN};
 pub(crate) struct Grid {
     pub(crate) dw: usize,
     pub(crate) dh: usize,
-    asp: f64,
-    s: f64,
+    pub(crate) asp: f64,
+    pub(crate) s: f64,
     /// Size of a dot in world units.
     pub(crate) du: f64,
     /// tone | ink << 2, per dot.
@@ -25,8 +25,8 @@ pub(crate) struct Grid {
     used: Vec<bool>,
     /// View for painting a child: the world shifts to (`ox`, `oy`) and scales by `k`, and the
     /// state's ink is painted with the child's (`ink`). Without a child: 0, 0, 1 and none.
-    ox: f64,
-    oy: f64,
+    pub(crate) ox: f64,
+    pub(crate) oy: f64,
     pub(crate) k: f64,
     ink: Option<u8>,
     du0: f64,

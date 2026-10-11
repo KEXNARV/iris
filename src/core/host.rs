@@ -1,6 +1,7 @@
 //! HOST: a store piece, loaded in WebAssembly (wasmi) and sandboxed. Iris writes the context
 //! into its memory before each call and reads back the list of draw orders, which it applies
-//! to the grid in one go (see the contract in `iris_piece::abi`).
+//! to the grid in one go (see the contract in `iris_piece::abi`). This file has the sandbox and
+//! the particle pieces (ABI 1); recipe parts (ABI 2) are in `recipe::wasm`.
 //!
 //! Sandboxing: the piece can only import `iris.rand`; it has 16 MB of memory and a work cap
 //! (fuel) per call; it only uses the base palette's inks. If it fails (trap, fuel, memory),
@@ -17,16 +18,61 @@ use super::grid::Grid;
 
 /// Work per call: more than enough for a piece that draws a few thousand dots, and it cuts an
 /// infinite loop in milliseconds.
-const FUEL: u64 = 5_000_000;
+pub(crate) const FUEL: u64 = 5_000_000;
 const MEMORY: usize = 16 << 20;
 /// The inks a piece may use: main, green, red, warm and accent. An ink outside the palette
 /// would make Iris step outside it when drawing.
 const INKS: u8 = 5;
 
-struct HostData {
+pub(crate) struct HostData {
     limits: StoreLimits,
-    /// The buddy's randomness, lent while the piece is born.
-    rand: Option<Rand>,
+    /// The buddy's randomness, lent while the piece is born (and, for parts, while it moves).
+    pub rand: Option<Rand>,
+}
+
+/// A module instantiated in the sandbox: its only import is `iris.rand`, with the memory cap
+/// and fuel on.
+pub(crate) fn sandbox(wasm: &[u8]) -> Result<(Store<HostData>, wasmi::Instance), String> {
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    let engine = Engine::new(&config);
+    let module = Module::new(&engine, wasm).map_err(|e| format!("no es un módulo WASM válido: {e}"))?;
+    let limits = StoreLimitsBuilder::new().memory_size(MEMORY).instances(1).memories(1).tables(1).build();
+    let mut store = Store::new(&engine, HostData { limits, rand: None });
+    store.limiter(|d| &mut d.limits);
+    let mut linker = Linker::<HostData>::new(&engine);
+    linker
+        .func_wrap("iris", "rand", |mut caller: wasmi::Caller<'_, HostData>| -> f64 { caller.data_mut().rand.as_mut().map_or(0.5, Rand::rand) })
+        .map_err(|e| e.to_string())?;
+    store.set_fuel(FUEL).map_err(|e| e.to_string())?;
+    // Any import other than iris.rand (files, network, WASI…) makes this fail.
+    let instance = linker.instantiate_and_start(&mut store, &module).map_err(|e| format!("no se puede instanciar: {e}"))?;
+    Ok((store, instance))
+}
+
+/// Applies the draw ops a piece left at `r` (address << 32 | count) to the grid.
+pub(crate) fn apply_ops(g: &mut Grid, memory: &Memory, store: &Store<HostData>, r: u64) -> Result<(), String> {
+    let (dir, n) = ((r >> 32) as usize, (r as u32 as usize).min(abi::MAX_OPS));
+    let mut buf = vec![0u8; n * std::mem::size_of::<abi::Op>()];
+    memory.read(store, dir, &mut buf).map_err(|e| format!("órdenes fuera de su memoria: {e}"))?;
+    for o in buf.chunks_exact(std::mem::size_of::<abi::Op>()) {
+        let x = f64::from_le_bytes(o[0..8].try_into().unwrap());
+        let y = f64::from_le_bytes(o[8..16].try_into().unwrap());
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
+        let (tone, ink) = (o[16].min(3), o[17].min(INKS - 1));
+        match o[18] {
+            abi::MODE_UNDER => g.plot_under(x, y, tone),
+            abi::MODE_DOT => {
+                if x >= 0.0 && y >= 0.0 && (x as usize) < g.dw && (y as usize) < g.dh {
+                    g.dot(x as usize, y as usize, tone, ink);
+                }
+            }
+            _ => g.plot(x, y, tone, ink),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) struct Host {
@@ -44,20 +90,7 @@ pub(crate) struct Host {
 impl Host {
     /// Loads a piece and has it born with the buddy's randomness (uses as much as the built-in).
     pub fn load(wasm: &[u8], rand: &mut Rand) -> Result<Self, String> {
-        let mut config = Config::default();
-        config.consume_fuel(true);
-        let engine = Engine::new(&config);
-        let module = Module::new(&engine, wasm).map_err(|e| format!("no es un módulo WASM válido: {e}"))?;
-        let limits = StoreLimitsBuilder::new().memory_size(MEMORY).instances(1).memories(1).tables(1).build();
-        let mut store = Store::new(&engine, HostData { limits, rand: None });
-        store.limiter(|d| &mut d.limits);
-        let mut linker = Linker::<HostData>::new(&engine);
-        linker
-            .func_wrap("iris", "rand", |mut caller: wasmi::Caller<'_, HostData>| -> f64 { caller.data_mut().rand.as_mut().map_or(0.5, Rand::rand) })
-            .map_err(|e| e.to_string())?;
-        store.set_fuel(FUEL).map_err(|e| e.to_string())?;
-        // Any import other than iris.rand (files, network, WASI…) makes this fail.
-        let instance = linker.instantiate_and_start(&mut store, &module).map_err(|e| format!("no se puede instanciar: {e}"))?;
+        let (mut store, instance) = sandbox(wasm)?;
         let func = |name: &str| format!("le falta la función {name}");
         let abi_v: u32 = instance.get_typed_func::<(), u32>(&store, "iris_abi").map_err(|_| func("iris_abi"))?.call(&mut store, ()).map_err(|e| e.to_string())?;
         if abi_v != abi::VERSION {
@@ -155,22 +188,8 @@ impl Host {
             Ok(r) => r,
             Err(e) => return self.fail(format!("falló al dibujar: {e}")),
         };
-        let (dir, n) = ((r >> 32) as usize, (r as u32 as usize).min(abi::MAX_OPS));
-        let mut buf = vec![0u8; n * std::mem::size_of::<abi::Op>()];
-        if let Err(e) = self.memory.read(&self.store, dir, &mut buf) {
-            return self.fail(format!("órdenes fuera de su memoria: {e}"));
-        }
-        for o in buf.chunks_exact(std::mem::size_of::<abi::Op>()) {
-            let x = f64::from_le_bytes(o[0..8].try_into().unwrap());
-            let y = f64::from_le_bytes(o[8..16].try_into().unwrap());
-            if !x.is_finite() || !y.is_finite() {
-                continue;
-            }
-            let (tone, ink) = (o[16].min(3), o[17].min(INKS - 1));
-            match o[18] {
-                abi::MODE_UNDER => g.plot_under(x, y, tone),
-                _ => g.plot(x, y, tone, ink),
-            }
+        if let Err(e) = apply_ops(g, &self.memory, &self.store, r) {
+            self.fail(e);
         }
     }
 }

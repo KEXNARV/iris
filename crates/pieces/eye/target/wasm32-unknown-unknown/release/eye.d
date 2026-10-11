@@ -1,0 +1,1 @@
+/home/kex/code/jarvis/crates/pieces/eye/target/wasm32-unknown-unknown/release/eye.wasm: /home/kex/code/jarvis/crates/iris-piece/src/abi.rs /home/kex/code/jarvis/crates/iris-piece/src/lib.rs /home/kex/code/jarvis/crates/iris-piece/src/part.rs /home/kex/code/jarvis/crates/pieces/eye/src/lib.rs

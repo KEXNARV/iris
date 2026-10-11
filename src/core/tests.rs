@@ -443,3 +443,51 @@ fn snapshot() {
         }
     }
 }
+
+/// Store 2b: the built-in eye compiled to WebAssembly (`crates/pieces/eye`), in the place of
+/// `builtin:eye` in the original recipe, draws the same dots in every state, with signals,
+/// events and kids.
+#[cfg(feature = "pieces")]
+#[test]
+fn wasm_eye_draws_the_same_as_native() {
+    use super::recipe::{original, Assembled, Recipe};
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let eye = concat!(env!("CARGO_MANIFEST_DIR"), "/crates/pieces/eye/eye.wasm");
+    let src = include_str!("recipe/original.toml").replace("use = \"builtin:eye\"", &format!("use = \"file:{eye}\""));
+    assert_ne!(src, include_str!("recipe/original.toml"));
+    let wasm = Recipe::parse(&src).unwrap();
+    let core = |r: &Recipe| Core::with(vec![Box::new(Assembled::new(r).unwrap())], 0.0, State::Booting);
+    let fingerprint = |c: &Core| {
+        let mut h = DefaultHasher::new();
+        for (w, hh) in [(36, 15), (60, 22)] {
+            for cell in render(c, w, hh).content() {
+                cell.symbol().hash(&mut h);
+            }
+        }
+        c.pixels(240, 200, 4).0.hash(&mut h);
+        h.finish()
+    };
+    let signals = [Signals::default(), Signals { level: 0.6, ctx: 0.85, music: 0.7, ..Default::default() }];
+    let mut frames = 0;
+    for sig in &signals {
+        for s in ALL {
+            let (mut a, mut b) = (core(&original()), core(&wasm));
+            for step in 0..40 {
+                for c in [&mut a, &mut b] {
+                    c.step(0.04, s, sig);
+                    if step == 15 {
+                        c.fire(Event::Error);
+                    }
+                    if step == 20 {
+                        c.kid_born(1);
+                    }
+                }
+                if step % 5 == 0 {
+                    assert_eq!(fingerprint(&a), fingerprint(&b), "{s:?} en el paso {step}");
+                    frames += 1;
+                }
+            }
+        }
+    }
+    assert!(frames > 300);
+}

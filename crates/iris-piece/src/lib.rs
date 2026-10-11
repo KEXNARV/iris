@@ -1,5 +1,6 @@
-//! For writing Iris pieces: what gets drawn in the core, loaded as a WebAssembly plugin. A
-//! piece implements [`Piece`] and is exported with [`export!`]:
+//! For writing Iris pieces, loaded as WebAssembly plugins. Most of them are recipe parts: see
+//! [`part`] (ABI 2). A piece for the particle space implements [`Piece`] and is exported with
+//! [`export!`] (ABI 1):
 //!
 //! ```ignore
 //! use iris_piece::*;
@@ -24,6 +25,7 @@
 //! has no files, network or clock: only what Iris hands it.
 
 pub mod abi;
+pub mod part;
 
 pub use abi::{Space, State, Event};
 
@@ -90,6 +92,11 @@ impl Grid {
     /// Only where there is nothing: for what goes behind everything.
     pub fn plot_under(&mut self, x: f64, y: f64, tone: u8) {
         self.push(x, y, tone, 0, abi::MODE_UNDER);
+    }
+
+    /// The dot at column `i`, row `j` of the grid (parts only: see `part::Io::center`).
+    pub fn dot(&mut self, i: usize, j: usize, tone: u8, ink: u8) {
+        self.push(i as f64, j as f64, tone, ink, abi::MODE_DOT);
     }
 
     /// A dot at `r` from the center, at angle `a`.

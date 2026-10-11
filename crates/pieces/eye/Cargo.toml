@@ -1,0 +1,22 @@
+[package]
+name = "eye"
+version = "1.0.0"
+edition = "2024"
+description = "The built-in eye as a recipe part (ABI 2): the proof that a WASM part takes the place of a built-in one"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-piece = { path = "../../iris-piece" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Outside the Iris package: built separately, for wasm32-unknown-unknown.
+[workspace]
