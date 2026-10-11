@@ -92,7 +92,7 @@ impl Core {
 
     /// What broke in the recipe shown since the last time: (part, why).
     pub(crate) fn take_broken(&mut self) -> Vec<(String, String)> {
-        self.custom.as_mut().map(|c| c.take_broken()).unwrap_or_default()
+        self.buddies.iter_mut().chain(self.custom.as_mut()).flat_map(|b| b.take_broken()).collect()
     }
 
     /// The one shown: a recipe's if there is one; otherwise Baymax if its palette is set (and
