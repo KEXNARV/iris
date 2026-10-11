@@ -1,6 +1,6 @@
 # Store, phase 2: everything is a piece
 
-2026-10-11 · Kevin Narvaez · status: **approved; 2a done (2026-10-11)**
+2026-10-11 · Kevin Narvaez · status: **approved; 2a–2d done, 2e–2i in progress (2026-10-11)**
 
 Kevin's rule for the store: **as atomic and customizable as possible; a user can do literally
 anything.** This plan turns that into a model, a contract and an order of work, and ends with

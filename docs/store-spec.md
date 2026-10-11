@@ -83,6 +83,7 @@ stores only their sha256.
 | `POST /api/auth/github/poll`           | `{device_code}` → `{token, username}`, or 202 `{pending: true}` while the user hasn't confirmed |
 | `GET /api/me`                          | → `{username, email, github}`                                              |
 | `POST /api/auth/logout`                | revokes the token                                                         |
+| `GET /api/store/config`                | → `{github: bool}`: whether the GitHub login is configured                |
 
 ## Publishing
 
@@ -133,6 +134,12 @@ The signing key is Ed25519. Its private half lives in Kevin's browser (imported 
 in Iris's binary and in the server's environment.
 
 ## In Iris
+
+Commands: `iris login` / `iris logout`; `iris piece new <name> [--shape|--wasm|--buddy]`,
+`try`, `pack`, `publish`, `status`; in the chat `/store [search]`, `/store update`,
+`/store remove <name>`, `/buddy <name>`, `/buddy edit` (opens it in Iris Studio as a draft),
+`/buddy publish`. A project's `iris.toml` may carry `[preview] replaces = "body"` so `try` puts
+the piece in place of the blob.
 
 Installed packages: `~/.local/share/iris/store/<name>/<version>/` (the unzipped files) on
 Linux, `%LOCALAPPDATA%\Iris\store\…` on Windows. The last good index and its signature are kept
