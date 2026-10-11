@@ -313,7 +313,7 @@ pub fn publish_buddy(app: &mut App) {
         let r = (|| -> Result<String, String> {
             let token = store::token().ok_or("primero entra a la tienda: iris login (en otra terminal)")?;
             if !dir.join("iris.toml").exists() {
-                std::fs::write(dir.join("iris.toml"), format!("[package]\nname = \"{name}\"\nkind = \"buddy\"\nversion = \"1.0.0\"\ndescription = \"\"\nlicense = \"MIT\"\n")).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join("iris.toml"), format!("[package]\nname = \"{name}\"\nkind = \"buddy\"\nversion = \"1.0.0\"\ndescription = \"{name}, un buddy hecho en Iris\"\nlicense = \"MIT\"\n")).map_err(|e| e.to_string())?;
             }
             let src = std::fs::read_to_string(dir.join("recipe.toml")).map_err(|e| e.to_string())?;
             let bytes = store::pack(&dir, &[("recipe.toml", src.into_bytes())])?;

@@ -8,6 +8,8 @@
 //! iris piece pack [folder]       writes <name>-<version>.iris
 //! iris piece publish [folder]    packs and uploads it (it goes into review)
 //! iris piece status              what you uploaded and how it's going
+//! iris store list                the catalog (inside Iris: /store)
+//! iris store install <name>
 //! ```
 //!
 //! Pieces made in Iris Studio don't need any of this: they're published from there.
@@ -37,6 +39,9 @@ pub fn run(args: &[String]) -> Option<i32> {
         ["piece", "publish", rest @ ..] => publish(&folder(rest)),
         ["piece", "status"] => status(),
         ["piece", ..] => Err("uso: iris piece new <nombre> | try | pack | publish | status".into()),
+        ["store", "list"] => store_list(),
+        ["store", "install", name] => store_install(name),
+        ["store", ..] => Err("uso: iris store list | install <nombre> (dentro de Iris: /store)".into()),
         _ => return None,
     };
     Some(match r {
@@ -146,6 +151,7 @@ struct Project {
     dir: PathBuf,
     name: String,
     version: String,
+    description: String,
     kind: String,
     format: String,
     /// While trying it: which part of the original it takes the place of (`body`), if any.
@@ -158,7 +164,7 @@ fn project(dir: &Path) -> Result<Project, String> {
     let p = t.get("package").and_then(|p| p.as_table()).ok_or("iris.toml: falta [package]")?;
     let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     let replaces = t.get("preview").and_then(|p| p.get("replaces")).and_then(|r| r.as_str()).map(str::to_string);
-    Ok(Project { dir: dir.to_path_buf(), name: s("name"), version: s("version"), kind: s("kind"), format: s("format"), replaces })
+    Ok(Project { dir: dir.to_path_buf(), name: s("name"), version: s("version"), description: s("description"), kind: s("kind"), format: s("format"), replaces })
 }
 
 fn valid_name(n: &str) -> bool {
@@ -182,7 +188,7 @@ fn new(name: &str, rest: &[&str]) -> Result<(), String> {
     };
     let manifest = |kind: &str, format: Option<&str>, extra: &str| {
         let format = format.map(|f| format!("format = \"{f}\"\n")).unwrap_or_default();
-        format!("[package]\nname = \"{name}\"\nkind = \"{kind}\"\n{format}version = \"1.0.0\"\ndescription = \"\"\nlicense = \"MIT\"\n{extra}")
+        format!("[package]\nname = \"{name}\"\nkind = \"{kind}\"\n{format}version = \"1.0.0\"\ndescription = \"{name}: cuenta aquí qué hace\"\nlicense = \"MIT\"\n{extra}")
     };
     if rest.contains(&"--buddy") {
         write("iris.toml", &manifest("buddy", None, ""))?;
@@ -485,6 +491,9 @@ fn pack(dir: &Path) -> Result<(PathBuf, Vec<u8>), String> {
     if !valid_name(&p.name) {
         return Err("iris.toml: «name» va en minúsculas, números y guiones, de 2 a 40 letras".into());
     }
+    if p.description.trim().is_empty() {
+        return Err("iris.toml: pon una «description» (la ve quien la busca en la tienda)".into());
+    }
     if p.version.split('.').filter(|x| x.parse::<u64>().is_ok()).count() != 3 {
         return Err("iris.toml: «version» va como 1.0.0".into());
     }
@@ -546,5 +555,24 @@ fn status() -> Result<(), String> {
         };
         println!("{:<24} {:<8} {}", s("name"), s("version"), what);
     }
+    Ok(())
+}
+
+fn store_list() -> Result<(), String> {
+    let (index, _) = crate::store::refresh()?;
+    if index.packages.is_empty() {
+        println!("La tienda está vacía todavía.");
+    }
+    for e in index.latest() {
+        println!("{:<24} {:<6} {:<8} {:<14} {}", e.name, e.kind, e.version, e.author, e.description);
+    }
+    Ok(())
+}
+
+fn store_install(name: &str) -> Result<(), String> {
+    let (index, _) = crate::store::refresh()?;
+    let e = index.find(name, None).ok_or(format!("«{name}» no está en la tienda"))?.clone();
+    let done = crate::store::install(&index, &e, false)?;
+    println!("Instalado: {} · en Iris: /buddy {name}", done.join(", "));
     Ok(())
 }
