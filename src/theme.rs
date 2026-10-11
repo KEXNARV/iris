@@ -156,8 +156,12 @@ pub fn probar_acento(c: u32) {
 /// Relee el tema si cambió desde la última vez. Devuelve true si cambió algo.
 pub fn poll() -> bool {
     let Some(p) = path() else { return false };
-    // Sin Omarchy, el acento guardado hace de tema (solo trae ese color).
-    let propio = || crate::ajustes::leer("acento").map(|a| format!("accent = \"{a}\"\n"));
+    // Sin Omarchy, el acento guardado en la bienvenida hace de tema (solo trae ese color). Se lee
+    // aquí y no con `ajustes`: este archivo también se compila en el núcleo de la web.
+    let propio = || {
+        let a = std::fs::read_to_string(crate::rutas::config()?.join("acento")).ok()?;
+        Some(format!("accent = \"{}\"\n", a.trim()))
+    };
     let Some(text) = std::fs::read_to_string(&p).ok().or_else(propio) else { return false };
     let mut seen = SEEN.lock().unwrap();
     if *seen == text {
