@@ -65,10 +65,6 @@ impl Motes {
         Motes { motes, count }
     }
 
-    pub fn clear(&mut self) {
-        self.motes.clear();
-    }
-
     /// The "camera" sways slowly and follows the gaze a bit.
     fn camera(ctx: &Context, gaze: [f64; 2]) -> [f64; 2] {
         let c = ctx.calm();

@@ -5,7 +5,7 @@ use ratatui::style::Color;
 
 use super::color::{apart, mix, rgb, PURPLE, YELLOW};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum State {
     Booting,
     Sleeping,
@@ -195,3 +195,11 @@ fn bash_state(cmd: &str) -> State {
     }
     state
 }
+
+/// Every state, in the order the recipes and the tests go through them.
+pub(crate) const ALL: [State; 21] = [
+    State::Booting, State::Sleeping, State::Idle, State::Typing, State::Listening, State::NoVoice,
+    State::Transcribing, State::Thinking, State::Planning, State::Searching, State::Reading, State::Editing,
+    State::Running, State::Testing, State::Git, State::Web, State::Delegating, State::Speaking, State::Asking,
+    State::Compacting, State::Offline,
+];

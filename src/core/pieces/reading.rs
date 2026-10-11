@@ -14,9 +14,9 @@ pub(crate) struct ReadingBar {
 
 /// The line in this frame.
 pub(crate) struct ReadingLine {
-    y: f64,
-    thickness: f64,
-    active: bool,
+    pub(crate) y: f64,
+    pub(crate) thickness: f64,
+    pub(crate) active: bool,
 }
 
 impl ReadingBar {

@@ -15,12 +15,12 @@ pub(crate) struct Liquid {
 
 /// The liquid in this frame.
 pub(crate) struct Level {
-    ctx: f64,
+    pub(crate) ctx: f64,
     /// Surface height, without the wave.
-    cap: f64,
-    swell: f64,
-    t: f64,
-    ink: u8,
+    pub(crate) cap: f64,
+    pub(crate) swell: f64,
+    pub(crate) t: f64,
+    pub(crate) ink: u8,
 }
 
 impl Liquid {

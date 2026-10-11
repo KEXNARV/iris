@@ -1,20 +1,15 @@
 use super::*;
-use super::buddies::original::Original;
+use super::state::ALL;
+use super::recipe::Assembled;
 use super::color::{apart, hsv, INK_RED};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 /// A core's original buddy, to look inside it.
-fn blob(c: &Core) -> &Original<Blob> {
+fn blob(c: &Core) -> &Assembled {
     c.buddies[0].as_any().downcast_ref().unwrap()
 }
 
-const ALL: [State; 21] = [
-    State::Booting, State::Sleeping, State::Idle, State::Typing, State::Listening, State::NoVoice,
-    State::Transcribing, State::Thinking, State::Planning, State::Searching, State::Reading, State::Editing,
-    State::Running, State::Testing, State::Git, State::Web, State::Delegating, State::Speaking, State::Asking,
-    State::Compacting, State::Offline,
-];
 
 #[test]
 fn classifies_tools() {
@@ -63,7 +58,7 @@ fn render(c: &Core, w: u16, h: u16) -> Buffer {
 fn dances_to_music_when_idle() {
     let loud = Signals { music: 0.9, ..Default::default() };
     let mut c = run(State::Idle, 4.0, &loud);
-    assert!(blob(&c).mood.groove > 0.99);
+    assert!(blob(&c).channel("groove") > 0.99);
     // A strong hit reaches the red on the scale, like the keyboard's bar.
     let (px, _) = c.pixels(200, 200, 4);
     assert!(px.contains(&(1 + INK_RED * 3 + 2)), "sin rojo en la escala");
@@ -73,9 +68,9 @@ fn dances_to_music_when_idle() {
     for _ in 0..10 {
         c.step(0.04, State::Typing, &loud);
     }
-    assert!(blob(&c).mood.groove < 0.1);
+    assert!(blob(&c).channel("groove") < 0.1);
     // No music, no dancing.
-    assert_eq!(blob(&run(State::Idle, 4.0, &Signals::default())).mood.groove, 0.0);
+    assert_eq!(blob(&run(State::Idle, 4.0, &Signals::default())).channel("groove"), 0.0);
 }
 
 #[test]
@@ -167,9 +162,9 @@ fn kids_are_born_work_and_return() {
     sig.kids.retain(|k| k.0 == 2);
     let mut bloomed = false;
     for _ in 0..50 {
-        let before = blob(&c).waves.dones.len();
+        let before = blob(&c).rings();
         c.step(0.04, State::Idle, &sig);
-        bloomed |= blob(&c).waves.dones.len() > before;
+        bloomed |= blob(&c).rings() > before;
         render(&c, 36, 15);
     }
     // The one that succeeded came back and merged (with its flash); the one that failed faded out.

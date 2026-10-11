@@ -8,8 +8,8 @@
 //!
 //! The core only orchestrates: it keeps the clock and the shown state (with its minimum, so it
 //! doesn't flicker), passes the signals, events and subagents to the buddy, and outputs what
-//! it draws in braille or Sixel. What is shown is up to each buddy (`buddies`) with its pieces
-//! (`pieces`).
+//! it draws in braille or Sixel. What is shown is up to each buddy: a recipe (`recipe`) of parts
+//! wired through channels, most of them built on the pieces in `pieces`.
 
 use ratatui::style::Color;
 
@@ -24,15 +24,13 @@ pub(crate) mod host;
 mod pieces;
 mod grid;
 mod output;
+pub(crate) mod recipe;
 
 pub use state::{tool_state, Event, Signals, State};
 
-use buddies::baymax::{Baymax, Face};
-use buddies::original::Original;
 use buddies::Buddy;
 use color::rgb;
 use context::{Notice, Context};
-use pieces::body::Blob;
 use grid::Grid;
 
 pub struct Core {
@@ -44,17 +42,17 @@ pub struct Core {
     buddies: Vec<Box<dyn Buddy>>,
 }
 
-/// Which pieces of the original buddy are drawn, one bit per piece (`LAYER_*` in
-/// `buddies::original`); `u32::MAX` is all. For the Iris web page, which shows it taken apart.
+/// Which parts of the buddy are drawn, one bit per part (their `layer` in the recipe);
+/// `u32::MAX` is all. For the Iris web page, which shows it taken apart.
 #[allow(dead_code)]
 pub fn layers(mask: u32) {
-    buddies::original::LAYERS.store(mask, std::sync::atomic::Ordering::Relaxed);
+    recipe::LAYERS.store(mask, std::sync::atomic::Ordering::Relaxed);
 }
 
 impl Core {
     pub fn new() -> Self {
-        let baymax: Baymax = Original::new(Face::new());
-        Core::with(vec![Box::new(Original::new(Blob::new())), Box::new(baymax)], 0.0, State::Booting)
+        let build = |r: std::sync::Arc<recipe::Recipe>| -> Box<dyn Buddy> { Box::new(recipe::Assembled::new(&r).expect("a built-in recipe")) };
+        Core::with(vec![build(recipe::original()), build(recipe::baymax())], 0.0, State::Booting)
     }
 
     fn with(buddies: Vec<Box<dyn Buddy>>, t: f64, state: State) -> Self {
@@ -64,7 +62,8 @@ impl Core {
     /// A kid: already awake in `state`, with no boot or specks.
     fn mini(state: State, seed: u64) -> Self {
         // Each kid with its own phase, so they don't all breathe and blink in unison.
-        Core::with(vec![Box::new(Original::mini(state, seed))], 3.7 * seed as f64, state)
+        let kid = recipe::Assembled::kid(&recipe::original(), state, seed).expect("a built-in recipe");
+        Core::with(vec![Box::new(kid)], 3.7 * seed as f64, state)
     }
 
     /// The one shown: Baymax if its palette is set (and it's not a kid).

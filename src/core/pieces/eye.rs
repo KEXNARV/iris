@@ -35,11 +35,11 @@ pub(crate) struct Controls {
 
 /// The pupil this frame.
 pub(crate) struct Pupil {
-    x: f64,
-    y: f64,
-    r: f64,
-    blink: bool,
-    ink: u8,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) r: f64,
+    pub(crate) blink: bool,
+    pub(crate) ink: u8,
 }
 
 impl Eye {

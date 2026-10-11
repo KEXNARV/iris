@@ -7,7 +7,6 @@ use super::state::State;
 use super::grid::Grid;
 
 pub(crate) mod baymax;
-pub(crate) mod original;
 
 pub(crate) trait Buddy {
     /// Advances `dt` seconds. The core has already moved the clock and the state.

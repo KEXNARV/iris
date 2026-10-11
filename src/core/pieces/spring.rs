@@ -20,6 +20,15 @@ impl Spring {
         Spring { sq: 0.0, v: 0.0, stiffness: 140.0, damping: 9.0, step: 0.06, cap: 0.18 }
     }
 
+    /// One already moving: squashed `sq` and going at `v`.
+    pub fn at(sq: f64, v: f64) -> Self {
+        Spring { sq, v, ..Spring::new() }
+    }
+
+    pub fn v(&self) -> f64 {
+        self.v
+    }
+
     /// A push; with `/calm`, gentler.
     pub fn push(&mut self, v: f64, calm: f64) {
         self.v += v * calm;
