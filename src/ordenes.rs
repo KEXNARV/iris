@@ -170,6 +170,10 @@ pub(crate) fn answer(app: &mut App, claude: &mut Option<Claude>, typed: &str) {
             }
             claude.as_mut().map(|c| c.allow(&id, input))
         }
+        Outcome::Siempre(input, reglas) => {
+            app.push(Role::System, format!("permitido en esta sesión: {q}"));
+            claude.as_mut().map(|c| c.allow_siempre(&id, input, reglas))
+        }
         Outcome::Deny(why) => {
             app.push(Role::System, format!("rechazado: {q}"));
             claude.as_mut().map(|c| c.deny(&id, &why))

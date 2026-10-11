@@ -48,7 +48,7 @@ pub(in crate::ui) fn propuesta(f: &mut Frame, app: &App) {
         let buf = f.buffer_mut();
         let y = chat_in.y + chat_in.height / 3;
         put(buf, chat_in.x + GUION as u16, y, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold(), chat_in.width);
-        put(buf, chat_in.x + GUION as u16, y + 1, "¿En qué trabajamos?", Style::new().fg(theme::accent()).bold(), chat_in.width);
+        put(buf, chat_in.x + GUION as u16, y + 1, pregunta(app), Style::new().fg(theme::accent()).bold(), chat_in.width);
         put(buf, chat_in.x + GUION as u16, y + 3, "escribe, o mantén espacio y háblame", Style::new().fg(theme::faint()), chat_in.width);
         *app.view.borrow_mut() = Default::default();
     } else {

@@ -118,7 +118,7 @@ pub(in crate::ui) fn tablero(f: &mut Frame, app: &App) {
     let chat_in = Rect { x: chat.x + 2, y: chat.y + 1, width: chat.width.saturating_sub(4), height: chat.height.saturating_sub(2) };
     if app.messages.is_empty() {
         *app.view.borrow_mut() = Default::default();
-        put(buf, chat_in.x + GUION as u16, chat_in.y + 1, &format!("{}. ¿En qué trabajamos?", greeting()), Style::new().fg(theme::text()).bold(), chat_in.width);
+        put(buf, chat_in.x + GUION as u16, chat_in.y + 1, &format!("{}. {}", greeting(), pregunta(app)), Style::new().fg(theme::text()).bold(), chat_in.width);
     } else {
         render_chat(f, chat_in, app, chat_rows(app, chat_in.width as usize, Voz::Guion));
     }

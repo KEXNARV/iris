@@ -64,8 +64,8 @@ pub fn contraste(a: u32, b: u32) -> f64 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-/// Vuelve a los colores de fábrica y relee lo que toque.
-fn recargar() {
+/// Vuelve a los colores de fábrica y relee lo que toque (también deshace `probar_acento`).
+pub fn recargar() {
     ACCENT.store(0x00c8ff, Ordering::Relaxed);
     TEXT.store(0xcde1eb, Ordering::Relaxed);
     FAINT.store(0x5a6e7d, Ordering::Relaxed);
@@ -131,10 +131,34 @@ fn path() -> Option<PathBuf> {
     Some(crate::rutas::home()?.join(".local/state/omarchy/current/theme/colors.toml"))
 }
 
+/// ¿Hay un tema de Omarchy que seguir? Sin él, el acento es el que se eligió en la bienvenida.
+pub fn hay_omarchy() -> bool {
+    path().is_some_and(|p| p.exists())
+}
+
+/// Los acentos para elegir sin Omarchy: (id, nombre, color). El primero es el de siempre.
+pub const ACENTOS: [(&str, &str, u32); 8] = [
+    ("celeste", "Celeste", 0x00c8ff),
+    ("menta", "Menta", 0x3ee8b0),
+    ("verde", "Verde", 0x7bd88f),
+    ("ambar", "Ámbar", 0xffb84a),
+    ("coral", "Coral", 0xff7a6b),
+    ("rosa", "Rosa", 0xff7ac6),
+    ("violeta", "Violeta", 0xa78bfa),
+    ("hielo", "Hielo", 0xd8e6f0),
+];
+
+/// Pone el acento ya, sin guardarlo: la vista previa mientras se elige.
+pub fn probar_acento(c: u32) {
+    ACCENT.store(c, Ordering::Relaxed);
+}
+
 /// Relee el tema si cambió desde la última vez. Devuelve true si cambió algo.
 pub fn poll() -> bool {
     let Some(p) = path() else { return false };
-    let Ok(text) = std::fs::read_to_string(&p) else { return false };
+    // Sin Omarchy, el acento guardado hace de tema (solo trae ese color).
+    let propio = || crate::ajustes::leer("acento").map(|a| format!("accent = \"{a}\"\n"));
+    let Some(text) = std::fs::read_to_string(&p).ok().or_else(propio) else { return false };
     let mut seen = SEEN.lock().unwrap();
     if *seen == text {
         return false;

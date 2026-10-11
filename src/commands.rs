@@ -16,6 +16,8 @@ const LOCAL: &[(&str, &str)] = &[
     ("effort", "cuánto piensa: low, medium, high, xhigh o max · /effort high"),
     ("copy", "copiar la última respuesta (o arrastra con el mouse en el chat)"),
     ("clear", "conversación nueva; la anterior queda en /resume (^L solo limpia la pantalla)"),
+    ("welcome", "repetir la bienvenida: permisos, estilo, voz, modelo y el recorrido"),
+    ("login", "iniciar sesión en tu cuenta de Claude (abre el navegador)"),
     ("restart", "reiniciar el motor con una sesión nueva (^R)"),
     ("calm", "menos movimiento en el núcleo (alterna)"),
     ("voice", "cuándo contesta hablando: auto (si le hablas), always o never"),

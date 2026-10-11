@@ -107,11 +107,11 @@ impl App {
                     self.push(Role::Error, format!("el turno terminó con error ({secs:.1}s)"));
                 }
             }
-            ClaudeEvent::Ask { request_id, tool, input } => {
+            ClaudeEvent::Ask { request_id, tool, input, suggestions } => {
                 if !self.focused && !self.flotante {
                     notify("Iris te pregunta algo", "Necesita tu respuesta para seguir.");
                 }
-                self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input)));
+                self.modal = Some(Modal::Ask(Ask::new(request_id, tool, input, suggestions)));
             }
             ClaudeEvent::Taken(id) => {
                 for m in self.messages.iter_mut().filter(|m| m.waiting.as_deref() == Some(&id)) {

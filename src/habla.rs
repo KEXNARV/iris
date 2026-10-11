@@ -40,7 +40,7 @@ impl Habla {
     fn start(&mut self) -> Result<(), String> {
         let python = base().join("py/bin/python");
         if !python.exists() {
-            return Err("no está el entorno de voz (~/.local/share/iris/py)".into());
+            return Err("falta el entorno de voz; lo deja listo el instalador: curl -fsSL https://iris.knarvaez.com/install.sh | sh".into());
         }
         // El script viaja dentro de Iris; se escribe si cambió.
         let path = base().join("hablar.py");

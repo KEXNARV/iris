@@ -42,7 +42,7 @@ pub(in crate::ui) fn chat_rows(app: &App, width: usize, voz: Voz) -> Vec<(Line<'
     if app.messages.is_empty() && voz != Voz::Guion {
         rows.push(blank());
         rows.push((
-            Line::from(Span::styled(format!("  {}. ¿En qué trabajamos?", greeting()), Style::new().fg(theme::text()).bold())),
+            Line::from(Span::styled(format!("  {}. {}", greeting(), pregunta(app)), Style::new().fg(theme::text()).bold())),
             2,
             false,
         ));

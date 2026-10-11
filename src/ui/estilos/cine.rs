@@ -128,7 +128,7 @@ pub(in crate::ui) fn cine(f: &mut Frame, app: &App) {
     } else if !reading {
         let buf = f.buffer_mut();
         put_center(buf, caption, caption.y + 1, &format!("{}.", greeting()), Style::new().fg(theme::text()).bold());
-        put_center(buf, caption, caption.y + 2, "¿En qué trabajamos?", Style::new().fg(theme::accent()).bold());
+        put_center(buf, caption, caption.y + 2, pregunta(app), Style::new().fg(theme::accent()).bold());
     }
     if hear {
         let w = Rect { x: caption.x + 2, y: caption.y + 3, width: caption.width.saturating_sub(4), height: 3 };

@@ -86,6 +86,11 @@ pub(in crate::ui) fn greeting() -> &'static str {
     }
 }
 
+/// La pregunta de la pantalla vacía; sin sesión en Claude, lo primero es /login.
+pub(in crate::ui) fn pregunta(app: &crate::App) -> &'static str {
+    if app.sin_sesion { "Primero inicia sesión: escribe /login" } else { "¿En qué trabajamos?" }
+}
+
 /// Fecha local: (año, mes, día, día de la semana con 0 = domingo).
 pub(in crate::ui) fn local_date() -> (i64, u32, u32, u32) {
     let utc = std::time::SystemTime::now()

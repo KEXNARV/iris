@@ -118,6 +118,8 @@ pub enum Modal {
     Buddy { sel: usize, antes: buddy::Buddy },
     /// Hay una versión nueva en GitHub: ¿actualizar?
     Update(update::Info),
+    /// La primera vez (o `/welcome`): ajustes paso a paso y el recorrido.
+    Bienvenida(crate::bienvenida::Bienvenida),
 }
 
 pub struct App {
@@ -259,6 +261,8 @@ pub struct App {
     /// Los subagentes que ya terminaron (los últimos 40), para Ctrl+G.
     pub agents_done: Vec<Agent>,
     pub(crate) next_kid: u64,
+    /// Claude Code no tiene sesión iniciada: la bienvenida pide /login.
+    pub sin_sesion: bool,
 }
 
 impl App {

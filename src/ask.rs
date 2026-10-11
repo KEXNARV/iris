@@ -16,6 +16,8 @@ pub struct Ask {
     /// Un permiso para otra herramienta, no una `AskUserQuestion`.
     pub permission: bool,
     input: Value,
+    /// Las reglas propuestas por el motor, ya para esta sesión; vacío si no propuso ninguna.
+    reglas: Value,
     pub questions: Vec<Question>,
     pub step: usize,
     pub sel: usize,
@@ -26,24 +28,30 @@ pub struct Ask {
 pub enum Outcome {
     Next,
     Allow(Value),
+    /// Permitir y no volver a preguntar por lo mismo en esta sesión: (input, reglas).
+    Siempre(Value, Value),
     Deny(String),
 }
 
 const ALLOW: &str = "Permitir";
+const SIEMPRE: &str = "Siempre";
 
 impl Ask {
-    pub fn new(request_id: String, tool: String, input: Value) -> Self {
+    pub fn new(request_id: String, tool: String, input: Value, suggestions: Value) -> Self {
         let s = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
         let permission = tool != "AskUserQuestion";
+        let reglas = if permission { para_la_sesion(&suggestions) } else { Value::Null };
         let questions = if permission {
+            let mut options = vec![(ALLOW.into(), "una vez".into())];
+            if !reglas.is_null() {
+                options.push((SIEMPRE.into(), format!("en esta sesión: {}", resumen(&reglas))));
+            }
+            options.push(("Rechazar".into(), "Claude sigue sin esta herramienta".into()));
             vec![Question {
                 header: "Permiso".into(),
                 text: format!("¿Dejo correr {tool}? {}", crate::claude::tool_detail(&input)),
                 multi: false,
-                options: vec![
-                    (ALLOW.into(), "una vez".into()),
-                    ("Rechazar".into(), "Claude sigue sin esta herramienta".into()),
-                ],
+                options,
             }]
         } else {
             input["questions"]
@@ -68,6 +76,7 @@ impl Ask {
             request_id,
             permission,
             input,
+            reglas,
             questions,
             step: 0,
             sel: 0,
@@ -111,6 +120,8 @@ impl Ask {
         if self.permission {
             return if answer == ALLOW {
                 Outcome::Allow(self.input.clone())
+            } else if answer == SIEMPRE {
+                Outcome::Siempre(self.input.clone(), self.reglas.clone())
             } else {
                 Outcome::Deny(format!("el usuario no lo permitió: {answer}"))
             };
@@ -127,4 +138,42 @@ impl Ask {
         input["answers"] = Value::Object(std::mem::take(&mut self.answers));
         Outcome::Allow(input)
     }
+}
+
+/// Las reglas que propone el motor, pero solo para esta sesión: las sugerencias vienen para
+/// guardarse en `.claude/settings.local.json` y aquí no se quiere tocar ningún archivo.
+/// `Null` si no hay ninguna.
+fn para_la_sesion(sugerencias: &Value) -> Value {
+    let reglas: Vec<Value> = sugerencias
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            let mut r = r.clone();
+            r["destination"] = Value::String("session".into());
+            r
+        })
+        .collect();
+    if reglas.is_empty() { Value::Null } else { Value::Array(reglas) }
+}
+
+/// «Bash(touch /tmp/x), carpeta /tmp»: lo que queda permitido, para la opción del menú.
+fn resumen(reglas: &Value) -> String {
+    let mut partes = vec![];
+    for r in reglas.as_array().into_iter().flatten() {
+        for x in r["rules"].as_array().into_iter().flatten() {
+            let tool = x["toolName"].as_str().unwrap_or("");
+            match x["ruleContent"].as_str() {
+                Some(c) => partes.push(format!("{tool}({c})")),
+                None => partes.push(tool.to_string()),
+            }
+        }
+        for d in r["directories"].as_array().into_iter().flatten() {
+            partes.push(format!("carpeta {}", d.as_str().unwrap_or("")));
+        }
+        if let Some(m) = r["mode"].as_str() {
+            partes.push(format!("modo {m}"));
+        }
+    }
+    partes.join(", ")
 }

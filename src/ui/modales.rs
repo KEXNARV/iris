@@ -14,6 +14,7 @@ pub(in crate::ui) fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Color { sel, .. }) => draw_colores(f, anchor, *sel),
         Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
+        Some(Modal::Bienvenida(b)) => draw_bienvenida(f, anchor, app, b),
         None => draw_menu(f, anchor, app),
     }
 }
@@ -185,6 +186,43 @@ pub(in crate::ui) fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::upda
         .collect();
     let hints = [("enter", "actualizar"), ("esc", "ahora no")];
     overlay(f, anchor, "ACTUALIZACIÓN", theme::accent(), head, items, 0, 8, &hints);
+}
+
+pub(in crate::ui) fn draw_bienvenida(f: &mut Frame, anchor: Rect, app: &App, b: &crate::bienvenida::Bienvenida) {
+    use crate::bienvenida::Paso;
+    let w = anchor.width.saturating_sub(2) as usize;
+    let (titulo, texto, ops) = b.pantalla(app);
+    let mut head = vec![Line::from(vec![
+        Span::styled(format!(" {} ", titulo.to_uppercase()), Style::new().fg(Color::Black).bg(theme::accent()).bold()),
+        Span::styled(format!("  {}/{}", b.i + 1, b.pasos.len()), Style::new().fg(theme::faint())),
+    ])];
+    // Solo por espacios: con el corte de siempre «/effort» quedaba partido en «/» y «effort».
+    let opts = textwrap::Options::new(w.saturating_sub(2).max(1)).word_separator(textwrap::WordSeparator::AsciiSpace);
+    for l in textwrap::wrap(&texto, opts) {
+        head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()))));
+    }
+    head.push(Line::default());
+    let name_w = ops.iter().map(|o| o.0.chars().count()).max().unwrap_or(0).min(24);
+    let acento = b.paso() == Paso::Acento;
+    let items = ops
+        .iter()
+        .enumerate()
+        .map(|(i, (nombre, desc))| {
+            let mut l = item(i == b.sel, "", nombre, name_w, desc, w);
+            if acento {
+                // La muestra del color, entre la marca y el nombre.
+                let c = crate::theme::ACENTOS[i].2;
+                l.spans.insert(1, Span::styled("██ ", Style::new().fg(Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))));
+            }
+            l
+        })
+        .collect();
+    let hints: &[(&str, &str)] = match b.paso() {
+        Paso::Tour(_) => &[("enter", "seguir"), ("←", "atrás"), ("esc", "terminar")],
+        Paso::Estilo | Paso::Acento | Paso::Buddy => &[("↑↓", "probar"), ("enter", "usar"), ("←", "atrás"), ("esc", "terminar")],
+        _ => &[("↑↓", "elegir"), ("enter", "seguir"), ("←", "atrás"), ("esc", "terminar")],
+    };
+    overlay(f, anchor, "BIENVENIDA", theme::accent(), head, items, b.sel, 10, hints);
 }
 
 pub(in crate::ui) fn draw_ask(f: &mut Frame, anchor: Rect, a: &crate::ask::Ask) {

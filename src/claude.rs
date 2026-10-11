@@ -24,7 +24,8 @@ pub enum ClaudeEvent {
     /// Tokens de contexto que lleva la conversación (entrada + caché del último mensaje).
     Usage(u64),
     /// El motor espera respuesta del usuario: una `AskUserQuestion` o un permiso.
-    Ask { request_id: String, tool: String, input: Value },
+    /// `suggestions`: las reglas que el motor propone para no volver a preguntar.
+    Ask { request_id: String, tool: String, input: Value, suggestions: Value },
     /// El motor tomó el mensaje con este id (lo repite al leerlo, por `--replay-user-messages`).
     Taken(String),
     /// `/compact` terminó: tokens de contexto antes y después.
@@ -68,8 +69,6 @@ impl Claude {
                 // Repite cada mensaje nuestro en el momento en que lo lee: así se sabe cuándo
                 // uno escrito a mitad de turno deja de estar en espera.
                 "--replay-user-messages",
-                // Sin pedir permiso para cada herramienta.
-                "--dangerously-skip-permissions",
                 // Sin esto `AskUserQuestion` no existe en `-p`; con esto el motor nos pregunta a
                 // nosotros por stdout (`control_request` `can_use_tool`) y espera la respuesta.
                 "--permission-prompt-tool",
@@ -81,6 +80,8 @@ impl Claude {
                  muestra como adjunto y un clic lo copia al portapapeles para pegarlo donde quiera. \
                  No digas que no puedes pasarle archivos.",
             ])
+            // Permisos, modelo y esfuerzo elegidos en la bienvenida.
+            .args(crate::ajustes::args_motor(extra_args))
             .args(extra_args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -152,6 +153,12 @@ impl Claude {
     /// Deja correr la herramienta; para `AskUserQuestion`, `input` ya lleva las `answers`.
     pub fn allow(&mut self, request_id: &str, input: Value) -> Result<()> {
         self.respond(request_id, json!({ "behavior": "allow", "updatedInput": input }))
+    }
+
+    /// Deja correr la herramienta y suma las reglas (`updatedPermissions`) para lo que queda
+    /// de la sesión del motor: no vuelve a preguntar por lo mismo.
+    pub fn allow_siempre(&mut self, request_id: &str, input: Value, reglas: Value) -> Result<()> {
+        self.respond(request_id, json!({ "behavior": "allow", "updatedInput": input, "updatedPermissions": reglas }))
     }
 
     pub fn deny(&mut self, request_id: &str, why: &str) -> Result<()> {
@@ -307,6 +314,7 @@ fn parse(v: &Value) -> Vec<ClaudeEvent> {
             request_id: s(v, "request_id"),
             tool: s(&v["request"], "tool_name"),
             input: v["request"]["input"].clone(),
+            suggestions: v["request"]["permission_suggestions"].clone(),
         }],
         Some("result") => vec![ClaudeEvent::Done {
             cost: v["total_cost_usd"].as_f64().unwrap_or(0.0),

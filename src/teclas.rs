@@ -197,6 +197,15 @@ pub(crate) fn handle_key(
                     return Flow::Go;
                 }
                 "/restart" => return Flow::Restart,
+                "/login" if app.busy => {
+                    app.push(Role::Error, "espera a que termine el turno (o Esc) antes de iniciar sesión");
+                    return Flow::Go;
+                }
+                "/login" => return Flow::Login,
+                "/welcome" => {
+                    app.modal = Some(Modal::Bienvenida(bienvenida::Bienvenida::new(app)));
+                    return Flow::Redraw;
+                }
                 "/voice" => {
                     app.voz_modo = match (arg.trim(), app.voz_modo) {
                         ("always", _) | ("on", _) => VozModo::Siempre,
@@ -439,6 +448,35 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
             }
             baymax::poner_nucleo(baymax::OPCIONES[*sel].2);
             Some(Flow::Redraw)
+        }
+        Modal::Bienvenida(_) => {
+            // Se saca del modal para poder tocar `app` mientras se elige.
+            let Some(Modal::Bienvenida(mut b)) = app.modal.take() else { unreachable!() };
+            use bienvenida::Accion;
+            let accion = match k.code {
+                KeyCode::Up => b.mover(app, false),
+                KeyCode::Down => b.mover(app, true),
+                KeyCode::Char(c @ '1'..='9') => b.elegir_numero(app, (c as u8 - b'1') as usize),
+                KeyCode::Left | KeyCode::Backspace => b.atras(app),
+                KeyCode::Enter => b.elegir(app),
+                KeyCode::Esc => b.saltar(app),
+                _ => Accion::Nada,
+            };
+            let flow = match accion {
+                Accion::Nada => {
+                    app.modal = Some(Modal::Bienvenida(b));
+                    Flow::Redraw
+                }
+                Accion::Login => {
+                    app.modal = Some(Modal::Bienvenida(b));
+                    Flow::Login
+                }
+                Accion::Fin { relanzar } => {
+                    app.flash = Some(("listo: /welcome lo repite cuando quieras".into(), Instant::now()));
+                    if relanzar { Flow::Relanzar } else { Flow::Redraw }
+                }
+            };
+            Some(flow)
         }
         Modal::Ask(a) => {
             match k.code {

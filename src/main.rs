@@ -1,4 +1,6 @@
 mod adjunto;
+mod ajustes;
+mod bienvenida;
 mod enlace;
 mod ask;
 mod baymax;
@@ -8,6 +10,7 @@ mod clip;
 mod commands;
 mod entrada;
 mod habla;
+mod login;
 mod estilo;
 mod md;
 mod musica;
@@ -68,6 +71,12 @@ fn main() -> Result<()> {
     }
     let (tx, rx) = mpsc::channel();
 
+    let cuenta = login::cuenta();
+    if cuenta.is_none() {
+        eprintln!("Iris va encima de Claude Code y no lo encuentro (el comando claude).");
+        eprintln!("Instálalo con: curl -fsSL https://claude.ai/install.sh | bash");
+        std::process::exit(1);
+    }
     let mut claude = Some(Claude::spawn(&extra, tx.clone())?);
     let (voice_tx, level) = voice::spawn(tx.clone());
     update::spawn(tx.clone());
@@ -87,7 +96,7 @@ fn main() -> Result<()> {
         voice_model: String::new(),
         levels: vec![0.0; 256],
         model: String::new(),
-        effort: "auto".into(),
+        effort: ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into()),
         session: String::new(),
         cost: 0.0,
         turns: 0,
@@ -137,7 +146,7 @@ fn main() -> Result<()> {
             _ if flotante => VozModo::Siempre,
             Some("always") | Some("siempre") => VozModo::Siempre,
             Some("never") | Some("nunca") | Some("0") => VozModo::Nunca,
-            _ => VozModo::Auto,
+            _ => bienvenida::voz_guardada().unwrap_or(VozModo::Auto),
         },
         spoken_next: false,
         speak_turn: false,
@@ -168,34 +177,15 @@ fn main() -> Result<()> {
         agents: vec![],
         agents_done,
         next_kid: 0,
+        sin_sesion: matches!(cuenta, Some(login::Cuenta::SinSesion)),
     };
+    if !flotante && ajustes::primera_vez() {
+        app.modal = Some(Modal::Bienvenida(bienvenida::Bienvenida::new(&app)));
+    }
 
-    let mut term = ratatui::init();
-    // Para mantener espacio y hablar hace falta saber cuándo se suelta. Con «desambiguar» y
-    // «tipos de evento» las letras siguen llegando como texto (acentos y tildes muertas
-    // intactos) y además llega el soltar. «Todas las teclas como códigos» duplica la é en foot.
-    use crossterm::event::{KeyboardEnhancementFlags as K, PushKeyboardEnhancementFlags};
-    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
-        let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
-        app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
-    }
-    // Con el mouse en manos de Iris, arrastrar copia solo texto del chat; Shift+arrastrar
-    // sigue siendo la selección de la terminal.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
-    // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
-    // primer salto, y una ruta de imagen arrastrada a la terminal se puede adjuntar.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
-    // Saber si la ventana tiene el foco: para avisar con una notificación y, en el modo
-    // flotante, para empezar a escuchar al aparecer.
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
+    let mut term = abrir_terminal(&mut app);
     let res = run(&mut term, &mut app, &mut claude, &voice_tx, &tx, &rx, &extra);
-    if app.key_release {
-        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
-    }
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
-    ratatui::restore();
+    cerrar_terminal(&app);
     if res.is_ok() && app.reexec {
         // Se instaló la versión nueva: se reabre con ella y retoma esta misma sesión.
         drop(claude);
@@ -227,6 +217,64 @@ fn main() -> Result<()> {
         }
     }
     res
+}
+
+/// La pantalla de Iris: ratatui más lo que la terminal tiene que avisar.
+fn abrir_terminal(app: &mut App) -> ratatui::DefaultTerminal {
+    let term = ratatui::init();
+    // Para mantener espacio y hablar hace falta saber cuándo se suelta. Con «desambiguar» y
+    // «tipos de evento» las letras siguen llegando como texto (acentos y tildes muertas
+    // intactos) y además llega el soltar. «Todas las teclas como códigos» duplica la é en foot.
+    use crossterm::event::{KeyboardEnhancementFlags as K, PushKeyboardEnhancementFlags};
+    if crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false) {
+        let flags = K::DISAMBIGUATE_ESCAPE_CODES | K::REPORT_EVENT_TYPES;
+        app.key_release = crossterm::execute!(std::io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok();
+    }
+    // Con el mouse en manos de Iris, arrastrar copia solo texto del chat; Shift+arrastrar
+    // sigue siendo la selección de la terminal.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    // Lo pegado llega en un solo evento: así un texto de varias líneas no se envía en el
+    // primer salto, y una ruta de imagen arrastrada a la terminal se puede adjuntar.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableBracketedPaste);
+    // Saber si la ventana tiene el foco: para avisar con una notificación y, en el modo
+    // flotante, para empezar a escuchar al aparecer.
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableFocusChange);
+    term
+}
+
+/// Devuelve la terminal como estaba: al salir y mientras corre `claude auth login`.
+fn cerrar_terminal(app: &App) {
+    if app.key_release {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
+    }
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableBracketedPaste);
+    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableFocusChange);
+    ratatui::restore();
+}
+
+/// Relanza el motor en la misma conversación, con lo que haya guardado ahora (cuenta,
+/// permisos, modelo, esfuerzo).
+fn relanzar(app: &mut App, claude: &mut Option<Claude>, extra: &[String], tx: &Sender<AppEvent>) -> Result<()> {
+    let mut args: Vec<String> = vec![];
+    let mut viejos = extra.iter();
+    while let Some(a) = viejos.next() {
+        if a == "--resume" {
+            viejos.next();
+        } else {
+            args.push(a.clone());
+        }
+    }
+    if !app.session.is_empty() {
+        args.extend(["--resume".into(), app.session.clone()]);
+    }
+    *claude = None;
+    app.drop_waiting();
+    *claude = Some(Claude::spawn(&args, tx.clone())?);
+    app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
+    app.alive = true;
+    app.busy = false;
+    Ok(())
 }
 
 fn run(
@@ -352,7 +400,7 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
-                            app.effort = "auto".into();
+                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.modal = None;
                             app.ctx_used = 0;
@@ -366,7 +414,7 @@ fn run(
                             *claude = None;
                             app.drop_waiting();
                             *claude = Some(Claude::spawn(extra, tx.clone())?);
-                            app.effort = "auto".into();
+                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;
@@ -387,7 +435,7 @@ fn run(
                             args.extend(["--resume".into(), id.clone()]);
                             *claude = None;
                             *claude = Some(Claude::spawn(&args, tx.clone())?);
-                            app.effort = "auto".into();
+                            app.effort = ajustes::leer("esfuerzo").unwrap_or_else(|| "auto".into());
                             app.alive = true;
                             app.busy = false;
                             app.modal = None;
@@ -408,6 +456,34 @@ fn run(
                             term.clear()?;
                         }
                         Flow::Redraw => term.clear()?,
+                        Flow::Relanzar => {
+                            relanzar(app, claude, extra, tx)?;
+                            app.push(Role::System, "motor relanzado con los ajustes nuevos");
+                            term.clear()?;
+                        }
+                        Flow::Login => {
+                            cerrar_terminal(app);
+                            let hecho = login::iniciar();
+                            *term = abrir_terminal(app);
+                            term.clear()?;
+                            app.sixel_shown = None;
+                            app.thumbs_shown.clear();
+                            match hecho {
+                                Ok(true) => {
+                                    // El motor leyó las credenciales al arrancar: se relanza para
+                                    // que use la cuenta nueva.
+                                    relanzar(app, claude, extra, tx)?;
+                                    let quien = match login::cuenta() {
+                                        Some(login::Cuenta::Conectada(Some(email))) => format!(" como {email}"),
+                                        _ => String::new(),
+                                    };
+                                    app.sin_sesion = false;
+                                    app.push(Role::System, format!("sesión iniciada{quien}"));
+                                }
+                                Ok(false) => app.push(Role::Error, "no se inició sesión; vuelve a intentarlo con /login"),
+                                Err(e) => app.push(Role::Error, format!("no pude abrir claude auth login: {e}")),
+                            }
+                        }
                         Flow::Update => {
                             app.push(Role::System, "actualizando: bajando la versión nueva…");
                             update::install(tx.clone());
@@ -469,4 +545,8 @@ enum Flow {
     Resume(String),
     /// Bajar e instalar la versión nueva.
     Update,
+    /// `/login`: iniciar sesión en Claude con la terminal entera.
+    Login,
+    /// Relanzar el motor en la misma conversación: cambiaron permisos, modelo o esfuerzo.
+    Relanzar,
 }

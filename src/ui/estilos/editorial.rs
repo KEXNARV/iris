@@ -49,7 +49,7 @@ pub(in crate::ui) fn editorial(f: &mut Frame, app: &App) {
                 put(buf, tit.x, tit.y, &spaced_title(&title), Style::new().fg(tone).bold(), tit.width);
             }
         }
-        let lead = if detail.is_empty() { format!("{}. ¿En qué trabajamos?", greeting()) } else { detail.clone() };
+        let lead = if detail.is_empty() { format!("{}. {}", greeting(), pregunta(app)) } else { detail.clone() };
         put(buf, sub.x, sub.y, &lead, Style::new().fg(theme::text()), sub.width);
         hline(buf, rule.x, rule.right() - 1, rule.y, "━", Style::new().fg(theme::faint()));
     }

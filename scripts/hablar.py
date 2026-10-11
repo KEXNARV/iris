@@ -1,4 +1,4 @@
-"""La voz de JARVIS: Kokoro (em_alex) en un proceso aparte que JARVIS deja abierto.
+"""La voz de Iris: Kokoro (em_alex) en un proceso aparte que Iris deja abierto.
 
 Recibe por stdin una orden JSON por línea:
     {"op": "say", "text": "…"}   decir una frase (se encola)
@@ -10,7 +10,8 @@ Responde por stdout, una línea por evento:
     idle                         terminó todo lo que tenía que decir
 
 Mientras suena una frase se genera la siguiente, así no hay silencios entre frases.
-JARVIS escribe este archivo en ~/.local/share/jarvis/hablar.py al arrancar.
+Iris escribe este archivo en su carpeta de datos (~/.local/share/iris/hablar.py); el modelo
+va al lado, en kokoro/ (lo baja el instalador).
 """
 
 import json
@@ -24,9 +25,15 @@ import time
 import numpy as np
 from kokoro_onnx import Kokoro
 
-BASE = os.path.expanduser("~/.local/share/jarvis/kokoro")
-VOICE = os.environ.get("JARVIS_VOZ", "em_alex")
-SPEED = float(os.environ.get("JARVIS_VOZ_VELOCIDAD", "1.0"))
+BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kokoro")
+
+
+def var(nombre, defecto):
+    return os.environ.get("IRIS_" + nombre) or os.environ.get("JARVIS_" + nombre) or defecto
+
+
+VOICE = var("VOZ", "em_alex")
+SPEED = float(var("VOZ_VELOCIDAD", "1.0"))
 
 out_lock = threading.Lock()
 
