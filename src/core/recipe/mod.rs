@@ -8,6 +8,8 @@
 
 mod builtin;
 pub(crate) mod bus;
+pub(crate) mod files;
+mod shape;
 pub(crate) mod part;
 #[cfg(feature = "pieces")]
 pub(crate) mod wasm;
@@ -48,6 +50,8 @@ pub(crate) struct PieceSpec {
 }
 
 pub(crate) struct Recipe {
+    /// Where its `use` lines find their files; none for the built-in recipes.
+    pub files: Option<Arc<dyn files::Files>>,
     /// The script: the value of each channel in each state. `default` holds every channel;
     /// each state, only what changes.
     script: Vec<(String, f64)>,
@@ -109,7 +113,15 @@ impl Recipe {
         if let Some(missing) = draw.iter().find(|d| !pieces.iter().any(|p| &p.id == *d)) {
             return Err(format!("[draw] nombra «{missing}», que no está entre las piezas"));
         }
-        Ok(Recipe { script, states, pieces, draw })
+        Ok(Recipe { files: None, script, states, pieces, draw })
+    }
+
+    /// A recipe from a folder: its `recipe.toml`, and its files next to it.
+    pub fn load_dir(dir: &std::path::Path) -> Result<Recipe, String> {
+        let src = std::fs::read_to_string(dir.join("recipe.toml")).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut r = Recipe::parse(&src)?;
+        r.files = Some(Arc::new(files::Disk { dir: dir.to_path_buf() }));
+        Ok(r)
     }
 
     /// The script's values for a state: the default ones with that state's on top.
@@ -151,6 +163,8 @@ struct Slot {
     id: String,
     part: Box<dyn Part>,
     layer: Option<u32>,
+    /// It broke and was already reported: it's no longer called.
+    off: bool,
 }
 
 /// A recipe running: the buddy the core sees.
@@ -211,7 +225,7 @@ impl Assembled {
         for spec in recipe.pieces.iter().filter(|p| !kid || p.kid) {
             let mut b = Build { recipe, spec, bus: &mut bus, rand: &mut rand, state };
             let part = builtin::make(&mut b)?;
-            slots.push(Slot { id: spec.id.clone(), part, layer: spec.layer });
+            slots.push(Slot { id: spec.id.clone(), part, layer: spec.layer, off: false });
         }
         let draw = recipe.draw.iter().filter_map(|d| slots.iter().position(|s| &s.id == d)).collect();
         let col = [bus.ch("col.r"), bus.ch("col.g"), bus.ch("col.b")];
@@ -222,13 +236,16 @@ impl Assembled {
     /// Runs `f` on each part in order, delivering the messages each one sends before the next.
     fn each(&mut self, ctx: &Context, mut f: impl FnMut(&mut dyn Part, &mut World)) {
         for i in 0..self.slots.len() {
+            if self.slots[i].off {
+                continue;
+            }
             let mut w = World { ctx, bus: &mut self.bus, rand: &mut self.rand, out: &mut self.out };
             f(&mut *self.slots[i].part, &mut w);
             while !self.out.is_empty() {
                 let msgs = std::mem::take(&mut self.out);
                 for m in msgs {
                     for (j, s) in self.slots.iter_mut().enumerate() {
-                        if j != i {
+                        if j != i && !s.off {
                             let mut w = World { ctx, bus: &mut self.bus, rand: &mut self.rand, out: &mut self.out };
                             s.part.message(&mut w, m);
                         }
@@ -266,12 +283,12 @@ impl Buddy for Assembled {
 
     fn paint(&self, g: &mut Grid, ctx: &Context) {
         let mut f = Frame { ctx, bus: self.bus.clone() };
-        for s in &self.slots {
+        for s in self.slots.iter().filter(|s| !s.off) {
             s.part.layout(&mut f, g);
         }
         for &i in &self.draw {
             let s = &self.slots[i];
-            if s.layer.is_none_or(layer_on) {
+            if !s.off && s.layer.is_none_or(layer_on) {
                 s.part.paint(g, &f);
             }
         }
@@ -289,6 +306,28 @@ impl Buddy for Assembled {
 
     fn color(&self) -> [f64; 3] {
         self.col.map(|c| self.bus.get(c))
+    }
+
+    fn channels(&self, ctx: &Context) -> Vec<(String, f64)> {
+        let g = Grid::with_dots(120, 120, 2, 4);
+        let mut f = Frame { ctx, bus: self.bus.clone() };
+        for s in self.slots.iter().filter(|s| !s.off) {
+            s.part.layout(&mut f, &g);
+        }
+        f.bus.all()
+    }
+
+    fn take_broken(&mut self) -> Vec<(String, String)> {
+        let mut out = vec![];
+        for s in &mut self.slots {
+            if !s.off {
+                if let Some(why) = s.part.broken() {
+                    s.off = true;
+                    out.push((s.id.clone(), why));
+                }
+            }
+        }
+        out
     }
 
     fn alarm(&self) -> f64 {

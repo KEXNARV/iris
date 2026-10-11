@@ -918,6 +918,7 @@ dependencies = [
  "dirs",
  "image",
  "iris-piece",
+ "iris-shape",
  "pulldown-cmark",
  "ratatui",
  "serde",
@@ -933,6 +934,13 @@ dependencies = [
 [[package]]
 name = "iris-piece"
 version = "0.1.0"
+
+[[package]]
+name = "iris-shape"
+version = "0.1.0"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "itertools"

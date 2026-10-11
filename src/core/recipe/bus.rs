@@ -34,6 +34,13 @@ impl Bus {
         self.names.get(name).map(|&i| Ch(i))
     }
 
+    /// Every channel with its value, by name (for Iris Studio's inspector).
+    pub fn all(&self) -> Vec<(String, f64)> {
+        let mut v: Vec<(String, f64)> = self.names.iter().map(|(n, &i)| (n.clone(), self.values[i])).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
     pub fn get(&self, c: Ch) -> f64 {
         self.values[c.0]
     }

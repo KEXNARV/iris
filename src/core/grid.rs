@@ -102,6 +102,16 @@ impl Grid {
         self.used[b] = true;
     }
 
+    /// The columns and rows (end exclusive) whose dots can fall in the world box.
+    pub(crate) fn span(&self, x0: f64, y0: f64, x1: f64, y1: f64) -> ((usize, usize), (usize, usize)) {
+        let col = |x: f64| (((self.ox + x * self.k) * self.s / self.asp + 1.0) / 2.0 * (self.dw - 1) as f64).round();
+        let row = |y: f64| ((1.0 - ((self.oy + y * self.k) * self.s + 1.0) / 2.0) * (self.dh - 1) as f64).round();
+        let (a, b) = (col(x0.min(x1)), col(x0.max(x1)));
+        let (c, d) = (row(y0.max(y1)), row(y0.min(y1)));
+        let clamp = |v: f64, n: usize| v.clamp(0.0, n as f64) as usize;
+        ((clamp(a.min(b) - 1.0, self.dw), clamp(a.max(b) + 2.0, self.dw)), (clamp(c.min(d) - 1.0, self.dh), clamp(c.max(d) + 2.0, self.dh)))
+    }
+
     pub(crate) fn center(&self, i: usize, j: usize) -> (f64, f64) {
         let x = (i as f64 / (self.dw - 1) as f64 * 2.0 - 1.0) * self.asp / self.s;
         let y = (1.0 - j as f64 / (self.dh - 1) as f64 * 2.0) / self.s;

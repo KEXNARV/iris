@@ -1,0 +1,9 @@
+[package]
+name = "iris-shape"
+version = "0.1.0"
+edition = "2024"
+description = "Shape pieces for Iris: layers of shapes whose properties are live formulas over the buddy's channels"
+license = "MIT"
+
+[dependencies]
+toml = { version = "1.1.8", default-features = false, features = ["parse", "std", "serde"] }

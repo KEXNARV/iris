@@ -176,14 +176,13 @@ impl WasmPart {
         let _ = self.call(w.bus, Some(w.ctx), 0.0, None, Some(w.rand), |s| f.call(s, (kind, a, b)));
     }
 
-    /// Why it stopped working, if it did.
-    #[cfg(test)]
-    pub fn broken(&self) -> Option<String> {
-        self.inner.borrow().broken.clone()
-    }
 }
 
 impl Part for WasmPart {
+    fn broken(&self) -> Option<String> {
+        self.inner.borrow().broken.clone()
+    }
+
     fn step(&mut self, w: &mut World, dt: f64) {
         let Some(f) = self.inner.borrow().f_step else { return };
         let _ = self.call(w.bus, Some(w.ctx), dt, None, Some(w.rand), |s| f.call(s, ()));

@@ -40,6 +40,9 @@ pub struct Core {
     /// to another (`/buddy`, even in the preview) doesn't reset them. The first is the original;
     /// the second, Baymax. Kids only have the first.
     buddies: Vec<Box<dyn Buddy>>,
+    /// A buddy from a recipe that isn't built in (the user's, the store's, a draft): when set,
+    /// it's the one shown.
+    custom: Option<Box<dyn Buddy>>,
 }
 
 /// Which parts of the buddy are drawn, one bit per part (their `layer` in the recipe);
@@ -56,7 +59,7 @@ impl Core {
     }
 
     fn with(buddies: Vec<Box<dyn Buddy>>, t: f64, state: State) -> Self {
-        Core { ctx: Context { t, state, since: t, sig: Signals::default(), look: None }, fired: vec![], buddies }
+        Core { ctx: Context { t, state, since: t, sig: Signals::default(), look: None }, fired: vec![], buddies, custom: None }
     }
 
     /// A kid: already awake in `state`, with no boot or specks.
@@ -66,14 +69,44 @@ impl Core {
         Core::with(vec![Box::new(kid)], 3.7 * seed as f64, state)
     }
 
-    /// The one shown: Baymax if its palette is set (and it's not a kid).
+    /// A core with only this recipe's buddy (Iris Studio, `iris piece try`).
+    pub(crate) fn from_recipe(r: &recipe::Recipe) -> Result<Self, String> {
+        Ok(Core::with(vec![Box::new(recipe::Assembled::new(r)?)], 0.0, State::Booting))
+    }
+
+    /// Shows this recipe's buddy instead of the built-in ones (`None` goes back to them). It's
+    /// born already awake, in the current state.
+    pub(crate) fn set_recipe(&mut self, r: Option<&recipe::Recipe>) -> Result<(), String> {
+        self.custom = match r {
+            Some(r) => Some(Box::new(recipe::Assembled::new(r)?)),
+            None => None,
+        };
+        Ok(())
+    }
+
+    /// The shown buddy's channels and their values (Iris Studio's inspector).
+    #[allow(dead_code)]
+    pub(crate) fn channels(&self) -> Vec<(String, f64)> {
+        self.active_buddy().channels(&self.ctx)
+    }
+
+    /// What broke in the recipe shown since the last time: (part, why).
+    pub(crate) fn take_broken(&mut self) -> Vec<(String, String)> {
+        self.custom.as_mut().map(|c| c.take_broken()).unwrap_or_default()
+    }
+
+    /// The one shown: a recipe's if there is one; otherwise Baymax if its palette is set (and
+    /// it's not a kid).
     fn active_buddy(&self) -> &dyn Buddy {
+        if let Some(c) = &self.custom {
+            return &**c;
+        }
         let i = if self.buddies.len() > 1 && crate::theme::baymax() { 1 } else { 0 };
         &*self.buddies[i]
     }
 
     fn notify(&mut self, notice: Notice) {
-        for b in &mut self.buddies {
+        for b in self.buddies.iter_mut().chain(self.custom.as_mut()) {
             b.notice(notice, &self.ctx);
         }
     }
@@ -134,7 +167,7 @@ impl Core {
         let from = self.ctx.state;
         self.ctx.state = to;
         self.ctx.since = self.ctx.t;
-        for b in &mut self.buddies {
+        for b in self.buddies.iter_mut().chain(self.custom.as_mut()) {
             b.change(from, to, &self.ctx);
         }
     }
@@ -149,7 +182,7 @@ impl Core {
         if want != shown && (want.urgent() || shown.urgent() || shown_for >= shown.dwell()) {
             self.switch(want);
         }
-        for b in &mut self.buddies {
+        for b in self.buddies.iter_mut().chain(self.custom.as_mut()) {
             b.step(&self.ctx, dt);
         }
     }

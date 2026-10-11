@@ -30,6 +30,16 @@ pub(crate) trait Buddy {
     /// How much error it carries (0..1): the main one tints a kid's line red with this.
     fn alarm(&self) -> f64;
 
+    /// What broke since the last time: (part, why). Broken parts stay quiet; the rest goes on.
+    fn take_broken(&mut self) -> Vec<(String, String)> {
+        vec![]
+    }
+
+    /// Its channels and their values now (laid out as for a medium grid), if it's a recipe.
+    fn channels(&self, _ctx: &Context) -> Vec<(String, f64)> {
+        vec![]
+    }
+
     /// How many subagents it has in view.
     #[cfg(test)]
     fn kids(&self) -> usize;

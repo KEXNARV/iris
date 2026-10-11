@@ -43,8 +43,26 @@ use crate::core::state::{Event, State, ALL};
 
 /// Builds the part a recipe asks for.
 pub(crate) fn make(b: &mut Build) -> Result<Box<dyn Part>, String> {
-    if let Some(path) = b.spec.uses.strip_prefix("file:") {
-        return wasm_file(b, path);
+    let uses = b.spec.uses.clone();
+    if let Some(path) = uses.strip_prefix("file:") {
+        let wasm = read(b, path)?;
+        return wasm_part(b, &wasm).map_err(|e| format!("«{path}»: {e}"));
+    }
+    if let Some(path) = uses.strip_prefix("shape:") {
+        let src = String::from_utf8(read(b, path)?).map_err(|_| format!("«{path}» no es texto"))?;
+        return Ok(Box::new(super::shape::ShapePart::new(&src, b).map_err(|e| format!("«{path}»: {e}"))?));
+    }
+    if let Some((name, major)) = uses.split_once('@') {
+        let major: u64 = major.parse().map_err(|_| format!("«{uses}»: después de @ va la versión mayor (kirby@1)"))?;
+        let files = b.recipe.files.clone().ok_or(format!("«{uses}»: esta receta no puede usar piezas de la tienda"))?;
+        let (format, code) = files.store(name, major)?;
+        return match format.as_str() {
+            "wasm" => wasm_part(b, &code).map_err(|e| format!("«{uses}»: {e}")),
+            _ => {
+                let src = String::from_utf8(code).map_err(|_| format!("«{uses}» no es texto"))?;
+                Ok(Box::new(super::shape::ShapePart::new(&src, b).map_err(|e| format!("«{uses}»: {e}"))?))
+            }
+        };
     }
     let name = b.spec.uses.strip_prefix("builtin:").ok_or_else(|| format!("«{}»: no sé de dónde sacar esa pieza", b.spec.uses))?;
     Ok(match name {
@@ -88,16 +106,22 @@ pub(crate) fn make(b: &mut Build) -> Result<Box<dyn Part>, String> {
     })
 }
 
-/// A part in WebAssembly, from a file.
+/// A file the recipe names: next to it, or anywhere by its absolute path.
+fn read(b: &Build, path: &str) -> Result<Vec<u8>, String> {
+    match &b.recipe.files {
+        Some(f) => f.get(path),
+        None => std::fs::read(path).map_err(|e| format!("«{path}»: {e}")),
+    }
+}
+
 #[cfg(feature = "pieces")]
-fn wasm_file(b: &mut Build, path: &str) -> Result<Box<dyn Part>, String> {
-    let wasm = std::fs::read(path).map_err(|e| format!("«{path}»: {e}"))?;
-    Ok(Box::new(super::wasm::WasmPart::load(&wasm, b).map_err(|e| format!("«{path}»: {e}"))?))
+fn wasm_part(b: &mut Build, wasm: &[u8]) -> Result<Box<dyn Part>, String> {
+    Ok(Box::new(super::wasm::WasmPart::load(wasm, b)?))
 }
 
 #[cfg(not(feature = "pieces"))]
-fn wasm_file(_b: &mut Build, path: &str) -> Result<Box<dyn Part>, String> {
-    Err(format!("«{path}»: este Iris no carga piezas en WebAssembly"))
+fn wasm_part(_b: &mut Build, _wasm: &[u8]) -> Result<Box<dyn Part>, String> {
+    Err("este Iris no carga piezas en WebAssembly".into())
 }
 
 /// Where the body is, read from the bus (what `presence` publishes).

@@ -50,6 +50,11 @@ pub(crate) trait Part {
 
     fn paint(&self, _g: &mut Grid, _f: &Frame) {}
 
+    /// Why it stopped working, if it did (parts from the store can; built-in ones don't).
+    fn broken(&self) -> Option<String> {
+        None
+    }
+
     /// The inks it adds to the palette, after the five base ones, in drawing order.
     fn inks(&self, _col: [f64; 3]) -> Vec<[[f64; 3]; 4]> {
         vec![]
