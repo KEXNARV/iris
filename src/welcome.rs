@@ -94,7 +94,7 @@ impl Welcome {
         }
         steps.extend([Step::Buddy, Step::Voice, Step::Model, Step::Effort]);
         steps.extend((0..TOUR.len()).map(Step::Tour));
-        Welcome { steps, i: 0, sel: 0, style: app.style, buddy: app.buddy, relaunch: false }
+        Welcome { steps, i: 0, sel: 0, style: app.style, buddy: app.buddy.clone(), relaunch: false }
     }
 
     pub fn step(&self) -> Step {
@@ -191,7 +191,7 @@ impl Welcome {
     fn go_to(&mut self, app: &mut App, i: usize) {
         self.i = i;
         self.style = app.style;
-        self.buddy = app.buddy;
+        self.buddy = app.buddy.clone();
         self.sel = self.initial_sel(app);
     }
 
@@ -199,7 +199,7 @@ impl Welcome {
     fn preview(&self, app: &mut App) {
         match self.step() {
             Step::UiStyle => app.style = style::ALL[self.sel].0,
-            Step::Buddy => app.buddy = buddy::ALL[self.sel].0,
+            Step::Buddy => app.buddy = buddy::ALL[self.sel].0.clone(),
             Step::Accent => theme::preview_accent(theme::ACCENTS[self.sel].2),
             _ => {}
         }
@@ -209,7 +209,7 @@ impl Welcome {
     fn undo(&self, app: &mut App) {
         match self.step() {
             Step::UiStyle => app.style = self.style,
-            Step::Buddy => app.buddy = self.buddy,
+            Step::Buddy => app.buddy = self.buddy.clone(),
             Step::Accent => theme::reload(),
             _ => {}
         }
@@ -264,7 +264,7 @@ impl Welcome {
             Step::Accent => {
                 let _ = settings::save("acento", &format!("#{:06x}", theme::ACCENTS[sel].2));
             }
-            Step::Buddy => crate::actions::set_buddy(app, app.buddy),
+            Step::Buddy => crate::actions::set_buddy(app, app.buddy.clone()),
             Step::Voice => {
                 app.voice_mode = VOICES[sel].0;
                 let _ = settings::save("voz", VOICES[sel].1);

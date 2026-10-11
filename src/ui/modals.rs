@@ -12,8 +12,9 @@ pub(in crate::ui) fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Effort { sel }) => draw_efforts(f, anchor, app, *sel),
         Some(Modal::UiStyle { sel, .. }) => draw_styles(f, anchor, *sel),
         Some(Modal::Color { sel, .. }) => draw_colors(f, anchor, *sel),
-        Some(Modal::Buddy { sel, .. }) => draw_buddies(f, anchor, *sel),
+        Some(Modal::Buddy { sel, list, .. }) => draw_buddies(f, anchor, *sel, list),
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
+        Some(Modal::Store(m)) => draw_store(f, anchor, m),
         Some(Modal::Welcome(b)) => draw_welcome(f, anchor, app, b),
         None => draw_menu(f, anchor, app),
     }
@@ -137,15 +138,31 @@ pub(in crate::ui) fn draw_styles(f: &mut Frame, anchor: Rect, sel: usize) {
     overlay(f, anchor, "ESTILO", theme::accent(), vec![], items, sel, 8, &hints);
 }
 
-pub(in crate::ui) fn draw_buddies(f: &mut Frame, anchor: Rect, sel: usize) {
+pub(in crate::ui) fn draw_buddies(f: &mut Frame, anchor: Rect, sel: usize, list: &[crate::buddy::Entry]) {
     let w = anchor.width.saturating_sub(2) as usize;
-    let items = crate::buddy::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, (_, _, name, what))| item(i == sel, &format!("{} ", i + 1), name, 10, what, w))
-        .collect();
+    let items = list.iter().enumerate().map(|(i, e)| item(i == sel, &format!("{} ", i + 1), &e.name, 14, &e.what, w)).collect();
     let hints = [("↑↓", "probar"), ("enter", "usar"), ("esc", "volver")];
     overlay(f, anchor, "BUDDY", theme::accent(), vec![], items, sel, 8, &hints);
+}
+
+pub(in crate::ui) fn draw_store(f: &mut Frame, anchor: Rect, m: &crate::storefront::StoreModal) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let list = m.list();
+    let tabs = Line::from(vec![
+        Span::styled(if m.tab == 0 { " [BUDDIES] " } else { "  buddies  " }, Style::new().fg(if m.tab == 0 { theme::accent() } else { theme::faint() })),
+        Span::styled(if m.tab == 1 { " [PIEZAS] " } else { "  piezas  " }, Style::new().fg(if m.tab == 1 { theme::accent() } else { theme::faint() })),
+        Span::styled(m.busy.as_ref().map_or(String::new(), |b| format!("   bajando {b}…")), Style::new().fg(theme::faint())),
+    ]);
+    let mut items: Vec<Line<'static>> = list
+        .iter()
+        .enumerate()
+        .map(|(i, e)| item(i == m.sel, "", &e.name, 18, &format!("{} · {} · {}", e.version, e.author, e.description), w))
+        .collect();
+    if items.is_empty() {
+        items.push(Line::from(Span::styled("   nada por aquí todavía", Style::new().fg(theme::faint()))));
+    }
+    let hints = [("↑↓", "probar en el núcleo"), ("tab", "buddies/piezas"), ("enter", "instalar"), ("r", "reportar"), ("esc", "volver")];
+    overlay(f, anchor, "TIENDA", theme::accent(), vec![tabs], items, m.sel, 10, &hints);
 }
 
 pub(in crate::ui) fn draw_colors(f: &mut Frame, anchor: Rect, sel: usize) {

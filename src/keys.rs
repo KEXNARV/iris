@@ -237,7 +237,15 @@ pub(crate) fn handle_key(
                     return Flow::Go;
                 }
                 "/buddy" | "/budy" => {
-                    choose_buddy(app, arg.trim());
+                    match arg.trim() {
+                        "publish" | "publicar" => crate::storefront::publish_buddy(app),
+                        "edit" | "editar" => edit_buddy(app),
+                        a => choose_buddy(app, a),
+                    }
+                    return Flow::Go;
+                }
+                "/store" | "/tienda" => {
+                    crate::storefront::command(app, arg.trim());
                     return Flow::Go;
                 }
                 "/core" => {
@@ -342,6 +350,10 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
             }
             Some(Flow::Go)
         }
+        Modal::Store(_) => {
+            crate::storefront::on_key(app, k);
+            Some(Flow::Redraw)
+        }
         Modal::Update(_) => {
             match k.code {
                 KeyCode::Enter => {
@@ -405,26 +417,28 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
             app.style = style::ALL[*sel].0;
             Some(Flow::Redraw)
         }
-        Modal::Buddy { sel, before } => {
-            let n = buddy::ALL.len();
+        Modal::Buddy { sel, before, list } => {
+            let n = list.len().max(1);
             match k.code {
                 KeyCode::Up => *sel = (*sel + n - 1) % n,
                 KeyCode::Down => *sel = (*sel + 1) % n,
                 KeyCode::Char(c @ '1'..='9') if ((c as u8 - b'1') as usize) < n => *sel = (c as u8 - b'1') as usize,
                 KeyCode::Enter => {
                     app.modal = None;
-                    set_buddy(app, app.buddy);
+                    set_buddy(app, app.buddy.clone());
                     return Some(Flow::Redraw);
                 }
                 KeyCode::Esc => {
-                    app.buddy = *before;
+                    app.buddy = before.clone();
                     app.modal = None;
                     return Some(Flow::Redraw);
                 }
                 _ => {}
             }
             // Preview: the core changes while choosing.
-            app.buddy = buddy::ALL[*sel].0;
+            if let Some(e) = list.get(*sel) {
+                app.buddy = e.buddy.clone();
+            }
             Some(Flow::Redraw)
         }
         Modal::Color { sel, before } => {

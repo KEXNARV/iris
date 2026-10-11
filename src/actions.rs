@@ -88,25 +88,27 @@ pub(crate) fn theme(app: &mut App, arg: &str) {
 /// `/buddy`: with no argument, opens the list with preview; with one (`baymax`, `original`), applies it.
 pub(crate) fn choose_buddy(app: &mut App, arg: &str) {
     if arg.is_empty() {
-        let sel = buddy::ALL.iter().position(|b| b.0 == app.buddy).unwrap_or(0);
-        app.modal = Some(Modal::Buddy { sel, before: app.buddy });
+        let list = buddy::all();
+        let sel = list.iter().position(|e| e.buddy == app.buddy).unwrap_or(0);
+        app.modal = Some(Modal::Buddy { sel, before: app.buddy.clone(), list });
         return;
     }
     match buddy::Buddy::find(arg) {
         Some(b) => set_buddy(app, b),
         None => {
-            let ids: Vec<&str> = buddy::ALL.iter().map(|b| b.1).collect();
+            let names: Vec<String> = buddy::all().into_iter().map(|e| e.buddy.id()).collect();
+            let ids: Vec<&str> = names.iter().map(String::as_str).collect();
             app.push(Role::Error, format!("no conozco el buddy «{arg}» · hay {}", ids.join(", ")));
         }
     }
 }
 
 pub(crate) fn set_buddy(app: &mut App, b: buddy::Buddy) {
-    app.buddy = b;
-    let msg = match buddy::save(b) {
+    let msg = match buddy::save(&b) {
         Ok(()) => format!("buddy {}", b.name()),
         Err(err) => format!("buddy {} (no se guardó: {err})", b.name()),
     };
+    app.buddy = b;
     app.flash = Some((msg, Instant::now()));
 }
 
@@ -207,5 +209,108 @@ pub(crate) fn resume(app: &mut App, arg: &str) -> Flow {
             app.push(Role::Error, format!("no encontré la sesión «{arg}»; `/resume` para ver la lista"));
             Flow::Go
         }
+    }
+}
+
+/// Keeps the core showing the chosen recipe, and reloads it when its files change (edited by
+/// hand, or a draft arriving from Iris Studio). A recipe that fails says why and leaves the core
+/// as it was.
+pub(crate) fn sync_recipe(app: &mut App) {
+    let name = match &app.buddy {
+        buddy::Buddy::Recipe(n) => n.clone(),
+        _ => {
+            if app.shown_recipe.take().is_some() {
+                let _ = app.core.set_recipe(None);
+            }
+            return;
+        }
+    };
+    let same = app.shown_recipe.as_ref().is_some_and(|s| s.0 == name);
+    if same && app.recipe_checked.elapsed() < Duration::from_millis(500) {
+        return;
+    }
+    app.recipe_checked = Instant::now();
+    let Some(dir) = buddy::recipe_dir(&name) else {
+        app.push(Role::Error, format!("no encuentro el buddy «{name}»: vuelve el original"));
+        app.buddy = buddy::Buddy::Original;
+        return;
+    };
+    let stamp = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .max()
+        .unwrap_or(std::time::UNIX_EPOCH);
+    if app.shown_recipe.as_ref().is_some_and(|s| s.0 == name && s.1 == stamp) {
+        return;
+    }
+    let reload = same;
+    app.shown_recipe = Some((name.clone(), stamp));
+    match core::recipe::Recipe::load_dir(&dir).and_then(|r| app.core.set_recipe(Some(&r))) {
+        Ok(()) if reload => app.flash = Some((format!("{name} se actualizó"), Instant::now())),
+        Ok(()) => {}
+        Err(e) => app.push(Role::Error, format!("el buddy «{name}» no se pudo armar: {e}")),
+    }
+}
+
+/// A part of the recipe in the core stopped working: it's taken out (the rest goes on) and the
+/// user is told what happened, in plain words. A store piece that fails three times is turned
+/// off until a new version comes out.
+pub(crate) fn broken_parts(app: &mut App) {
+    for (part, why) in app.core.take_broken() {
+        let name = part.split('@').next().unwrap_or(&part).to_string();
+        let msg = if part.contains('@') {
+            match store::failed(&name) {
+                n if n >= 3 => format!("«{name}» falló tres veces y quedó desactivada hasta que salga una versión nueva · /store remove {name} para quitarla"),
+                _ => format!("«{name}» dejó de responder y la quité de tu buddy; lo demás sigue igual · se reactiva al volver a elegir el buddy"),
+            }
+        } else {
+            format!("«{name}» dejó de responder y la quité de tu buddy; lo demás sigue igual")
+        };
+        app.push(Role::System, format!("{msg} ({why})"));
+    }
+}
+
+/// `/buddy edit`: the current buddy in Iris Studio, on the web. With a store session it goes up
+/// as a draft and comes back live as it's edited; without one, the recipe's folder opens to edit
+/// by hand (Iris reloads it on every save).
+pub(crate) fn edit_buddy(app: &mut App) {
+    let name = match &app.buddy {
+        buddy::Buddy::Recipe(n) => n.clone(),
+        b => {
+            // A built-in one: a copy of it becomes the user's.
+            let mine = format!("mi-{}", b.id());
+            let Some(dir) = crate::paths::config().map(|c| c.join("buddies").join(&mine)) else { return };
+            let src = if *b == buddy::Buddy::Baymax { include_str!("core/recipe/baymax.toml") } else { include_str!("core/recipe/original.toml") };
+            if !dir.join("recipe.toml").exists() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(dir.join("recipe.toml"), src.replacen(&format!("name = \"{}\"", b.id()), &format!("name = \"{mine}\""), 1));
+            }
+            set_buddy(app, buddy::Buddy::Recipe(mine.clone()));
+            mine
+        }
+    };
+    let Some(dir) = buddy::recipe_dir(&name) else { return };
+    let Some(token) = store::token() else {
+        crate::link::open(&dir.display().to_string());
+        app.push(Role::System, format!("tu buddy está en {} · edita recipe.toml con lo que quieras y se recarga solo · para Iris Studio: iris login", dir.display()));
+        return;
+    };
+    let files: serde_json::Map<String, serde_json::Value> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml") && e.file_name() != "iris.toml")
+        .filter_map(|e| Some((e.file_name().to_string_lossy().to_string(), serde_json::Value::String(std::fs::read_to_string(e.path()).ok()?))))
+        .collect();
+    let body = serde_json::json!({ "files": files });
+    match crate::net::json("PUT", &format!("/api/me/drafts/{name}"), Some(&token), Some(&body)) {
+        Ok(_) => {
+            let url = format!("{}/studio?draft={name}", crate::net::base());
+            crate::link::open(&url);
+            app.push(Role::System, format!("«{name}» abierto en Iris Studio ({url}): lo que cambies ahí aparece aquí solo"));
+        }
+        Err(e) => app.push(Role::Error, format!("no pude abrirlo en Iris Studio: {e}")),
     }
 }

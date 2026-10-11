@@ -42,7 +42,8 @@ impl Files for Disk {
     }
 }
 
-/// In memory, by name; store pieces under `store/<name>@<major>/piece.wasm` or `…/shape.toml`.
+/// In memory (Iris Studio, in the browser), by name; store pieces under `store/<name>@<major>/piece.wasm` or `…/shape.toml`.
+#[allow(dead_code)]
 #[derive(Default, Clone)]
 pub(crate) struct Memory {
     pub files: HashMap<String, Vec<u8>>,

@@ -8,6 +8,7 @@ pub enum AppEvent {
     Voice(VoiceEvent),
     Speech(speech::SpeechEvent),
     Update(update::UpdateEvent),
+    Store(crate::storefront::StoreEvent),
 }
 
 /// When it answers out loud: `Auto` when you spoke to it (if you typed, silently).
@@ -115,7 +116,9 @@ pub enum Modal {
     /// `/core`: the color of Baymax's face.
     Color { sel: usize, before: baymax::Mode },
     /// `/buddy`: like `/theme`, with who lives in the core.
-    Buddy { sel: usize, before: buddy::Buddy },
+    Buddy { sel: usize, before: buddy::Buddy, list: Vec<buddy::Entry> },
+    /// `/store`: the catalog.
+    Store(crate::storefront::StoreModal),
     /// There is a new version on GitHub: update?
     Update(update::Info),
     /// The first time (or `/welcome`): step-by-step settings and the tour.
@@ -225,6 +228,12 @@ pub struct App {
     pub style: style::UiStyle,
     /// Who lives in the core (`/buddy`).
     pub buddy: buddy::Buddy,
+    /// The recipe the core is showing (if the buddy is one) and when its files last changed:
+    /// editing them, by hand or from Iris Studio, reloads it.
+    pub shown_recipe: Option<(String, std::time::SystemTime)>,
+    /// For what runs on threads (the store) to report back.
+    pub events: std::sync::mpsc::Sender<AppEvent>,
+    pub recipe_checked: Instant,
     /// Cine: the open reply in full at the center (decided by the drawing, which knows if it fits).
     pub reading: std::cell::Cell<bool>,
     /// Cine: the whole conversation unrolled like a curtain (^T).

@@ -35,6 +35,10 @@ mod send;
 mod listen;
 mod floating;
 mod screen;
+mod net;
+mod store;
+mod kit;
+mod storefront;
 
 use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
@@ -60,6 +64,10 @@ fn main() -> Result<()> {
     paths::migrate();
     voice::prefer_discrete_gpu();
     let mut extra: Vec<String> = std::env::args().skip(1).collect();
+    // The store's commands (iris login, iris piece …) don't open the chat.
+    if let Some(code) = kit::run(&extra) {
+        std::process::exit(code);
+    }
     if extra.first().map(String::as_str) == Some("--transcribe") {
         return voice::transcribe_file(extra.get(1).map_or("", String::as_str));
     }
@@ -80,6 +88,7 @@ fn main() -> Result<()> {
     let mut claude = Some(Claude::spawn(&extra, tx.clone())?);
     let (voice_tx, level) = voice::spawn(tx.clone());
     update::spawn(tx.clone());
+    storefront::sync_drafts(tx.clone());
 
     // `iris --resume <id>`: besides passing it to the engine, the conversation is shown.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::replay(id));
@@ -157,6 +166,9 @@ fn main() -> Result<()> {
         music_at: std::cell::Cell::new(None),
         style: style::load(),
         buddy: buddy::load(),
+        shown_recipe: None,
+        events: tx.clone(),
+        recipe_checked: Instant::now(),
         reading: Default::default(),
         transcript: false,
         tools_view: None,
@@ -342,8 +354,10 @@ fn run(
         app.agents_done.extend(stale);
         let excess = app.agents_done.len().saturating_sub(40);
         app.agents_done.drain(..excess);
+        sync_recipe(app);
         let (want, sig) = (app.state(), app.signals());
         app.core.step(dt, want, &sig);
+        broken_parts(app);
         // The keyboard follows the core: its state, the voice and the events.
         keyboard.tick(app.core.state(), sig.level);
         for ev in app.core.take_fired() {
@@ -520,6 +534,7 @@ fn run(
                         app.push(Role::Error, format!("sin voz: {why}"));
                     }
                 },
+                AppEvent::Store(e) => storefront::on_event(app, e),
                 AppEvent::Update(e) => match e {
                     update::UpdateEvent::Available(info) => app.update = Some(info),
                     update::UpdateEvent::Installed => {
