@@ -491,3 +491,89 @@ fn wasm_eye_draws_the_same_as_native() {
     }
     assert!(frames > 300);
 }
+
+/// A character's preview sheet (crates/pieces/sprite/preview.sh): the recipe in `PREVIEW_DIR`
+/// drawn in several moments, one PPM each in `PREVIEW_OUT`.
+#[test]
+#[ignore]
+fn preview() {
+    let (Ok(dir), Ok(out)) = (std::env::var("PREVIEW_DIR"), std::env::var("PREVIEW_OUT")) else { return };
+    let r = crate::core::recipe::Recipe::load_dir(std::path::Path::new(&dir)).unwrap();
+    let quiet = Signals::default();
+    let talking = Signals { level: 0.12, ..Default::default() };
+    // (name, state, signals, event fired a moment before, seconds)
+    let shots: [(&str, State, &Signals, Option<Event>, f64); 8] = [
+        ("espera", State::Idle, &quiet, None, 2.0),
+        ("pensando", State::Thinking, &quiet, None, 2.0),
+        ("hablando", State::Speaking, &talking, None, 2.0),
+        ("leyendo", State::Reading, &quiet, None, 2.0),
+        ("listo", State::Idle, &quiet, Some(Event::Done), 2.0),
+        ("error", State::Idle, &quiet, Some(Event::Error), 2.0),
+        ("corriendo", State::Running, &quiet, None, 2.0),
+        ("durmiendo", State::Sleeping, &quiet, None, 3.0),
+    ];
+    for (k, (name, state, sig, ev, secs)) in shots.iter().enumerate() {
+        let mut c = Core::from_recipe(&r).unwrap();
+        let mut t = 0.0;
+        while t < *secs {
+            if let Some(e) = ev {
+                if (t - (secs - 0.25)).abs() < 0.02 {
+                    c.fire(*e);
+                }
+            }
+            c.step(0.04, *state, sig);
+            t += 0.04;
+        }
+        for (p, why) in c.take_broken() {
+            println!("ROTA {p}: {why}");
+        }
+        let (w, h) = (300usize, 300usize);
+        let (img, colors) = c.pixels(w, h, 3);
+        let mut ppm = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for p in img {
+            let c = if p == 0 { [7.0, 6.0, 26.0] } else { colors[p as usize - 1] };
+            ppm.extend(c.iter().map(|v| v.round().clamp(0.0, 255.0) as u8));
+        }
+        std::fs::write(format!("{out}-{k}-{name}.ppm"), ppm).unwrap();
+    }
+}
+
+/// A character's stress test (crates/pieces/sprite/stress.sh): the recipe in `PREVIEW_DIR`
+/// through every state with every event and subagents, at several window sizes, for a long
+/// while. Prints any part that broke (none may).
+#[test]
+#[ignore]
+fn stress() {
+    let Ok(dir) = std::env::var("PREVIEW_DIR") else { return };
+    let r = crate::core::recipe::Recipe::load_dir(std::path::Path::new(&dir)).unwrap();
+    let mut bad = vec![];
+    for (w, h) in [(776usize, 944usize), (1100, 650), (1888, 1024), (980, 1150), (400, 300)] {
+        let mut c = Core::from_recipe(&r).unwrap();
+        let sig = Signals { level: 0.1, music: 0.5, ..Default::default() };
+        for (k, st) in ALL.iter().enumerate() {
+            for f in 0..120 {
+                c.step(0.04, *st, &sig);
+                if f == 5 {
+                    c.kid_born(k as u64 + 1);
+                }
+                if f == 60 {
+                    c.kid_end(k as u64 + 1, k % 2 == 0);
+                }
+                for (n, ev) in [Event::Key, Event::Error, Event::Done, Event::Copy, Event::Merge, Event::Cancel, Event::Nope, Event::Pass].into_iter().enumerate() {
+                    if f == 8 + n * 9 {
+                        c.fire(ev);
+                    }
+                }
+                if f % 6 == 0 {
+                    c.pixels(w, h, 4);
+                    let area = Rect::new(0, 0, (w / 10) as u16, (h / 20) as u16);
+                    c.draw(area, &mut Buffer::empty(area));
+                }
+            }
+            for (p, why) in c.take_broken() {
+                bad.push(format!("{w}x{h} {st:?}: {p} {why}"));
+            }
+        }
+    }
+    println!("STRESS {}", if bad.is_empty() { "ok".to_string() } else { bad.join(" | ") });
+}

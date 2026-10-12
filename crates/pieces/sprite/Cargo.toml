@@ -1,0 +1,25 @@
+[package]
+name = "sprite"
+version = "1.0.0"
+edition = "2024"
+description = "Un personaje en pixel art, vivo con cada estado: el motor; el dibujo sale de chars/<id>.toml al compilar"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-piece = { path = "../../iris-piece" }
+
+[build-dependencies]
+toml = "0.9"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Outside the Iris package: built separately, for wasm32-unknown-unknown.
+[workspace]

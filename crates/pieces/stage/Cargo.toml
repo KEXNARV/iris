@@ -1,0 +1,22 @@
+[package]
+name = "stage"
+version = "1.0.0"
+edition = "2024"
+description = "El escenario de un personaje: órbita, cielo con su clima, suelo y las señales de cada estado; el tema sale de IRIS_SCENE al compilar"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+iris-piece = { path = "../../iris-piece" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Outside the Iris package: built separately, for wasm32-unknown-unknown.
+[workspace]
