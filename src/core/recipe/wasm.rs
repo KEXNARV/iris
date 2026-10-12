@@ -2,8 +2,11 @@
 //! else's code, in the sandbox, taking a place in the recipe like any built-in part.
 //!
 //! Before every call Iris writes the part's io block (the head, its inputs read from the bus and
-//! its settings); after it, reads its outputs back into the bus. If it fails (trap, fuel,
-//! memory), it stays broken and does nothing from then on: the rest of the buddy keeps going.
+//! its settings); after it, reads its outputs back into the bus. If it runs out of fuel, that call
+//! is skipped (nothing drawn that frame) and the next one tries again: a frame that's heavier
+//! than usual (a state, an event, a bigger window) doesn't turn it off. Only `STRIKES` in a row
+//! do; any other failure (trap, memory) turns it off at once. Broken, it does nothing from then
+//! on: the rest of the buddy keeps going.
 
 use std::cell::RefCell;
 
@@ -30,7 +33,25 @@ struct Inner {
     f_paint: Option<TypedFunc<(), u64>>,
     /// Why it stopped working, if it did.
     broken: Option<String>,
+    /// Calls in a row that ran out of fuel.
+    strikes: u32,
 }
+
+/// How a call went wrong: skipped this time (out of fuel), or broken for good.
+enum Failure {
+    Skip(String),
+    Fail(String),
+}
+use Failure::{Fail, Skip};
+
+impl From<String> for Failure {
+    fn from(why: String) -> Self {
+        Fail(why)
+    }
+}
+
+/// Calls in a row out of fuel before a part counts as broken: about two seconds of frames.
+const STRIKES: u32 = 60;
 
 pub(crate) struct WasmPart {
     inner: RefCell<Inner>,
@@ -119,7 +140,7 @@ impl WasmPart {
             instance.get_typed_func(&store, "iris_layout").ok(),
             instance.get_typed_func(&store, "iris_paint").ok(),
         );
-        let inner = Inner { store, memory, io, f_step, f_event, f_layout, f_paint, broken: None };
+        let inner = Inner { store, memory, io, f_step, f_event, f_layout, f_paint, broken: None, strikes: 0 };
         let part = WasmPart { inner: RefCell::new(inner), inputs, settings, outputs, colors };
         // It is born with its settings written, and with the buddy's randomness, lent.
         let mut bus = std::mem::take(b.bus);
@@ -166,15 +187,32 @@ impl WasmPart {
         slots.extend(self.inputs.iter().map(|c| bus.get(*c)));
         slots.extend(&self.settings);
         let bytes: Vec<u8> = slots.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let result: Result<T, String> = (|| {
+        let result: Result<T, Failure> = (|| {
             inner.memory.write(&mut inner.store, inner.io as usize, &bytes).map_err(|e| format!("no se puede escribir su entrada: {e}"))?;
             inner.store.set_fuel(grid.map_or(FUEL, |g| fuel_for(g.dw, g.dh))).map_err(|e| e.to_string())?;
             inner.store.data_mut().rand = rand.as_ref().map(|r| (**r).clone());
-            let out = f(&mut inner.store).map_err(|e| e.to_string());
+            let out = f(&mut inner.store).map_err(|e| {
+                let fuel = e.as_trap_code() == Some(wasmi::TrapCode::OutOfFuel);
+                (e.to_string(), fuel)
+            });
             if let (Some(r), Some(a)) = (rand, inner.store.data_mut().rand.take()) {
                 *r = a;
             }
-            let out = out?;
+            let out = match out {
+                Ok(o) => {
+                    inner.strikes = 0;
+                    o
+                }
+                Err((why, true)) => {
+                    // Out of fuel: this call is lost; it only breaks if it keeps happening.
+                    inner.strikes += 1;
+                    if inner.strikes < STRIKES {
+                        return Err(Skip(why));
+                    }
+                    return Err(Fail(format!("{why} ({STRIKES} veces seguidas)")));
+                }
+                Err((why, false)) => return Err(Fail(why)),
+            };
             let mut buf = vec![0u8; self.outputs.len() * 8];
             inner.memory.read(&inner.store, inner.io as usize + bytes.len(), &mut buf).map_err(|e| format!("salidas fuera de su memoria: {e}"))?;
             for (c, v) in self.outputs.iter().zip(buf.chunks_exact(8)) {
@@ -182,10 +220,15 @@ impl WasmPart {
             }
             Ok(out)
         })();
-        if let Err(e) = &result {
-            inner.broken = Some(e.clone());
+        match result {
+            Ok(o) => Ok(o),
+            // Skipped, not broken: the next call tries again.
+            Err(Skip(why)) => Err(why),
+            Err(Fail(why)) => {
+                inner.broken = Some(why.clone());
+                Err(why)
+            }
         }
-        result
     }
 
     fn event(&mut self, w: &mut World, kind: u32, a: f64, b: f64) {
@@ -238,5 +281,65 @@ impl Part for WasmPart {
     /// Its own colors, after the five base inks.
     fn inks(&self, _col: [f64; 3], _base: u8) -> Vec<[[f64; 3]; 4]> {
         self.colors.iter().map(|c| tones(*c)).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::core::recipe::files::Memory;
+    use crate::core::recipe::Recipe;
+    use crate::core::state::{Signals, State};
+    use crate::core::Core;
+
+    /// A part whose paint loops forever on its first `heavy` calls, and then draws nothing.
+    fn heavy_part(heavy: u32) -> Vec<u8> {
+        let decl = "inputs = []\noutputs = []\n";
+        let (len, data) = (decl.len(), decl.replace('\n', "\\0a"));
+        wat::parse_str(format!(
+            r#"(module
+                (memory (export "memory") 1)
+                (data (i32.const 0) "{data}")
+                (global $n (mut i32) (i32.const 0))
+                (func (export "iris_abi") (result i32) i32.const 2)
+                (func (export "iris_decl") (result i64) i64.const {len})
+                (func (export "iris_io") (result i32) i32.const 1024)
+                (func (export "iris_new"))
+                (func (export "iris_paint") (result i64)
+                    (global.set $n (i32.add (global.get $n) (i32.const 1)))
+                    (if (i32.le_u (global.get $n) (i32.const {heavy})) (then (loop (br 0))))
+                    i64.const 0))"#
+        ))
+        .unwrap()
+    }
+
+    fn core_with(wasm: Vec<u8>) -> Core {
+        let mut r = Recipe::parse("[recipe]\nname = \"t\"\n[script.default]\nx = 0.0\n[[piece]]\nuse = \"builtin:presence\"\n[[piece]]\nuse = \"file:p.wasm\"\nid = \"p\"\n[draw]\norder = [\"p\"]\n").unwrap();
+        r.files = Some(Arc::new(Memory { files: [("p.wasm".to_string(), wasm)].into() }));
+        Core::from_recipe(&r).unwrap()
+    }
+
+    fn frames(c: &mut Core, n: usize) -> Vec<(String, String)> {
+        let mut broken = vec![];
+        for _ in 0..n {
+            c.step(0.04, State::Idle, &Signals::default());
+            c.dots(80, 60);
+            broken.extend(c.take_broken());
+        }
+        broken
+    }
+
+    #[test]
+    fn a_few_heavy_frames_dont_turn_a_part_off() {
+        let mut c = core_with(heavy_part(5));
+        assert!(frames(&mut c, 100).is_empty(), "5 frames out of fuel turned it off");
+    }
+
+    #[test]
+    fn running_out_of_fuel_every_frame_does() {
+        let mut c = core_with(heavy_part(u32::MAX));
+        let broken = frames(&mut c, 61);
+        assert!(broken.iter().any(|(p, why)| p == "p" && why.contains("fuel")), "{broken:?}");
     }
 }
