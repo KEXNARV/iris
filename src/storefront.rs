@@ -25,6 +25,8 @@ pub enum StoreEvent {
     Updates(Index, Vec<crate::store::Entry>),
     /// An installed package was updated (or not).
     Updated { name: String, version: String, result: Result<(), String> },
+    /// A like went through: the package and how many it has now.
+    Liked(Result<(String, i64), String>),
 }
 
 pub struct StoreModal {
@@ -265,6 +267,8 @@ pub fn on_event(app: &mut App, ev: StoreEvent) {
         StoreEvent::Updated { name, result: Err(why), .. } => app.push(Role::Error, format!("no se actualizó «{name}»: {why}")),
         StoreEvent::Published(Ok(msg)) => app.push(Role::System, msg),
         StoreEvent::Published(Err(e)) => app.push(Role::Error, format!("no se publicó: {e}")),
+        StoreEvent::Liked(Ok((name, n))) => app.flash = Some((format!("♥ le diste like a «{name}» · ya van {n}"), Instant::now())),
+        StoreEvent::Liked(Err(e)) => app.flash = Some((format!("no se pudo dar like: {e}"), Instant::now())),
     }
 }
 
@@ -294,6 +298,24 @@ pub fn on_key(app: &mut App, k: KeyEvent) {
             app.buddy = before;
             app.push(Role::System, format!("instalando «{}» {}…", e.name, e.version));
             download(app.events.clone(), index, e, false);
+            return;
+        }
+        KeyCode::Char('l') => {
+            let Some(e) = m.list().get(m.sel).cloned() else { return };
+            let Some(token) = store::token() else {
+                app.flash = Some(("para dar like entra a la tienda: iris login (en otra terminal)".into(), Instant::now()));
+                return;
+            };
+            let tx = app.events.clone();
+            std::thread::spawn(move || {
+                let r = crate::net::json("PUT", &format!("/api/pieces/{}/like", e.name), Some(&token), None).and_then(|(code, v)| {
+                    if code >= 400 {
+                        return Err(crate::net::error_of(code, &v));
+                    }
+                    Ok((e.name.clone(), v.get("likes").and_then(|n| n.as_i64()).unwrap_or(0)))
+                });
+                let _ = tx.send(AppEvent::Store(StoreEvent::Liked(r)));
+            });
             return;
         }
         KeyCode::Char('r') => {

@@ -68,7 +68,42 @@ turns it off and says why. `serial` only goes up: Iris ignores an index with a l
 the one it already has.
 
 The package itself: `GET /api/pieces/{name}/{version}.iris`. Iris checks its `sha256` against
-the signed index before opening it.
+the signed index before opening it. It adds `?install=1` only when installing the package itself
+(not its dependencies, not to look at it), and asks for it even if it already has it from a
+preview: that's the only fetch counted as a download, once per IP, version and day.
+
+## Catalog, likes and what's new
+
+| Method and route                 | Who     | Answer                                                                  |
+|----------------------------------|---------|--------------------------------------------------------------------------|
+| `GET /api/pieces?kind=&q=`       | anyone  | → `[{name, kind, format, version, description, author, license, sha256, bytes, deps, downloads, downloads_week, likes, liked, versions, first_published_at, published_at}]`: the newest signed version of each package. `liked` needs the session (false without it) |
+| `GET /api/pieces/{name}`         | anyone  | the same, plus `history: [{version, description, downloads, published_at}]` (newest first) and `daily: [{day, count}]` (installs, last 90 days, with the empty days) |
+| `PUT /api/pieces/{name}/like`    | author  | → `{likes, liked: true}`; `DELETE` takes it back → `{likes, liked: false}` |
+| `GET /api/releases?limit=`       | anyone  | → newest first, up to 100: `{type: "package", name, kind, format, version, author, description, first, published_at}` (`first`: a new package, not an update) and `{type: "iris", version, notes, channel, published_at}` |
+
+## Banners
+
+The background of a package's page on the web. An author keeps a library of banners, each one
+reviewed on its own (nobody else sees it until it's approved); each package points to one banner
+or none, and several packages can share one. A banner never changes its image: a new image is a
+new banner, back in review. The server redraws every upload (cropped to 1920×800 like CSS
+`object-position` at `x`, `y`; saved as JPEG, without metadata). Iris doesn't use them.
+
+| Method and route                              | Who    | Body → answer                                                     |
+|-----------------------------------------------|--------|-------------------------------------------------------------------|
+| `POST /api/me/banners?x=&y=&label=`           | author | the image (PNG, JPEG or WebP, ≤ 12 MB, ≥ 960×400) → `{id, label, sha256, bytes, status, reason, created_at, used_by}` |
+| `GET /api/me/banners`                         | author | → the same, newest first                                          |
+| `GET /api/me/banners/{id}/image`              | author | the JPEG, whatever its status                                     |
+| `DELETE /api/me/banners/{id}`                 | author | its packages go back to the default background                    |
+| `GET /api/me/packages`                        | author | → `[{name, kind, banner_id}]`                                     |
+| `PUT /api/me/packages/{name}/banner`          | author | `{banner: id \| null}`; one in review can be chosen (shows once approved), a rejected one can't |
+| `GET /api/banners/{sha256}.jpg`               | anyone | approved ones only; immutable                                     |
+| `GET /api/admin/banners?status=`              | review.view   | the queue: `[{id, author, label, sha256, status, reason, created_at, used_by}]` |
+| `GET /api/admin/banners/{id}/image`           | review.view   | the JPEG, whatever its status                              |
+| `POST /api/admin/banners/{id}/approve` · `/reject` | review.decide | `/reject` takes `{reason}`; rejecting takes it off every package |
+
+The catalog (`GET /api/pieces`, `GET /api/pieces/{name}`) carries `banner`: the sha256 of the
+package's approved banner, or null.
 
 ## Accounts and sessions
 

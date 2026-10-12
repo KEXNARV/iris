@@ -162,7 +162,7 @@ pub(in crate::ui) fn draw_store(f: &mut Frame, anchor: Rect, m: &crate::storefro
     if items.is_empty() {
         items.push(Line::from(Span::styled("   nada por aquí todavía", Style::new().fg(theme::faint()))));
     }
-    let hints = [("↑↓", "probar en el núcleo"), ("tab", "buddies/piezas"), ("enter", "instalar"), ("r", "reportar"), ("esc", "volver")];
+    let hints = [("↑↓", "probar en el núcleo"), ("tab", "buddies/piezas"), ("enter", "instalar"), ("l", "like"), ("r", "reportar"), ("esc", "volver")];
     overlay(f, anchor, "TIENDA", theme::accent(), vec![tabs], items, m.sel, 10, &hints);
 }
 

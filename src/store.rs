@@ -269,8 +269,15 @@ fn install_one(index: &Index, e: &Entry, preview: bool, done: &mut Vec<String>, 
     }
     let target = dir().ok_or("sin carpeta de datos")?.join(&e.name).join(&e.version);
     let ready = std::fs::read_to_string(target.join(".sha256")).is_ok_and(|s| s.trim() == e.sha256);
+    // The store counts an install only for the package itself (not its dependencies, not a
+    // preview) and only with `?install=1`: asked even when it's already here from looking at it.
+    let counted = !preview && depth == 0;
+    let path = format!("/api/pieces/{}/{}.iris{}", e.name, e.version, if counted { "?install=1" } else { "" });
+    if ready && counted {
+        let _ = crate::net::call("GET", &path, None, None);
+    }
     if !ready {
-        let (code, bytes) = crate::net::call("GET", &format!("/api/pieces/{}/{}.iris", e.name, e.version), None, None)?;
+        let (code, bytes) = crate::net::call("GET", &path, None, None)?;
         if code != 200 {
             return Err(format!("no pude bajar «{}» (la tienda respondió {code})", e.name));
         }
