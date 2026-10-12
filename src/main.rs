@@ -37,6 +37,7 @@ mod floating;
 mod screen;
 mod net;
 mod store;
+mod live;
 mod kit;
 mod storefront;
 
@@ -135,6 +136,8 @@ fn main() -> Result<()> {
         quit_armed: None,
         update: None,
         store_updates: None,
+        live: Some(live::spawn(tx.clone())),
+        live_said: None,
         reexec: false,
         last_key: Instant::now(),
         last_voice: Instant::now(),
@@ -375,6 +378,17 @@ fn run(
         keyboard.tick(app.core.state(), sig.level);
         for ev in app.core.take_fired() {
             keyboard.event(ev);
+            if let Some(l) = &app.live {
+                let _ = l.send(live::event(&format!("{ev:?}").to_lowercase()));
+            }
+        }
+        // The web sees your Iris live: its state and buddy, each time they change.
+        let now = (format!("{:?}", app.core.state()).to_lowercase(), app.buddy.id());
+        if app.live_said.as_ref() != Some(&now) {
+            if let Some(l) = &app.live {
+                let _ = l.send(live::state(&now.0, &now.1));
+            }
+            app.live_said = Some(now);
         }
 
         app.core_rect.set(None);
@@ -548,6 +562,39 @@ fn run(
                     }
                 },
                 AppEvent::Store(e) => storefront::on_event(app, e),
+                AppEvent::Live(e) => match e {
+                    live::LiveEvent::Draft(name) => storefront::on_event(app, storefront::StoreEvent::Draft(name)),
+                    live::LiveEvent::Review { name, version, status, reason } => {
+                        let what = match status.as_str() {
+                            "published" => format!("«{name}» {version} ya está publicado en la tienda"),
+                            "rejected" => format!("«{name}» {version} fue rechazado: {}", reason.unwrap_or_default()),
+                            "revoked" => format!("«{name}» {version} fue retirado de la tienda: {}", reason.unwrap_or_default()),
+                            other => format!("«{name}» {version}: {other}"),
+                        };
+                        app.push(Role::System, what);
+                    }
+                    live::LiveEvent::Connected | live::LiveEvent::Store => {
+                        // Say again where Iris is, and look for updates of what's installed now.
+                        app.live_said = None;
+                        let tx = app.events.clone();
+                        std::thread::spawn(move || {
+                            let Ok((index, _)) = store::refresh() else { return };
+                            let no = store::dismissed();
+                            let list: Vec<_> = store::updates(&index).into_iter().filter(|e| !no.contains(&format!("{} {}", e.name, e.version))).collect();
+                            if !list.is_empty() {
+                                let _ = tx.send(AppEvent::Store(storefront::StoreEvent::Updates(index, list)));
+                            }
+                        });
+                    }
+                    live::LiveEvent::IrisVersion => {
+                        let tx = app.events.clone();
+                        std::thread::spawn(move || {
+                            if let Some(info) = update::check() {
+                                let _ = tx.send(AppEvent::Update(update::UpdateEvent::Available(info)));
+                            }
+                        });
+                    }
+                },
                 AppEvent::Update(e) => match e {
                     update::UpdateEvent::Available(info) => app.update = Some(info),
                     update::UpdateEvent::Installed => {

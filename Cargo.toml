@@ -4,6 +4,9 @@ version = "0.1.8"
 edition = "2024"
 
 [dependencies]
+# The live connection with the store (WebSocket over TLS, in pure Rust with ring: no OpenSSL).
+tungstenite = { version = "0.27", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 anyhow = "1.0.104"
 cpal = "0.18.2"
 crossterm = "0.29.0"

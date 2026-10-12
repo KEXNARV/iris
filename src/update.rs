@@ -73,7 +73,7 @@ pub fn exe() -> PathBuf {
     }
 }
 
-fn check() -> Option<Info> {
+pub(crate) fn check() -> Option<Info> {
     let v: serde_json::Value = serde_json::from_str(&run(Command::new("curl").args(["-fsSL", "--max-time", "15", VERSION_URL])).ok()?).ok()?;
     let version = v["version"].as_str()?.trim().trim_start_matches('v').to_string();
     if !is_newer(&version, THIS_VERSION) {

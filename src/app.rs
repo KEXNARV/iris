@@ -9,6 +9,7 @@ pub enum AppEvent {
     Speech(speech::SpeechEvent),
     Update(update::UpdateEvent),
     Store(crate::storefront::StoreEvent),
+    Live(crate::live::LiveEvent),
 }
 
 /// When it answers out loud: `Auto` when you spoke to it (if you typed, silently).
@@ -174,6 +175,10 @@ pub struct App {
     pub(crate) update: Option<update::Info>,
     /// New versions of store packages, waiting for a quiet moment to be offered.
     pub(crate) store_updates: Option<(crate::store::Index, Vec<crate::store::Entry>)>,
+    /// What goes out on the live connection, and the state it last said (to say it only when
+    /// it changes).
+    pub(crate) live: Option<std::sync::mpsc::Sender<serde_json::Value>>,
+    pub(crate) live_said: Option<(String, String)>,
     /// The new version was installed: on exit, Iris reopens with it.
     pub(crate) reexec: bool,
     /// The blob of the CORE panel.
