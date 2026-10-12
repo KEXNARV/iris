@@ -75,10 +75,10 @@ fn number(v: &toml::Value) -> Option<f64> {
 }
 
 /// Work for a call that draws: what's drawn grows with the grid (a body filled dot by dot in a
-/// big window has tens of thousands), so 150 per dot on top of the base, up to a ceiling that
-/// still cuts a runaway piece in a few tens of milliseconds.
+/// big window has tens of thousands), so 300 per dot on top of the base, up to a ceiling that
+/// still cuts a runaway piece in about 50 ms.
 fn fuel_for(dw: usize, dh: usize) -> u64 {
-    (150 * (dw * dh) as u64).clamp(FUEL, 20 * FUEL)
+    (300 * (dw * dh) as u64).clamp(FUEL, 150_000_000)
 }
 
 fn state_index(s: State) -> f64 {
@@ -337,6 +337,8 @@ mod tests {
     }
 
     #[test]
+    // 60 calls burning all their fuel: minutes in an unoptimized build; `cargo test --release`.
+    #[cfg_attr(debug_assertions, ignore)]
     fn running_out_of_fuel_every_frame_does() {
         let mut c = core_with(heavy_part(u32::MAX));
         let broken = frames(&mut c, 61);

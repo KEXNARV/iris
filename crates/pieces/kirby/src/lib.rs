@@ -689,13 +689,13 @@ impl Part for Kirby {
         let (i0, i1) = (clamp(a.min(b), dw), clamp(a.max(b), dw));
         let (j0, j1) = (clamp(c.min(d), dh), clamp(c.max(d), dh));
         // A big Kirby is worked out on a coarser grid: one dot of every 2×2 (or 3×3…) decides
-        // the whole block, so a frame never works out more than ~2500 of them, whatever the
+        // the whole block, so a frame never works out more than ~10000 of them, whatever the
         // state (the interpreter's fuel is per frame). The blocks keep it solid; past what one
         // frame can send, only the deciding dot.
         let mut p = p;
         let area = PI * kx * ky / (di * dj).abs();
         let boxed = ((i1 - i0 + 1) * (j1 - j0 + 1)) as f64;
-        let step = (boxed / 2_500.0).sqrt().ceil().max(1.0) as usize;
+        let step = (boxed / 10_000.0).sqrt().ceil().max(1.0) as usize;
         let fill = if area > 16_000.0 { 1 } else { step };
         p.hatch = false;
         p.w *= step as f64;
