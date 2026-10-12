@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -42,6 +43,16 @@ pub fn level_get(l: &Level) -> f32 {
     f32::from_bits(l.load(Ordering::Relaxed))
 }
 
+/// Whisper on the GPU (Vulkan) keeps the model in VRAM: it loads at startup and stays. On the
+/// CPU (Windows, or `IRIS_VOICE_CPU=1` to try it here) the model is ~574 MB of RAM in every Iris
+/// window, so it loads when you start dictating (while you speak) and is let go after a while.
+fn on_gpu() -> bool {
+    cfg!(not(windows)) && crate::paths::var("VOICE_CPU").is_none()
+}
+
+/// On the CPU, how long the model stays loaded after the last dictation.
+const KEEP_LOADED: Duration = Duration::from_secs(10 * 60);
+
 pub fn spawn(tx: Sender<AppEvent>) -> (Sender<VoiceCmd>, Level) {
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let level: Level = Arc::new(AtomicU32::new(0));
@@ -50,15 +61,54 @@ pub fn spawn(tx: Sender<AppEvent>) -> (Sender<VoiceCmd>, Level) {
         let send = |e| {
             let _ = tx.send(AppEvent::Voice(e));
         };
-        let (ctx, name) = match load_model() {
-            Ok(m) => m,
+        let path = match model_path() {
+            Ok(p) => p,
             Err(e) => return send(VoiceEvent::Unavailable(e.to_string())),
         };
-        let _ = transcribe(&ctx, &vec![0.0; WHISPER_RATE as usize]); // compiles shaders now instead of on first use
+        let name = model_name(&path);
+        let mut model = Model::Unloaded;
+        if on_gpu() {
+            let ctx = match load_model(&path) {
+                Ok(c) => c,
+                Err(e) => return send(VoiceEvent::Unavailable(e.to_string())),
+            };
+            let _ = transcribe(&ctx, &vec![0.0; WHISPER_RATE as usize]); // compiles shaders now instead of on first use
+            model = Model::Ready(ctx);
+        }
         send(VoiceEvent::Ready(name));
-        run(&ctx, cmd_rx, lvl, &send);
+        run(model, path, cmd_rx, lvl, &send);
     });
     (cmd_tx, level)
+}
+
+/// Where the model is: loaded, loading on another thread (it started with the recording), or not.
+enum Model {
+    Unloaded,
+    Loading(thread::JoinHandle<Result<WhisperContext>>),
+    Ready(WhisperContext),
+}
+
+impl Model {
+    /// The loaded model, waiting for it if it is still loading.
+    fn get(&mut self, path: &std::path::Path) -> Result<&WhisperContext> {
+        *self = match std::mem::replace(self, Model::Unloaded) {
+            Model::Ready(c) => Model::Ready(c),
+            Model::Loading(h) => Model::Ready(h.join().map_err(|_| anyhow!("se cayó la carga del modelo"))??),
+            Model::Unloaded => Model::Ready(load_model(path)?),
+        };
+        match self {
+            Model::Ready(c) => Ok(c),
+            _ => unreachable!(),
+        }
+    }
+
+    /// Starts loading in the background, if it isn't loaded or loading already.
+    fn prefetch(&mut self, path: &std::path::Path) {
+        if matches!(self, Model::Unloaded) {
+            let path = path.to_path_buf();
+            *self = Model::Loading(thread::spawn(move || load_model(&path)));
+        }
+    }
 }
 
 /// On hybrid laptops ggml picks the integrated GPU (the first in Vulkan's list) and is
@@ -97,30 +147,44 @@ fn model_path() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("no hay modelo whisper en {}", dir.display()))
 }
 
-fn load_model() -> Result<(WhisperContext, String)> {
-    whisper_rs::install_logging_hooks(); // silences whisper.cpp; otherwise it garbles the TUI
-    let path = model_path()?;
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("whisper")
-        .trim_start_matches("ggml-")
-        .to_string();
-    let ctx = WhisperContext::new_with_params(
-        path.to_str().ok_or_else(|| anyhow!("ruta no UTF-8"))?,
-        WhisperContextParameters::default(),
-    )
-    .map_err(|e| anyhow!("no pude cargar el modelo: {e:?}"))?;
-    Ok((ctx, name))
+fn model_name(path: &std::path::Path) -> String {
+    path.file_stem().and_then(|s| s.to_str()).unwrap_or("whisper").trim_start_matches("ggml-").to_string()
 }
 
-fn run(ctx: &WhisperContext, rx: Receiver<VoiceCmd>, level: Level, send: &dyn Fn(VoiceEvent)) {
+fn load_model(path: &std::path::Path) -> Result<WhisperContext> {
+    whisper_rs::install_logging_hooks(); // silences whisper.cpp; otherwise it garbles the TUI
+    let mut params = WhisperContextParameters::default();
+    if !on_gpu() {
+        params.use_gpu(false);
+        // Exact, and on the CPU it shrinks the buffers of every dictation.
+        params.flash_attn(true);
+    }
+    WhisperContext::new_with_params(path.to_str().ok_or_else(|| anyhow!("ruta no UTF-8"))?, params)
+        .map_err(|e| anyhow!("no pude cargar el modelo: {e:?}"))
+}
+
+fn run(mut model: Model, path: PathBuf, rx: Receiver<VoiceCmd>, level: Level, send: &dyn Fn(VoiceEvent)) {
     let mut rec: Option<Recording> = None;
-    for cmd in rx {
+    let mut last_used = Instant::now();
+    loop {
+        let cmd = match rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(c) => c,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // On the CPU, a while without dictating gives the ~574 MB back.
+                if !on_gpu() && rec.is_none() && matches!(model, Model::Ready(_)) && last_used.elapsed() > KEEP_LOADED {
+                    model = Model::Unloaded;
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        last_used = Instant::now();
         match cmd {
             VoiceCmd::Start if rec.is_none() => match Recording::start(level.clone()) {
                 Ok(r) => {
                     rec = Some(r);
+                    // It loads while you speak: by the time you finish, it's usually there.
+                    model.prefetch(&path);
                     send(VoiceEvent::Listening);
                 }
                 Err(e) => send(VoiceEvent::Error(format!("micrófono: {e}"))),
@@ -130,7 +194,8 @@ fn run(ctx: &WhisperContext, rx: Receiver<VoiceCmd>, level: Level, send: &dyn Fn
                 let audio = r.finish();
                 level.store(0, Ordering::Relaxed);
                 send(VoiceEvent::Transcribing);
-                match transcribe(ctx, &audio) {
+                let result = model.get(&path).and_then(|ctx| transcribe(ctx, &audio));
+                match result {
                     Ok(text) if is_hallucination(&text) => send(VoiceEvent::Discarded(text)),
                     Ok(text) => send(VoiceEvent::Transcript(text)),
                     Err(e) => send(VoiceEvent::Error(format!("whisper: {e}"))),
@@ -380,7 +445,9 @@ pub fn transcribe_file(path: &str) -> Result<()> {
         .collect();
     let audio = normalize(audio); // same as a recording from the UI
     let t0 = std::time::Instant::now();
-    let (ctx, name) = load_model()?;
+    let path = model_path()?;
+    let name = model_name(&path);
+    let ctx = load_model(&path)?;
     let load = t0.elapsed();
     transcribe(&ctx, &audio)?; // warm-up: the first pass compiles shaders
     let t1 = std::time::Instant::now();
