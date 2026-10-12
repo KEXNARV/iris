@@ -354,6 +354,23 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
             crate::storefront::on_key(app, k);
             Some(Flow::Redraw)
         }
+        Modal::StoreUpdates { .. } => {
+            match k.code {
+                KeyCode::Enter => {
+                    if let Some(Modal::StoreUpdates { index, list }) = app.modal.take() {
+                        crate::storefront::install_updates(app, index, list);
+                    }
+                }
+                KeyCode::Esc => {
+                    if let Some(Modal::StoreUpdates { list, .. }) = app.modal.take() {
+                        crate::store::dismiss(&list);
+                        app.flash = Some(("no te las vuelvo a ofrecer · /store update para instalarlas".into(), std::time::Instant::now()));
+                    }
+                }
+                _ => {}
+            }
+            Some(Flow::Go)
+        }
         Modal::Update(_) => {
             match k.code {
                 KeyCode::Enter => {

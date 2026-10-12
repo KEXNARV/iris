@@ -121,6 +121,8 @@ pub enum Modal {
     Store(crate::storefront::StoreModal),
     /// There is a new version on GitHub: update?
     Update(update::Info),
+    /// New versions of installed store packages: install them?
+    StoreUpdates { index: crate::store::Index, list: Vec<crate::store::Entry> },
     /// The first time (or `/welcome`): step-by-step settings and the tour.
     Welcome(crate::welcome::Welcome),
 }
@@ -170,6 +172,8 @@ pub struct App {
     pub(crate) quit_armed: Option<Instant>,
     /// New version to offer: shown when it doesn't get in the way.
     pub(crate) update: Option<update::Info>,
+    /// New versions of store packages, waiting for a quiet moment to be offered.
+    pub(crate) store_updates: Option<(crate::store::Index, Vec<crate::store::Entry>)>,
     /// The new version was installed: on exit, Iris reopens with it.
     pub(crate) reexec: bool,
     /// The blob of the CORE panel.

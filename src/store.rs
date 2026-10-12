@@ -328,13 +328,33 @@ pub fn updates(index: &Index) -> Vec<Entry> {
         if out.iter().any(|e: &Entry| e.name == name) {
             continue;
         }
-        if let Some(e) = index.find(&name, None) {
+        // Within the same major: a buddy asks for `name@major`, and a new major is another piece.
+        let major = version.split('.').next().and_then(|m| m.parse().ok());
+        if let Some(e) = index.find(&name, major) {
             if version_key(&e.version) > version_key(&version) {
                 out.push(e.clone());
             }
         }
     }
     out
+}
+
+fn dismissed_path() -> Option<PathBuf> {
+    Some(dir()?.join(".dismissed"))
+}
+
+/// The updates offered and turned down ("name version" per line): not offered again.
+pub fn dismissed() -> Vec<String> {
+    dismissed_path().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| t.lines().map(str::to_string).collect()).unwrap_or_default()
+}
+
+pub fn dismiss(list: &[Entry]) {
+    let Some(p) = dismissed_path() else { return };
+    let mut all = dismissed();
+    all.extend(list.iter().map(|e| format!("{} {}", e.name, e.version)));
+    all.sort();
+    all.dedup();
+    let _ = std::fs::write(p, all.join("\n") + "\n");
 }
 
 /// Builds a `.iris` from a folder: `iris.toml` and the files its kind needs.

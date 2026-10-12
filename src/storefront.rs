@@ -21,6 +21,10 @@ pub enum StoreEvent {
     /// A draft from Iris Studio was updated on disk.
     Draft(String),
     Published(Result<String, String>),
+    /// New versions of installed packages, from the background check.
+    Updates(Index, Vec<crate::store::Entry>),
+    /// An installed package was updated (or not).
+    Updated { name: String, version: String, result: Result<(), String> },
 }
 
 pub struct StoreModal {
@@ -75,6 +79,42 @@ fn fetch_index(app: &mut App, query: String) {
     let tx = app.events.clone();
     std::thread::spawn(move || {
         let _ = tx.send(AppEvent::Store(StoreEvent::Index(store::refresh(), query)));
+    });
+}
+
+/// Installs new versions of what's already installed: as is, without putting anything on the
+/// core (an update of a buddy's piece is not a piece to try on).
+pub fn install_updates(app: &mut App, index: Index, list: Vec<Entry>) {
+    for e in list {
+        app.push(Role::System, format!("actualizando «{}» a la {}…", e.name, e.version));
+        let (tx, index) = (app.events.clone(), index.clone());
+        std::thread::spawn(move || {
+            let result = store::install(&index, &e, false).map(|_| ());
+            let _ = tx.send(AppEvent::Store(StoreEvent::Updated { name: e.name.clone(), version: e.version.clone(), result }));
+        });
+    }
+}
+
+/// Checks the store in the background (a little after startup, then every hour) for new
+/// versions of what's installed, without the ones already turned down.
+pub fn check_updates(tx: Sender<AppEvent>) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+        let mut offered: Vec<String> = vec![];
+        loop {
+            if let Ok((index, _)) = store::refresh() {
+                let no = store::dismissed();
+                let list: Vec<Entry> = store::updates(&index).into_iter().filter(|e| !no.contains(&format!("{} {}", e.name, e.version))).collect();
+                let keys: Vec<String> = list.iter().map(|e| format!("{} {}", e.name, e.version)).collect();
+                if !list.is_empty() && keys != offered {
+                    offered = keys;
+                    if tx.send(AppEvent::Store(StoreEvent::Updates(index, list))).is_err() {
+                        return;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        }
     });
 }
 
@@ -149,10 +189,7 @@ pub fn on_event(app: &mut App, ev: StoreEvent) {
                 if ups.is_empty() {
                     app.push(Role::System, "todo lo de la tienda está al día");
                 }
-                for e in ups {
-                    app.push(Role::System, format!("actualizando «{}» a la {}…", e.name, e.version));
-                    download(app.events.clone(), index.clone(), e, false);
-                }
+                install_updates(app, index, ups);
                 return;
             }
             if index.packages.is_empty() {
@@ -219,6 +256,13 @@ pub fn on_event(app: &mut App, ev: StoreEvent) {
                 app.flash = Some((format!("borrador «{name}» actualizado · /buddy {name}"), Instant::now()));
             }
         }
+        StoreEvent::Updates(index, list) => app.store_updates = Some((index, list)),
+        StoreEvent::Updated { name, version, result: Ok(()) } => {
+            app.push(Role::System, format!("«{name}» actualizado a la {version}"));
+            // The buddy is read again, with the new version of whatever it uses.
+            app.shown_recipe = None;
+        }
+        StoreEvent::Updated { name, result: Err(why), .. } => app.push(Role::Error, format!("no se actualizó «{name}»: {why}")),
         StoreEvent::Published(Ok(msg)) => app.push(Role::System, msg),
         StoreEvent::Published(Err(e)) => app.push(Role::Error, format!("no se publicó: {e}")),
     }

@@ -89,6 +89,7 @@ fn main() -> Result<()> {
     let (voice_tx, level) = voice::spawn(tx.clone());
     update::spawn(tx.clone());
     storefront::sync_drafts(tx.clone());
+    storefront::check_updates(tx.clone());
 
     // `iris --resume <id>`: besides passing it to the engine, the conversation is shown.
     let resumed = extra.iter().position(|a| a == "--resume").and_then(|i| extra.get(i + 1)).map(|id| sessions::replay(id));
@@ -133,6 +134,7 @@ fn main() -> Result<()> {
         last_activity: Instant::now(),
         quit_armed: None,
         update: None,
+        store_updates: None,
         reexec: false,
         last_key: Instant::now(),
         last_voice: Instant::now(),
@@ -342,6 +344,17 @@ fn run(
             && app.last_key.elapsed() > Duration::from_secs(3)
         {
             app.modal = app.update.take().map(Modal::Update);
+        }
+        // The same for new versions of store packages, after Iris's own.
+        if app.store_updates.is_some()
+            && app.update.is_none()
+            && app.modal.is_none()
+            && app.tools_view.is_none()
+            && app.input.is_empty()
+            && !app.busy
+            && app.last_key.elapsed() > Duration::from_secs(3)
+        {
+            app.modal = app.store_updates.take().map(|(index, list)| Modal::StoreUpdates { index, list });
         }
 
         let dt = frame.elapsed().as_secs_f64();

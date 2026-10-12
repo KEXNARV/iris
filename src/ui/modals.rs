@@ -14,6 +14,7 @@ pub(in crate::ui) fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Color { sel, .. }) => draw_colors(f, anchor, *sel),
         Some(Modal::Buddy { sel, list, .. }) => draw_buddies(f, anchor, *sel, list),
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
+        Some(Modal::StoreUpdates { list, .. }) => draw_store_updates(f, anchor, list),
         Some(Modal::Store(m)) => draw_store(f, anchor, m),
         Some(Modal::Welcome(b)) => draw_welcome(f, anchor, app, b),
         None => draw_menu(f, anchor, app),
@@ -203,6 +204,30 @@ pub(in crate::ui) fn draw_update(f: &mut Frame, anchor: Rect, info: &crate::upda
         .collect();
     let hints = [("enter", "actualizar"), ("esc", "ahora no")];
     overlay(f, anchor, "ACTUALIZACIÓN", theme::accent(), head, items, 0, 8, &hints);
+}
+
+pub(in crate::ui) fn draw_store_updates(f: &mut Frame, anchor: Rect, list: &[crate::store::Entry]) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let what = if list.len() == 1 { "Hay una versión nueva de algo que tienes de la tienda:" } else { "Hay versiones nuevas de cosas que tienes de la tienda:" };
+    let mut head = vec![];
+    for l in wrap(what, w.saturating_sub(2)) {
+        head.push(Line::from(Span::styled(format!(" {l}"), Style::new().fg(theme::text()).bold())));
+    }
+    let installed = crate::store::installed();
+    let items = list
+        .iter()
+        .map(|e| {
+            let from = installed.iter().find(|i| i.0 == e.name).map(|i| i.1.clone()).unwrap_or_default();
+            let kind = if e.kind == "buddy" { "buddy" } else { "pieza" };
+            Line::from(vec![
+                Span::styled(format!("  {} ", e.name), Style::new().fg(theme::accent()).bold()),
+                Span::styled(format!("{from} → {}", e.version), Style::new().fg(theme::text())),
+                Span::styled(format!("  {kind} · {}", truncate(&e.description, w.saturating_sub(e.name.len() + 24))), Style::new().fg(theme::faint())),
+            ])
+        })
+        .collect();
+    let hints = [("enter", "instalar"), ("esc", "ahora no")];
+    overlay(f, anchor, "TIENDA", theme::accent(), head, items, 0, 8, &hints);
 }
 
 pub(in crate::ui) fn draw_welcome(f: &mut Frame, anchor: Rect, app: &App, b: &crate::welcome::Welcome) {
