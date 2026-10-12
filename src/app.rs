@@ -120,6 +120,8 @@ pub enum Modal {
     Buddy { sel: usize, before: buddy::Buddy, list: Vec<buddy::Entry> },
     /// `/store`: the catalog.
     Store(crate::storefront::StoreModal),
+    /// `/store` without a session: log in to the store (or create the account).
+    StoreLogin(crate::storefront::StoreLogin),
     /// There is a new version on GitHub: update?
     Update(update::Info),
     /// New versions of installed store packages: install them?

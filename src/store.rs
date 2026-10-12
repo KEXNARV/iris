@@ -103,6 +103,21 @@ pub fn save_token(t: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Without a store session (or it expired): the UI recognizes it to ask you to log in.
+pub const NEED_LOGIN: &str = "hace falta entrar a la tienda";
+
+/// A GET to the store with your session. The store only gives out the catalog and its
+/// packages to someone logged in; a session it no longer accepts is forgotten here.
+fn get_with_session(path: &str) -> Result<(u16, Vec<u8>), String> {
+    let token = token().ok_or(NEED_LOGIN)?;
+    let (code, body) = crate::net::call("GET", path, Some(&token), None)?;
+    if code == 401 {
+        forget_token();
+        return Err(NEED_LOGIN.into());
+    }
+    Ok((code, body))
+}
+
 pub fn forget_token() {
     if let Some(p) = token_path() {
         let _ = std::fs::remove_file(p);
@@ -157,14 +172,14 @@ pub fn cached() -> Option<Index> {
 /// Brings the index from the store, checks it and keeps it; turns off what it revokes. Returns
 /// it and what got turned off.
 pub fn refresh() -> Result<(Index, Vec<String>), String> {
-    let (code, body) = crate::net::call("GET", "/api/index.json", None, None)?;
+    let (code, body) = get_with_session("/api/index.json")?;
     if code == 404 {
         return Ok((Index::default(), vec![]));
     }
     if code != 200 {
         return Err(format!("la tienda respondió {code}"));
     }
-    let (code, sig) = crate::net::call("GET", "/api/index.json.sig", None, None)?;
+    let (code, sig) = get_with_session("/api/index.json.sig")?;
     if code != 200 {
         return Err("el índice llegó sin firma: no lo uso".into());
     }
@@ -274,10 +289,10 @@ fn install_one(index: &Index, e: &Entry, preview: bool, done: &mut Vec<String>, 
     let counted = !preview && depth == 0;
     let path = format!("/api/pieces/{}/{}.iris{}", e.name, e.version, if counted { "?install=1" } else { "" });
     if ready && counted {
-        let _ = crate::net::call("GET", &path, None, None);
+        let _ = get_with_session(&path);
     }
     if !ready {
-        let (code, bytes) = crate::net::call("GET", &path, None, None)?;
+        let (code, bytes) = get_with_session(&path)?;
         if code != 200 {
             return Err(format!("no pude bajar «{}» (la tienda respondió {code})", e.name));
         }

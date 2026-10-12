@@ -16,6 +16,7 @@ pub(in crate::ui) fn draw_modal(f: &mut Frame, anchor: Rect, app: &App) {
         Some(Modal::Update(info)) => draw_update(f, anchor, info),
         Some(Modal::StoreUpdates { list, .. }) => draw_store_updates(f, anchor, list),
         Some(Modal::Store(m)) => draw_store(f, anchor, m),
+        Some(Modal::StoreLogin(l)) => draw_store_login(f, anchor, l),
         Some(Modal::Welcome(b)) => draw_welcome(f, anchor, app, b),
         None => draw_menu(f, anchor, app),
     }
@@ -164,6 +165,46 @@ pub(in crate::ui) fn draw_store(f: &mut Frame, anchor: Rect, m: &crate::storefro
     }
     let hints = [("↑↓", "probar en el núcleo"), ("tab", "buddies/piezas"), ("enter", "instalar"), ("l", "like"), ("r", "reportar"), ("esc", "volver")];
     overlay(f, anchor, "TIENDA", theme::accent(), vec![tabs], items, m.sel, 10, &hints);
+}
+
+/// The store login form: a field per line, the password as dots.
+pub(in crate::ui) fn draw_store_login(f: &mut Frame, anchor: Rect, l: &crate::storefront::StoreLogin) {
+    let w = anchor.width.saturating_sub(2) as usize;
+    let mut head = vec![];
+    let intro = if l.creating {
+        "Crea tu cuenta de la tienda de Iris: con ella bajas buddies y piezas, y publicas las tuyas."
+    } else {
+        "Para ver la tienda y bajar buddies y piezas, entra con tu cuenta de Iris."
+    };
+    for line in wrap(intro, w.saturating_sub(2)) {
+        head.push(Line::from(Span::styled(format!(" {line}"), Style::new().fg(theme::text()))));
+    }
+    head.push(Line::default());
+    let label_w = l.fields().iter().map(|(n, _, _)| n.chars().count()).max().unwrap_or(0);
+    let mut items = vec![];
+    for (i, (name, value, secret)) in l.fields().into_iter().enumerate() {
+        let on = i == l.field;
+        let shown = if secret { "•".repeat(value.chars().count()) } else { value.to_string() };
+        let cursor = if on && !l.busy { "▏" } else { "" };
+        let bg = if on { Style::new().bg(theme::selection()) } else { Style::new() };
+        items.push(Line::from(vec![
+            Span::styled(if on { " › " } else { "   " }, bg.fg(theme::accent()).bold()),
+            Span::styled(format!("{name:<label_w$}  "), bg.fg(if on { theme::text() } else { theme::faint() })),
+            Span::styled(format!("{}{cursor}", truncate(&shown, w.saturating_sub(label_w + 8))), bg.fg(Color::White).bold()),
+        ]));
+    }
+    items.push(Line::default());
+    if l.busy {
+        items.push(Line::from(Span::styled("   un momento…", Style::new().fg(theme::faint()))));
+    } else if let Some(e) = &l.error {
+        items.push(Line::from(Span::styled(format!("   {}", truncate(e, w.saturating_sub(4))), Style::new().fg(RED))));
+    }
+    let hints = if l.creating {
+        [("enter", "crear cuenta"), ("tab", "campo"), ("ctrl+n", "ya tengo cuenta"), ("esc", "cancelar")]
+    } else {
+        [("enter", "entrar"), ("tab", "campo"), ("ctrl+n", "crear cuenta"), ("esc", "cancelar")]
+    };
+    overlay(f, anchor, if l.creating { "CREAR CUENTA" } else { "ENTRAR A LA TIENDA" }, theme::accent(), head, items, l.field, 8, &hints);
 }
 
 pub(in crate::ui) fn draw_colors(f: &mut Frame, anchor: Rect, sel: usize) {

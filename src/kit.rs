@@ -558,8 +558,13 @@ fn status() -> Result<(), String> {
     Ok(())
 }
 
+/// The store errors, with how to log in when that's what's missing.
+fn from_store(e: String) -> String {
+    if e == crate::store::NEED_LOGIN { "primero entra a la tienda: iris login".into() } else { e }
+}
+
 fn store_list() -> Result<(), String> {
-    let (index, _) = crate::store::refresh()?;
+    let (index, _) = crate::store::refresh().map_err(from_store)?;
     if index.packages.is_empty() {
         println!("La tienda está vacía todavía.");
     }
@@ -570,9 +575,9 @@ fn store_list() -> Result<(), String> {
 }
 
 fn store_install(name: &str) -> Result<(), String> {
-    let (index, _) = crate::store::refresh()?;
+    let (index, _) = crate::store::refresh().map_err(from_store)?;
     let e = index.find(name, None).ok_or(format!("«{name}» no está en la tienda"))?.clone();
-    let done = crate::store::install(&index, &e, false)?;
+    let done = crate::store::install(&index, &e, false).map_err(from_store)?;
     println!("Instalado: {} · en Iris: /buddy {name}", done.join(", "));
     Ok(())
 }

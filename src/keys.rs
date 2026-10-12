@@ -54,7 +54,10 @@ pub(crate) fn handle_key(
         return Flow::Go;
     }
 
-    if !ctrl {
+    // Modals don't take Ctrl (Ctrl+C and the rest stay global); the store login form takes
+    // Ctrl+N, to switch between logging in and creating the account.
+    let login_toggle = k.code == KeyCode::Char('n') && matches!(app.modal, Some(Modal::StoreLogin(_)));
+    if !ctrl || login_toggle {
         if let Some(flow) = modal_key(app, k, claude) {
             return flow;
         }
@@ -352,6 +355,10 @@ pub(crate) fn modal_key(app: &mut App, k: KeyEvent, claude: &mut Option<Claude>)
         }
         Modal::Store(_) => {
             crate::storefront::on_key(app, k);
+            Some(Flow::Redraw)
+        }
+        Modal::StoreLogin(_) => {
+            crate::storefront::login_key(app, k);
             Some(Flow::Redraw)
         }
         Modal::StoreUpdates { .. } => {

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{App, AppEvent, Modal, Role};
 use crate::buddy::{self, Buddy};
@@ -27,6 +27,100 @@ pub enum StoreEvent {
     Updated { name: String, version: String, result: Result<(), String> },
     /// A like went through: the package and how many it has now.
     Liked(Result<(String, i64), String>),
+    /// Logging in (or creating the account) from the form ended: your username, or why not.
+    LoggedIn(Result<String, String>),
+}
+
+/// The form to log in to the store (or create the account) without leaving Iris. `/store`
+/// opens it when there's no session: the store only gives out its catalog to someone logged in.
+pub struct StoreLogin {
+    pub creating: bool,
+    pub field: usize,
+    pub username: String,
+    /// Username or email to log in; email to create the account.
+    pub login: String,
+    pub password: String,
+    pub error: Option<String>,
+    pub busy: bool,
+    /// What had been asked of the store: it goes on there once you're in.
+    pub then: String,
+}
+
+impl StoreLogin {
+    pub fn new(then: String) -> Self {
+        Self { creating: false, field: 0, username: String::new(), login: String::new(), password: String::new(), error: None, busy: false, then }
+    }
+
+    /// (label, value, secret) of each field, in order.
+    pub fn fields(&self) -> Vec<(&'static str, &str, bool)> {
+        if self.creating {
+            vec![("Usuario", &self.username, false), ("Correo", &self.login, false), ("Contraseña", &self.password, true)]
+        } else {
+            vec![("Usuario o correo", &self.login, false), ("Contraseña", &self.password, true)]
+        }
+    }
+
+    fn value(&mut self) -> &mut String {
+        match (self.creating, self.field) {
+            (true, 0) => &mut self.username,
+            (true, 1) | (false, 0) => &mut self.login,
+            _ => &mut self.password,
+        }
+    }
+}
+
+/// Opens the form; when you're in, the store opens with `then`.
+pub fn ask_login(app: &mut App, then: String) {
+    app.modal = Some(Modal::StoreLogin(StoreLogin::new(then)));
+}
+
+pub fn login_key(app: &mut App, k: KeyEvent) {
+    let Some(Modal::StoreLogin(l)) = app.modal.as_mut() else { return };
+    let n = l.fields().len();
+    match k.code {
+        KeyCode::Esc => app.modal = None,
+        _ if l.busy => {}
+        KeyCode::Char('n') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+            l.creating = !l.creating;
+            l.field = 0;
+            l.error = None;
+        }
+        KeyCode::Tab | KeyCode::Down => l.field = (l.field + 1) % n,
+        KeyCode::BackTab | KeyCode::Up => l.field = (l.field + n - 1) % n,
+        KeyCode::Backspace => {
+            l.value().pop();
+        }
+        KeyCode::Char(c) if !k.modifiers.contains(KeyModifiers::CONTROL) => l.value().push(c),
+        // Enter on a field that isn't the last moves on, like a form.
+        KeyCode::Enter if l.field + 1 < n => l.field += 1,
+        KeyCode::Enter => {
+            if l.fields().iter().any(|(_, v, _)| v.trim().is_empty()) {
+                l.error = Some("falta llenar algo".into());
+                return;
+            }
+            l.busy = true;
+            l.error = None;
+            let body = if l.creating {
+                serde_json::json!({ "username": l.username.trim(), "email": l.login.trim(), "password": l.password })
+            } else {
+                serde_json::json!({ "login": l.login.trim(), "password": l.password })
+            };
+            let path = if l.creating { "/api/auth/register" } else { "/api/auth/login" };
+            let tx = app.events.clone();
+            std::thread::spawn(move || {
+                let result = crate::net::json("POST", path, None, Some(&body)).and_then(|(code, v)| {
+                    if code != 200 {
+                        return Err(crate::net::error_of(code, &v));
+                    }
+                    let token = v.get("token").and_then(|t| t.as_str()).ok_or("la tienda no devolvió una sesión")?;
+                    store::save_token(token).map_err(|e| e.to_string())?;
+                    Ok(v.get("username").and_then(|u| u.as_str()).unwrap_or("?").to_string())
+                });
+                let _ = tx.send(AppEvent::Store(StoreEvent::LoggedIn(result)));
+            });
+        }
+        _ => {}
+    }
 }
 
 pub struct StoreModal {
@@ -71,6 +165,8 @@ pub fn command(app: &mut App, arg: &str) {
             };
             app.push(Role::System, msg);
         }
+        // Without a session, first the form; then the store goes on with what you asked.
+        _ if store::token().is_none() => ask_login(app, if verb == "update" || verb == "actualizar" { "\u{0}update".into() } else { arg.to_string() }),
         "update" | "actualizar" => fetch_index(app, "\u{0}update".into()),
         q => fetch_index(app, q.to_string()),
     }
@@ -181,7 +277,26 @@ fn preview(app: &mut App) {
 
 pub fn on_event(app: &mut App, ev: StoreEvent) {
     match ev {
+        // The session expired (or it was closed elsewhere): log in again and go on.
+        StoreEvent::Index(Err(e), query) if e == store::NEED_LOGIN => ask_login(app, query),
         StoreEvent::Index(Err(e), _) => app.push(Role::Error, format!("la tienda: {e}")),
+        StoreEvent::LoggedIn(Ok(user)) => {
+            let then = match app.modal.take() {
+                Some(Modal::StoreLogin(l)) => l.then,
+                other => {
+                    app.modal = other;
+                    String::new()
+                }
+            };
+            app.push(Role::System, format!("entraste a la tienda como {user}"));
+            fetch_index(app, then);
+        }
+        StoreEvent::LoggedIn(Err(e)) => {
+            if let Some(Modal::StoreLogin(l)) = app.modal.as_mut() {
+                l.busy = false;
+                l.error = Some(e);
+            }
+        }
         StoreEvent::Index(Ok((index, off)), query) => {
             for name in off {
                 app.push(Role::System, format!("«{name}» fue retirado de la tienda: lo desactivé · /store remove {name} para borrarlo"));
@@ -227,6 +342,7 @@ pub fn on_event(app: &mut App, ev: StoreEvent) {
                 }
             }
         }
+        StoreEvent::Ready { result: Err(why), .. } if why == store::NEED_LOGIN => ask_login(app, String::new()),
         StoreEvent::Ready { name, preview: false, result: Err(why) } => app.push(Role::Error, format!("no se instaló «{name}»: {why}")),
         StoreEvent::Ready { name, preview: false, result: Ok(()) } => {
             let kind = store::installed().into_iter().find(|i| i.0 == name).map(|i| i.3).unwrap_or_default();
