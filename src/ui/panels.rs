@@ -325,9 +325,11 @@ pub(in crate::ui) fn keys(buf: &mut Buffer, x: u16, y: u16, max_x: u16, items: &
 
 /// The core: as a dot image (Sixel) if possible, otherwise in braille. In image mode the text
 /// leaves the panel empty and records where it goes; the app sends the image after the frame.
-/// With a menu open it goes in braille: the image would be painted over the menu.
+/// With a menu open it goes in braille: the image would be painted over the menu (a modal, or
+/// the list of commands that unfolds while typing `/`).
 pub(in crate::ui) fn core_draw(app: &App, r: Rect, buf: &mut Buffer) {
-    if app.sixel_cell.is_some() && app.modal.is_none() && app.tools_view.is_none() && r.width >= 6 && r.height >= 3 {
+    let menu = app.modal.is_some() || app.tools_view.is_some() || !crate::commands::matches(&app.commands, &app.input).is_empty();
+    if app.sixel_cell.is_some() && !menu && r.width >= 6 && r.height >= 3 {
         app.core_rect.set(Some(r));
     } else {
         app.core.draw(r, buf);
