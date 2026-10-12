@@ -80,6 +80,8 @@ struct Dreamland {
     /// Stars it spits toward a newborn subagent (`alt` false) and those that come back when one
     /// finishes well (`alt` true).
     spat: Vec<Bit>,
+    /// When tests last passed (green rings).
+    pass: f64,
 }
 
 fn ease_out(u: f64) -> f64 {
@@ -162,6 +164,24 @@ fn star(g: &mut Grid, d: &Dots, (x, y): (f64, f64), s: f64, rot: f64, tone: u8, 
     d.area(g, (x - s, y - s, x + s, y + s), |px, py| in_star(px - x, py - y, s, rot).map(|mid| (tone, if mid { core } else { ink })));
 }
 
+/// A line in the world, a dot every so often.
+fn wline(g: &mut Grid, a: (f64, f64), b: (f64, f64), du: f64, tone: u8, ink: u8) {
+    let n = ((b.0 - a.0).hypot(b.1 - a.1) / (du * 0.8)).ceil().max(1.0) as usize;
+    for k in 0..=n {
+        let u = k as f64 / n as f64;
+        g.plot(a.0 + (b.0 - a.0) * u, a.1 + (b.1 - a.1) * u, tone, ink);
+    }
+}
+
+/// A circle (its outline) in the world; `from`..`to` in turns draws only that arc.
+fn wring(g: &mut Grid, c: (f64, f64), rad: f64, du: f64, from: f64, to: f64, tone: u8, ink: u8) {
+    let n = ((to - from) * TAU * rad / (du * 0.8)).ceil().max(4.0) as usize;
+    for k in 0..=n {
+        let a = (from + (to - from) * k as f64 / n as f64) * TAU;
+        g.plot(c.0 + a.cos() * rad, c.1 + a.sin() * rad, tone, ink);
+    }
+}
+
 /// One mark of the orbit, in the scene's shape: a star, a heart, a diamond or a ring.
 fn orbit_mark(g: &mut Grid, d: &Dots, (x, y): (f64, f64), s: f64, rot: f64, ink: u8) {
     match scene::ORBIT {
@@ -224,6 +244,7 @@ impl Part for Dreamland {
             next_dust: 0.0,
             warp: -99.0,
             spat: vec![],
+            pass: -99.0,
         };
         for _ in 0..SKY {
             let (a, r, p) = (d.rand() * TAU, 2.1 + d.rand() * 1.6, d.rand() * TAU);
@@ -276,7 +297,10 @@ impl Part for Dreamland {
         }
     }
 
-    fn event(&mut self, h: Happening, _io: &mut Io) {
+    fn event(&mut self, h: Happening, io: &mut Io) {
+        if h == Happening::Event(Event::Pass) {
+            self.pass = io.t();
+        }
         match h {
             Happening::Born(_) => {
                 let a = PI * (0.6 + self.rand() * 0.8);
@@ -314,6 +338,139 @@ impl Part for Dreamland {
             let (i, j) = (((x - x0) / di).round() as i64, ((y - y0) / dj).round() as i64);
             (len((x - bx) / sa, (y - sy) / sb) < 1.0 && (i + j) % 2 == 0 && j % 2 == 0).then_some((1, INK_MAIN))
         });
+
+        // What the original's signs told, in the scene's colors: a lens searching, a page being
+        // read, a pencil stitching while editing, a terminal while running, the tests' bar and
+        // green rings when they pass, the press compacting, waves when speaking, a muted
+        // microphone without voice, a sprout when delegating.
+        let st = io.st();
+        let pt = |x: f64, y: f64| at(x, y);
+        match state {
+            State::Searching => {
+                // A lens sweeping beside it, with a glint.
+                let (lx, ly) = (-1.55 + 0.18 * (t * 1.3).sin(), 0.55 + 0.12 * (t * 1.9).cos());
+                let c = pt(lx, ly);
+                wring(g, c, 0.3 * r, du, 0.0, 1.0, 3, WHITE);
+                wring(g, c, 0.26 * r, du, 0.0, 1.0, 2, CLOUD);
+                wring(g, c, 0.18 * r, du, 0.3, 0.45, 3, WHITE);
+                wline(g, pt(lx + 0.22, ly - 0.22), pt(lx + 0.5, ly - 0.5), du, 3, GRAY);
+                wline(g, pt(lx + 0.24, ly - 0.2), pt(lx + 0.52, ly - 0.48), du, 3, ORANGE);
+            }
+            State::Reading => {
+                // A page, its lines, and the one being read lighting up.
+                let (x0p, y0p, x1p, y1p) = (-2.05, 0.95, -1.4, -0.05);
+                wline(g, pt(x0p, y0p), pt(x1p, y0p), du, 3, CLOUD);
+                wline(g, pt(x1p, y0p), pt(x1p, y1p), du, 3, CLOUD);
+                wline(g, pt(x1p, y1p), pt(x0p, y1p), du, 3, CLOUD);
+                wline(g, pt(x0p, y1p), pt(x0p, y0p), du, 3, CLOUD);
+                let now = ((st * 1.5) as usize) % 6;
+                for k in 0..6 {
+                    let y = y0p - 0.15 - k as f64 * 0.14;
+                    let w = if k % 3 == 2 { 0.35 } else { 0.5 };
+                    wline(g, pt(x0p + 0.08, y), pt(x0p + 0.08 + w, y), du, if k == now { 3 } else { 1 }, if k == now { YELLOW } else { WHITE });
+                }
+            }
+            State::Editing => {
+                // A pencil going back and forth, leaving stitches.
+                let u = (st * 0.8) % 2.0;
+                let x = -0.9 + if u < 1.0 { u } else { 2.0 - u } * 1.8;
+                for k in 0..((st * 6.0) as usize % 30) {
+                    let xs = -0.9 + k as f64 * 0.06;
+                    if xs > 0.9 {
+                        break;
+                    }
+                    if k % 2 == 0 {
+                        wline(g, pt(xs, -1.3), pt(xs + 0.04, -1.24), du, 3, PINK);
+                    }
+                }
+                wline(g, pt(x, -1.22), pt(x + 0.35, -0.9), du, 3, YELLOW);
+                wline(g, pt(x + 0.03, -1.24), pt(x + 0.38, -0.92), du, 3, YELLOW);
+                wline(g, pt(x - 0.03, -1.27), pt(x, -1.22), du, 3, GRAY);
+                wline(g, pt(x + 0.35, -0.9), pt(x + 0.42, -0.84), du, 3, PINK);
+            }
+            State::Running | State::Git => {
+                // A terminal: a frame, a prompt, lines scrolling.
+                let (x0p, y0p, x1p, y1p) = (1.35, 1.25, 2.2, 0.55);
+                for (a, b) in [((x0p, y0p), (x1p, y0p)), ((x1p, y0p), (x1p, y1p)), ((x1p, y1p), (x0p, y1p)), ((x0p, y1p), (x0p, y0p))] {
+                    wline(g, pt(a.0, a.1), pt(b.0, b.1), du, 3, CLOUD);
+                }
+                for k in 0..3 {
+                    let w = 0.2 + 0.45 * ((st * 3.0 + k as f64 * 1.7).sin() * 0.5 + 0.5);
+                    let y = y0p - 0.15 - k as f64 * 0.15;
+                    wline(g, pt(x0p + 0.08, y), pt(x0p + 0.08 + w, y), du, 2, YELLOW);
+                }
+                let y = y1p + 0.1;
+                wline(g, pt(x0p + 0.08, y + 0.05), pt(x0p + 0.14, y), du, 3, WHITE);
+                wline(g, pt(x0p + 0.14, y), pt(x0p + 0.08, y - 0.05), du, 3, WHITE);
+                if (t * 3.0).sin() > 0.0 {
+                    wline(g, pt(x0p + 0.2, y - 0.05), pt(x0p + 0.32, y - 0.05), du, 3, WHITE);
+                }
+            }
+            State::Testing => {
+                // The tests' bar, filling cell by cell.
+                let cells = 8;
+                let lit = ((st * 2.5) as usize) % (cells + 2);
+                for k in 0..cells {
+                    let x = -0.8 + k as f64 * 0.2;
+                    let ink = if k < lit { INK_GREEN } else { GRAY };
+                    let tone = if k < lit { 3 } else { 1 };
+                    for q in 0..3 {
+                        wline(g, pt(x, 1.45 + q as f64 * 0.04), pt(x + 0.14, 1.45 + q as f64 * 0.04), du, tone, ink);
+                    }
+                }
+            }
+            State::Compacting => {
+                // The press: two plates closing above and below, with the squash.
+                let close = 0.5 + 0.5 * (t * 3.0).sin();
+                let top = 1.55 - close * 0.35;
+                for q in 0..3 {
+                    wline(g, pt(-1.0, top + q as f64 * 0.05), pt(1.0, top + q as f64 * 0.05), du, 3, if q == 0 { WHITE } else { GRAY });
+                }
+                wline(g, pt(0.0, top + 0.15), pt(0.0, 2.2), du, 3, GRAY);
+            }
+            State::Speaking => {
+                // Waves going out from its side, with the voice.
+                let loud = v(VOICE).clamp(0.0, 1.0);
+                if loud > 0.02 {
+                    for k in 0..3 {
+                        let p = (t * 1.6 + k as f64 / 3.0).fract();
+                        wring(g, pt(1.0, 0.2), (0.3 + p * 1.0) * r, du, -0.1, 0.1, if p < 0.5 { 3 } else { 2 }, main);
+                    }
+                }
+            }
+            State::NoVoice => {
+                // A microphone, crossed out.
+                let c = pt(1.55, 0.75);
+                d.area(g, (c.0 - 0.12 * r, c.1 - 0.2 * r, c.0 + 0.12 * r, c.1 + 0.2 * r), |x, y| {
+                    let (u, w) = ((x - c.0) / (0.11 * r), (y - c.1) / (0.19 * r));
+                    (u * u + w * w < 1.0).then_some((3, CLOUD))
+                });
+                wring(g, pt(1.55, 0.7), 0.2 * r, du, 0.55, 0.95, 3, WHITE);
+                wline(g, pt(1.55, 0.5), pt(1.55, 0.38), du, 3, WHITE);
+                wline(g, pt(1.3, 1.05), pt(1.8, 0.4), du, 3, INK_RED);
+            }
+            State::Delegating => {
+                // A sprout coming up from the ground beside it.
+                let grow = (st / 1.5).min(1.0);
+                let top = -1.1 + grow * 0.7;
+                wline(g, pt(1.3, -1.1), pt(1.3 + 0.05 * (t * 2.0).sin(), top), du, 3, INK_GREEN);
+                if grow > 0.5 {
+                    wline(g, pt(1.3, top - 0.05), pt(1.12, top + 0.08), du, 3, INK_GREEN);
+                    wline(g, pt(1.3, top - 0.12), pt(1.48, top + 0.02), du, 3, INK_GREEN);
+                }
+            }
+            _ => {}
+        }
+        // Tests passed: green rings going out.
+        let since_pass = t - self.pass;
+        if (0.0..1.2).contains(&since_pass) {
+            for k in 0..2 {
+                let p = since_pass / 1.2 - k as f64 * 0.25;
+                if (0.0..1.0).contains(&p) {
+                    wring(g, pt(0.0, 0.0), (1.2 + p * 1.2) * r, du, 0.0, 1.0, if p < 0.5 { 3 } else { 2 }, INK_GREEN);
+                }
+            }
+        }
 
         // The sky, with the scene's weather.
         let sky = v(MOTES).clamp(0.0, 1.0);

@@ -502,16 +502,31 @@ fn preview() {
     let quiet = Signals::default();
     let talking = Signals { level: 0.12, ..Default::default() };
     // (name, state, signals, event fired a moment before, seconds)
-    let shots: [(&str, State, &Signals, Option<Event>, f64); 8] = [
-        ("espera", State::Idle, &quiet, None, 2.0),
-        ("pensando", State::Thinking, &quiet, None, 2.0),
-        ("hablando", State::Speaking, &talking, None, 2.0),
-        ("leyendo", State::Reading, &quiet, None, 2.0),
-        ("listo", State::Idle, &quiet, Some(Event::Done), 2.0),
-        ("error", State::Idle, &quiet, Some(Event::Error), 2.0),
-        ("corriendo", State::Running, &quiet, None, 2.0),
-        ("durmiendo", State::Sleeping, &quiet, None, 3.0),
-    ];
+    let planning = Signals { todos: (5, 2), queue: 2, ..Default::default() };
+    // PREVIEW_SET=2: the signs the original also shows (searching, editing, testing…).
+    let shots: [(&str, State, &Signals, Option<Event>, f64); 8] = if std::env::var("PREVIEW_SET").as_deref() == Ok("2") {
+        [
+            ("buscando", State::Searching, &quiet, None, 2.0),
+            ("editando", State::Editing, &quiet, None, 3.0),
+            ("probando-pasa", State::Testing, &quiet, Some(Event::Pass), 2.0),
+            ("compactando", State::Compacting, &quiet, None, 2.0),
+            ("sin-voz", State::NoVoice, &quiet, None, 2.0),
+            ("delegando", State::Delegating, &quiet, None, 2.5),
+            ("planeando", State::Planning, &planning, None, 2.0),
+            ("git", State::Git, &quiet, None, 2.0),
+        ]
+    } else {
+        [
+            ("espera", State::Idle, &quiet, None, 2.0),
+            ("pensando", State::Thinking, &quiet, None, 2.0),
+            ("hablando", State::Speaking, &talking, None, 2.0),
+            ("leyendo", State::Reading, &quiet, None, 2.0),
+            ("listo", State::Idle, &quiet, Some(Event::Done), 2.0),
+            ("error", State::Idle, &quiet, Some(Event::Error), 2.0),
+            ("corriendo", State::Running, &quiet, None, 2.0),
+            ("durmiendo", State::Sleeping, &quiet, None, 3.0),
+        ]
+    };
     for (k, (name, state, sig, ev, secs)) in shots.iter().enumerate() {
         let mut c = Core::from_recipe(&r).unwrap();
         let mut t = 0.0;

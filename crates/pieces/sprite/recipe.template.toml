@@ -220,6 +220,14 @@ use = "builtin:gaze"              # where it looks
 use = "builtin:presence"          # where the body is this frame: drift, breath, beat, stretch
 
 [[piece]]
+use = "builtin:tasks"             # the plan's tasks, one mark each (the current one blinks): real data
+layer = 1
+
+[[piece]]
+use = "builtin:tail"              # messages waiting to be read, orbiting
+layer = 3
+
+[[piece]]
 use = "file:sprite.wasm"          # @NAME@, pixel by pixel, alive with every state
 id = "body"
 layer = 16
@@ -231,4 +239,4 @@ kid = false
 layer = 2
 
 [draw]
-order = ["body", "stage", "kids"]
+order = ["tasks", "tail", "body", "stage", "kids"]
