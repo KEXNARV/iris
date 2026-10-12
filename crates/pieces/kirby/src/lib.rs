@@ -687,19 +687,30 @@ impl Part for Kirby {
         let (c, d) = (row(cy + 1.7 * ky), row(cy - 1.25 * ky));
         let clamp = |n: f64, m: usize| n.clamp(0.0, m as f64 - 1.0) as usize;
         let (i0, i1) = (clamp(a.min(b), dw), clamp(a.max(b), dw));
-        // A whole body of dots is about π·kx·ky / (dot area); past what one frame can send,
-        // the fills go checkered.
-        let mut p = p;
-        p.hatch = PI * kx * ky / (di * dj).abs() > 12_000.0;
         let (j0, j1) = (clamp(c.min(d), dh), clamp(c.max(d), dh));
+        // A big Kirby is worked out on a coarser grid: one dot of every 2×2 (or 3×3…) decides
+        // the whole block, so a frame never works out more than ~2500 of them, whatever the
+        // state (the interpreter's fuel is per frame). The blocks keep it solid; past what one
+        // frame can send, only the deciding dot.
+        let mut p = p;
+        let area = PI * kx * ky / (di * dj).abs();
+        let boxed = ((i1 - i0 + 1) * (j1 - j0 + 1)) as f64;
+        let step = (boxed / 2_500.0).sqrt().ceil().max(1.0) as usize;
+        let fill = if area > 16_000.0 { 1 } else { step };
+        p.hatch = false;
+        p.w *= step as f64;
+        p.min *= step as f64;
         // Row by row: where the body, the arms and the feet cross it (two square roots each),
         // and then each dot only compares numbers. The interpreter charges for every call (and
         // every local of the function called), so the face, the hats and the rest are only
         // called inside their own boxes.
         let w = p.w;
         let (gx, gy) = p.gaze;
+        // Each extra only inside its own box: the star over the head, the flames on top of it,
+        // the headband with its knot, the sweat drop, the bubble.
         let over = |u: f64, v: f64| {
-            (p.hat > 0.0 || p.cap != Cap::None) && v > 0.4 || p.sweat.is_some() && u > 0.5 && v > 0.3 && u < 0.95 || p.bubble > 0.0 && u > -0.1 && u < 0.6 && v < 0.2 && v > -0.6
+            p.hat > 0.0 && u.abs() < 0.3 && v > 1.0 && v < 1.65
+                || p.sweat.is_some() && u > 0.5 && v > 0.3 && u < 0.95 || p.bubble > 0.0 && u > -0.1 && u < 0.6 && v < 0.2 && v > -0.6
         };
         let in_face = |u: f64, v: f64| {
             let eye = (v - 0.24 - gy).abs() < 0.32 && ((u - 0.21 - gx).abs() < 0.17 || (u + 0.21 - gx).abs() < 0.17);
@@ -707,8 +718,83 @@ impl Part for Kirby {
             let cheek = (u.abs() - 0.44).abs() < 0.3 && v.abs() < 0.16;
             eye || mouth || cheek
         };
-        for j in j0..=j1 {
+        // The nightcap, worked out once: the points of its tail (and how thick it is at each)
+        // and the pompom. Then each row only cuts circles and the beanie's ellipse.
+        let night = p.cap == Cap::Night;
+        let sway = 0.04 * (p.t * 1.3).sin();
+        let (px, py, pr) = (1.05 + sway, 0.62 + sway * 0.5, 0.12_f64.max(p.min));
+        let tail: [(f64, f64, f64, u8); 11] = core::array::from_fn(|k| {
+            let q = k as f64 / 10.0;
+            let (a, b) = (1.0 - q, q);
+            let x = a * a * 0.15 + 2.0 * a * b * 0.75 + b * b * px;
+            let y = a * a * 1.02 + 2.0 * a * b * 1.2 + b * b * py;
+            (x, y, 0.2 * (1.0 - q * 0.75), if ((q * 6.0) as i32) % 2 == 0 { NIGHT } else { WHITE })
+        });
+        let emit = |g: &mut Grid, i: usize, j: usize, tone: u8, ink: u8| {
+            for b in 0..fill {
+                for a in 0..fill {
+                    if i + a < dw && j + b < dh {
+                        g.dot(i + a, j + b, tone, ink);
+                    }
+                }
+            }
+        };
+        // The flames, worked out once per column: where they start (the top of the head) and how
+        // tall they are this frame. Two sines per column instead of per dot.
+        let fire = p.cap == Cap::Fire;
+        let flames: Vec<(f64, f64)> = if fire {
+            (0..dw)
+                .map(|i| {
+                    let u = (x0 + i as f64 * di - cx) / kx;
+                    if u.abs() >= 0.62 {
+                        return (1.0, 0.0);
+                    }
+                    let h = (0.28 + 0.12 * (u * 9.0 + p.t * 12.0).sin() + 0.08 * (u * 23.0 - p.t * 17.0).sin()) * (1.0 - (u / 0.62).powi(2));
+                    (crown(u) - 0.06, h)
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+        let band = p.cap == Cap::Band;
+        let flap = (p.t * 9.0).sin();
+        for j in (j0..=j1).step_by(step) {
             let v = (y0 + j as f64 * dj - cy) / ky;
+            // The headband's knot tails, flapping on the right.
+            let (mut tail_lo, mut tail_hi) = (f64::MAX, f64::MIN);
+            let knots = if band && v > 0.35 && v < 0.75 {
+                let t = 0.055_f64.max(p.min);
+                [Cut::new(v, 1.1 + 0.03 * flap, 0.6 + 0.04 * flap, 0.17, t, 0.0), Cut::new(v, 1.1 + 0.03 * flap, 0.47 - 0.028 * flap, 0.17, t, 0.0)]
+            } else {
+                [Cut::new(2.0, 0.0, 0.0, 0.1, 0.1, 0.0); 2]
+            };
+            // This row of the nightcap: the pompom, the tail's pieces, the beanie.
+            let mut cap_row: [(f64, f64, u8); 13] = [(1.0, -1.0, 0); 13];
+            if night && v > 0.4 {
+                let h = span(v, py, pr, pr);
+                if h >= 0.0 {
+                    cap_row[0] = (px - h, px + h, WHITE);
+                }
+                for (k, &(x, y, r, ink)) in tail.iter().enumerate() {
+                    let h = span(v, y, r, r);
+                    if h >= 0.0 {
+                        cap_row[1 + k] = (x - h, x + h, ink);
+                    }
+                }
+                for c in &cap_row[..12] {
+                    if c.0 <= c.1 {
+                        tail_lo = tail_lo.min(c.0);
+                        tail_hi = tail_hi.max(c.1);
+                    }
+                }
+                if v > 0.6 {
+                    let h = span(v, 0.02, 1.04, 0.98);
+                    if h >= 0.0 {
+                        let band = v < 0.69 || ((v * 9.0) as i32) % 2 == 0;
+                        cap_row[12] = (-h, h, if band { WHITE } else { NIGHT });
+                    }
+                }
+            }
             let body = Cut::new(v, 0.0, 0.02, 1.0, 0.93, w);
             let arms = [Cut::new(v, p.arm_l.0, p.arm_l.1, 0.3, 0.23, w), Cut::new(v, p.arm_r.0, p.arm_r.1, 0.3, 0.23, w)];
             let feet = [Cut::new(v, -0.48, -0.87 + p.foot_l, 0.42, 0.21, w), Cut::new(v, 0.5, -0.87 + p.foot_r, 0.42, 0.21, w)];
@@ -741,13 +827,34 @@ impl Part for Kirby {
             let (ca, cb) = (col(reach.0).floor(), col(reach.1).ceil());
             let first = (ca.max(i0 as f64)) as usize;
             let last = (cb.min(i1 as f64)).max(0.0) as usize;
-            for i in first..=last.max(first) {
+            let first = first - first % step;
+            for i in (first..=last.max(first)).step_by(step) {
                 let u = (x0 + i as f64 * di - cx) / kx;
                 let odd = p.hatch && (i + j) % 2 == 1;
-                let put = |g: &mut Grid, ink: u8| g.dot(i, j, 3, ink);
+                let put = |g: &mut Grid, ink: u8| emit(g, i, j, 3, ink);
+                if night && v > 0.4 {
+                    // The tail and the pompom first (they go over the beanie), only near them.
+                    let hit = if u >= tail_lo && u <= tail_hi { cap_row[..12].iter().find(|c| u >= c.0 && u <= c.1) } else { None };
+                    if let Some(&(_, _, ink)) = hit.or_else(|| (u >= cap_row[12].0 && u <= cap_row[12].1).then_some(&cap_row[12])) {
+                        put(g, ink);
+                        continue;
+                    }
+                }
+                if fire && v > 0.6 {
+                    if let Some(&(base, h)) = flames.get(i) {
+                        if v > base && v < base + h {
+                            put(g, if v < base + h * 0.5 { STAR } else { ORANGE });
+                            continue;
+                        }
+                    }
+                }
+                if band && (knots[0].has(u) || knots[1].has(u) || v > 0.5 && v < 0.6 && body.has(u)) {
+                    put(g, FEET);
+                    continue;
+                }
                 if maybe_over && over(u, v) {
                     if let Some((tone, ink)) = extras(&p, u, v) {
-                        g.dot(i, j, tone, ink);
+                        emit(g, i, j, tone, ink);
                         continue;
                     }
                 }
@@ -774,7 +881,7 @@ impl Part for Kirby {
                 }
                 if in_face(u, v) {
                     if let Some((tone, ink)) = face(&p, u, v) {
-                        g.dot(i, j, tone, ink);
+                        emit(g, i, j, tone, ink);
                         continue;
                     }
                 }
