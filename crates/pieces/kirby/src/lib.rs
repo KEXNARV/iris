@@ -714,12 +714,35 @@ impl Part for Kirby {
             let feet = [Cut::new(v, -0.48, -0.87 + p.foot_l, 0.42, 0.21, w), Cut::new(v, 0.5, -0.87 + p.foot_r, 0.42, 0.21, w)];
             let lo = body.lo.min(arms[0].lo).min(feet[0].lo);
             let hi = body.hi.max(arms[1].hi).max(feet[1].hi);
-            let maybe_over = v > 0.3 || p.bubble > 0.0;
-            for i in i0..=i1 {
+            // Whatever goes over it on this row widens the stretch to walk (only then).
+            let mut reach = (lo, hi);
+            let mut widen = |a: f64, b: f64| reach = (reach.0.min(a), reach.1.max(b));
+            if p.hat > 0.0 && v > 1.0 && v < 1.65 {
+                widen(-0.3, 0.3);
+            }
+            match p.cap {
+                Cap::Night if v > 0.5 => widen(-1.1, 1.3),
+                Cap::Fire if v > 0.6 => widen(-0.62, 0.62),
+                Cap::Band if v > 0.4 && v < 0.75 => widen(-1.05, 1.35),
+                _ => {}
+            }
+            if p.sweat.is_some() && v > 0.3 && v < 1.1 {
+                widen(0.5, 0.95);
+            }
+            if p.bubble > 0.0 && v > -0.6 && v < 0.2 {
+                widen(-0.1, 0.6);
+            }
+            if reach.0 > reach.1 {
+                continue;
+            }
+            let maybe_over = reach != (lo, hi) || v > 0.4 && p.cap != Cap::None;
+            // From u back to columns: only the dots of this stretch.
+            let col = |u: f64| (u * kx + cx - x0) / di;
+            let (ca, cb) = (col(reach.0).floor(), col(reach.1).ceil());
+            let first = (ca.max(i0 as f64)) as usize;
+            let last = (cb.min(i1 as f64)).max(0.0) as usize;
+            for i in first..=last.max(first) {
                 let u = (x0 + i as f64 * di - cx) / kx;
-                if (u < lo || u > hi) && !maybe_over {
-                    continue;
-                }
                 let odd = p.hatch && (i + j) % 2 == 1;
                 let put = |g: &mut Grid, ink: u8| g.dot(i, j, 3, ink);
                 if maybe_over && over(u, v) {
