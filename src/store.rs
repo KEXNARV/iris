@@ -361,6 +361,22 @@ pub fn updates(index: &Index) -> Vec<Entry> {
     out
 }
 
+/// Of an offer made a while ago, what's still new and not turned down: meanwhile it may have been
+/// installed (or turned down) from here or from another Iris.
+pub fn still_new(list: Vec<Entry>) -> Vec<Entry> {
+    let (have, no) = (installed(), dismissed());
+    list.into_iter()
+        .filter(|e| !no.contains(&format!("{} {}", e.name, e.version)))
+        .filter(|e| {
+            // Within the same major, like `updates`: a 2.x installed doesn't cover a 1.x offered.
+            !have.iter().any(|(name, version, _, _)| {
+                let (have, offered) = (version_key(version), version_key(&e.version));
+                *name == e.name && have.first() == offered.first() && have >= offered
+            })
+        })
+        .collect()
+}
+
 fn dismissed_path() -> Option<PathBuf> {
     Some(dir()?.join(".dismissed"))
 }

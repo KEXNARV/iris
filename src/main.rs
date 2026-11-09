@@ -357,7 +357,12 @@ fn run(
             && !app.busy
             && app.last_key.elapsed() > Duration::from_secs(3)
         {
-            app.modal = app.store_updates.take().map(|(index, list)| Modal::StoreUpdates { index, list });
+            app.modal = app
+                .store_updates
+                .take()
+                .map(|(index, list)| (index, store::still_new(list)))
+                .filter(|(_, list)| !list.is_empty())
+                .map(|(index, list)| Modal::StoreUpdates { index, list });
         }
 
         let dt = frame.elapsed().as_secs_f64();

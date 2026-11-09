@@ -267,6 +267,9 @@ pub(in crate::ui) fn agents_overlay(f: &mut Frame, app: &App) {
 
 /// ^T: the whole conversation with its markdown in `area`, the prompt below and how to go back.
 pub(in crate::ui) fn transcript_view(f: &mut Frame, app: &App, area: Rect) {
+    // The curtain scrolls with app.scroll, not read_top: clear a stale reading flag left by the
+    // view underneath, or pgup/pgdn and the wheel would move the ^O reader instead of this.
+    app.reading.set(false);
     let t = app.started.elapsed().as_secs_f64();
     let state = app.state();
     let body = Rect {
